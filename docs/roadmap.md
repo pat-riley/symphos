@@ -11,6 +11,8 @@ the response, and perform or share the result.
 - Measure capture-to-display latency, dropped samples, CPU use, GPU frame time,
   and memory growth.
 - Improve onset and tempo accuracy with confidence and insufficient-data states.
+- Automatically detect the musical key of a song from accumulated pitch-class
+  evidence, with major/minor estimates, confidence, and an insufficient-audio state.
 - Define named low, mid, and high bands alongside arbitrary frequency bands.
 
 Exit condition: analysis signals remain stable during a 30-minute session and
