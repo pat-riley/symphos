@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Symphos
+GenericName=Audio Analyzer
+Comment=High-performance audio analyzer and visualizer
+Exec=symphos
+Icon=io.github.riley.Symphos
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=audio;visualizer;spectrum;fft;pipewire;
+StartupNotify=true
+StartupWMClass=symphos

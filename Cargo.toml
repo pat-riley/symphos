@@ -1,0 +1,33 @@
+[package]
+name = "symphos"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "A high-performance native audio analyzer and visualizer for Omarchy"
+license = "MIT"
+readme = "README.md"
+keywords = ["audio", "visualizer", "pipewire", "wgpu", "omarchy"]
+categories = ["multimedia::audio", "visualization"]
+
+[dependencies]
+anyhow = "1.0"
+arc-swap = "1.7"
+eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wayland", "wgpu", "x11"] }
+env_logger = "0.11"
+log = "0.4"
+pipewire = { version = "0.10.1", features = ["v1_2_0"] }
+realfft = "3.5.0"
+rtrb = "0.4.0"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
