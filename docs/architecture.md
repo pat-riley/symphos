@@ -55,7 +55,9 @@ submits one mesh to egui's existing GPU renderer. Cells and grid edges are
 sorted back-to-front for camera rotation. Surface mode closes its perimeter
 down to the fixed floor; line mode draws separate frequency traces. Camera
 framing reserves the entire height range so changing height does not shift the
-floor or clip peaks at default zoom. The waterfall defaults to two seconds and
+floor or clip peaks at default zoom. A fixed bounding sphere keeps scale and the
+orbit center stable through full horizontal and vertical rotations, including
+views from below the grid. The waterfall defaults to two seconds and
 supports 0.1–30 seconds, with independent surface-grid and floor-grid toggles.
 History length, height, time-slice detail, palette, and camera controls are local
 to the waterfall. Hidden panes

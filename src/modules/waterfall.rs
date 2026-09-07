@@ -60,6 +60,11 @@ impl Waterfall {
         self.zoom = 1.0;
     }
 
+    fn orbit(&mut self, delta: Vec2) {
+        self.yaw = wrap_angle(self.yaw + delta.x * 0.008);
+        self.elevation = wrap_angle(self.elevation + delta.y * 0.006);
+    }
+
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         ui.add(
             egui::Slider::new(&mut self.seconds, 0.1..=30.0)
@@ -82,7 +87,13 @@ impl Waterfall {
                 egui::Slider::new(&mut self.yaw, -std::f32::consts::PI..=std::f32::consts::PI)
                     .text("Rotation"),
             );
-            ui.add(egui::Slider::new(&mut self.elevation, 0.15..=1.45).text("Elevation"));
+            ui.add(
+                egui::Slider::new(
+                    &mut self.elevation,
+                    -std::f32::consts::PI..=std::f32::consts::PI,
+                )
+                .text("Elevation"),
+            );
             ui.add(egui::Slider::new(&mut self.zoom, 0.5..=2.0).text("Zoom"));
             if ui.small_button("Reset camera").clicked() {
                 self.reset_camera();
@@ -108,11 +119,7 @@ impl Waterfall {
             Sense::click_and_drag(),
         );
         if response.dragged() {
-            let delta = response.drag_delta();
-            self.yaw = (self.yaw + delta.x * 0.008 + std::f32::consts::PI)
-                .rem_euclid(std::f32::consts::TAU)
-                - std::f32::consts::PI;
-            self.elevation = (self.elevation + delta.y * 0.006).clamp(0.15, 1.45);
+            self.orbit(response.drag_delta());
         }
         if response.hovered() {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
@@ -338,31 +345,19 @@ struct Camera {
 
 impl Camera {
     fn fit(rect: Rect, yaw: f32, elevation: f32, zoom: f32) -> Self {
-        let mut camera = Self {
+        // A sphere enclosing the full height range fits at every orientation.
+        // Its scale and orbit center stay fixed while either angle changes.
+        let radius = (1.4_f32.powi(2) + 1.0 + (MAX_HEIGHT * 0.5).powi(2)).sqrt();
+        Self {
             yaw,
             elevation,
-            scale: 1.0,
-            center: Pos2::ZERO,
-        };
-        let mut bounds = Rect::NOTHING;
-        // Fit the entire supported height range. Changing height alone never
-        // moves the camera or any point on the y=0 floor.
-        for x in [-1.4, 1.4] {
-            for z in [-1.0, 1.0] {
-                for y in [0.0, MAX_HEIGHT] {
-                    bounds.extend_with(camera.project([x, y, z]).0);
-                }
-            }
+            scale: rect.width().min(rect.height()).max(0.0) / (2.0 * radius) * zoom,
+            center: rect.center(),
         }
-        camera.scale = (rect.width() / bounds.width())
-            .min(rect.height() / bounds.height())
-            .max(0.0)
-            * zoom;
-        camera.center = rect.center() - bounds.center().to_vec2() * camera.scale;
-        camera
     }
 
     fn project(&self, [x, y, z]: [f32; 3]) -> (Pos2, f32) {
+        let y = y - MAX_HEIGHT * 0.5;
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_el, cos_el) = self.elevation.sin_cos();
         let horizontal = cos_yaw * x + sin_yaw * z;
@@ -374,6 +369,10 @@ impl Camera {
             depth,
         )
     }
+}
+
+fn wrap_angle(angle: f32) -> f32 {
+    (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
 fn mesh_line(mesh: &mut egui::Mesh, a: Pos2, b: Pos2, color: egui::Color32) {
@@ -444,6 +443,52 @@ mod tests {
     }
 
     #[test]
+    fn dragging_orbits_through_poles_and_wraps_full_turns() {
+        let mut waterfall = Waterfall::default();
+        let initial = (waterfall.yaw, waterfall.elevation);
+        waterfall.orbit(Vec2::new(0.0, 250.0));
+        assert!(waterfall.elevation > std::f32::consts::FRAC_PI_2);
+        waterfall.orbit(Vec2::new(0.0, -500.0));
+        assert!(waterfall.elevation < 0.0);
+        waterfall.reset_camera();
+        waterfall.orbit(Vec2::new(
+            std::f32::consts::TAU / 0.008,
+            std::f32::consts::TAU / 0.006,
+        ));
+        assert!((waterfall.yaw - initial.0).abs() < 1.0e-5);
+        assert!((waterfall.elevation - initial.1).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn orbit_keeps_scale_and_center_stable_and_fits_all_orientations() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 500.0));
+        let reference = Camera::fit(rect, 0.0, 0.0, 1.0);
+        for yaw_step in -8..=8 {
+            for elevation_step in -8..=8 {
+                let camera = Camera::fit(
+                    rect,
+                    yaw_step as f32 * std::f32::consts::PI / 8.0,
+                    elevation_step as f32 * std::f32::consts::PI / 8.0,
+                    1.0,
+                );
+                assert_eq!(camera.scale, reference.scale);
+                assert_eq!(
+                    camera.project([0.0, MAX_HEIGHT * 0.5, 0.0]).0,
+                    rect.center()
+                );
+                for x in [-1.4, 1.4] {
+                    for z in [-1.0, 1.0] {
+                        for y in [0.0, MAX_HEIGHT] {
+                            let position = camera.project([x, y, z]).0;
+                            assert!(rect.expand(0.01).contains(position));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn full_history_renders_bounded_finite_mesh_at_multiple_angles_and_sizes() {
         use super::super::frequency::HistoryRow;
         use std::time::Duration;
@@ -480,6 +525,7 @@ mod tests {
             waterfall.floor_grid = floor_grid;
             for yaw in [-3.0, -1.5, 0.0, 1.5, 3.0] {
                 waterfall.yaw = yaw;
+                waterfall.elevation = yaw;
                 let rect = Rect::from_min_size(Pos2::ZERO, size);
                 let mut output = context.run_ui(egui::RawInput::default(), |ui| {
                     waterfall.draw(ui, rect, &AnalysisFrame::default(), &theme, now, false);

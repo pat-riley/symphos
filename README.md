@@ -36,7 +36,8 @@ Use the dropdown in any pane header to choose its module. Drag the divider below
 the main pane or between the lower panes to resize them. **Expand** fills the
 workspace with one pane; **Restore** or Escape returns to the dashboard.
 
-Drag the waterfall to rotate it, scroll over it to zoom, and double-click to
+Drag the waterfall to orbit fully around either axis, including over and under
+the grid. Rotation keeps the view's scale stable. Scroll to zoom and double-click to
 reset the camera. History is live only; there is no recording or playback.
 Waterfall frequency, gain, smoothing, and decay controls reprocess the retained
 history immediately. Height stretches the surface above its fixed floor.
