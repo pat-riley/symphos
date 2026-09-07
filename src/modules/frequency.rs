@@ -34,7 +34,7 @@ impl Default for FrequencySettings {
 }
 
 impl FrequencySettings {
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
+    pub fn range_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.logarithmic, true, "Log");
             ui.selectable_value(&mut self.logarithmic, false, "Linear");
@@ -50,11 +50,17 @@ impl FrequencySettings {
                 .text("High Hz"),
         );
         self.max_hz = self.max_hz.max(self.min_hz + 1.0);
+    }
+
+    pub fn response_controls(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut self.gain, -24.0..=36.0).text("Gain dB"));
         ui.add(egui::Slider::new(&mut self.smoothing, 0.0..=0.98).text("Smooth"));
         ui.add(egui::Slider::new(&mut self.decay, 6.0..=96.0).text("Decay dB/s"));
+    }
+
+    pub fn level_controls(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut self.floor, -120.0..=-24.0).text("Floor dB"));
-        ui.add(egui::Slider::new(&mut self.ceiling, -18.0..=12.0).text("Top dB"));
+        ui.add(egui::Slider::new(&mut self.ceiling, -18.0..=12.0).text("Ceiling dB"));
     }
 
     pub fn frequency(&self, fraction: f32, sample_rate: u32) -> f32 {

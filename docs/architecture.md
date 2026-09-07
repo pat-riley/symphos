@@ -35,6 +35,15 @@ spectrogram state in `src/modules/`. Selecting a pane directs the compact
 sidebar to its active module. Pane assignment and sizing live in the UI;
 capture and analysis remain independent of layout and rendering.
 
+Sidebar controls use a shared collapsible-panel helper. Section IDs are scoped
+by pane and module, separating disclosure state while switching modules.
+Frequency bounds, signal response, and appearance controls are separate groups;
+shared audio analysis and meters remain outside the module-specific groups.
+The waterfall's sidebar and viewport orientation gizmos operate on the same
+camera state and share its projection math. Their Z-up axes map frequency to X,
+time to Y, and level to Z. Axis clicks align or flip the view without changing
+pan, zoom, or history. Gizmo dragging retains unrestricted orbit.
+
 Frequency modules derive 96 linear or logarithmic display bands from raw FFT
 magnitudes. Each applies its own gain, time-adjusted smoothing, decay, frequency
 range, and dB range; shared FFT/window/channel controls still select the signal
@@ -57,7 +66,9 @@ down to the fixed floor; line mode draws separate frequency traces. Camera
 framing reserves the entire height range so changing height does not shift the
 floor or clip peaks at default zoom. A fixed bounding sphere keeps scale and the
 orbit center stable through full horizontal and vertical rotations, including
-views from below the grid. The waterfall defaults to two seconds and
+views from below the grid. Panning offsets the projected camera center in pane
+coordinates, independently of zoom and rotation, and scales with pane resizing.
+The waterfall defaults to two seconds and
 supports 0.1–30 seconds, with independent surface-grid and floor-grid toggles.
 History length, height, time-slice detail, palette, and camera controls are local
 to the waterfall. Hidden panes

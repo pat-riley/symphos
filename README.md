@@ -22,7 +22,8 @@ and visual parameter mapping are still on the roadmap.
 - Independent frequency range, linear/log scale, smoothing, gain, decay, and
   intensity controls for each frequency module
 - Spectrum peak hold, stereo waveform time/amplitude controls, and color palettes
-- Compact, collapsible settings sidebar that follows the selected pane
+- Settings sidebar with collapsible categories that follows the selected pane
+- Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Shared FFT size, window function, analysis channel, and frame-rate controls
 - Bottom status strip with capture status, FPS, sample rate, and peak level
 - Raw FFT-bin inspection, detailed diagnostics, and fullscreen mode
@@ -37,12 +38,23 @@ the main pane or between the lower panes to resize them. **Expand** fills the
 workspace with one pane; **Restore** or Escape returns to the dashboard.
 
 Drag the waterfall to orbit fully around either axis, including over and under
-the grid. Rotation keeps the view's scale stable. Scroll to zoom and double-click to
-reset the camera. History is live only; there is no recording or playback.
+the grid. Right-drag, middle-drag, or Shift + left-drag pans the view. Rotation
+keeps the view's scale stable. Scroll to zoom and double-click to reset the
+camera, including pan. **Center view** under Camera resets only the pan.
+The Camera panel has an XYZ orientation gizmo, with a compact version in the
+waterfall's upper-right corner. Drag either gizmo to orbit, click an axis to
+align, and click it again to flip to the opposite side. Front, Side, and Top
+buttons provide the same view shortcuts. X represents frequency, Y time, and
+Z level; angle fields use degrees.
+History is live only; there is no recording or playback.
 Waterfall frequency, gain, smoothing, and decay controls reprocess the retained
 history immediately. Height stretches the surface above its fixed floor.
 The menu button at the upper left collapses or opens the settings sidebar.
-Shared audio settings are under **Audio analysis** in that sidebar. Waveform
+Controls are grouped by purpose: **Camera**, **Time & History**, **Geometry**,
+**Frequency Range**, **Signal Response**, and **Appearance**, with only relevant
+sections shown for each module. Several sections can stay open together; their
+open/closed state is kept separately for each pane and module during the session.
+Shared audio settings are under **Audio Analysis · Shared**. Waveform
 time windows are limited to the current FFT capture window.
 
 **View** includes pane-size reset, fullscreen (F11), and the FFT inspector with

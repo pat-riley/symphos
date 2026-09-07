@@ -251,8 +251,12 @@ impl SymphosApp {
                 });
                 ui.add_space(8.0);
                 ui.separator();
-                ui.collapsing("Audio analysis", |ui| self.analysis_controls(ui));
-                ui.collapsing("Stereo level", |ui| stereo_meters(ui, frame, &self.theme));
+                crate::modules::settings_panel(ui, "Audio Analysis · Shared", false, |ui| {
+                    self.analysis_controls(ui)
+                });
+                crate::modules::settings_panel(ui, "Stereo Levels", false, |ui| {
+                    stereo_meters(ui, frame, &self.theme)
+                });
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!("Theme · {}", self.theme.name))

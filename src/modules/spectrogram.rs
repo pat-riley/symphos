@@ -5,7 +5,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use super::{
     Palette,
     frequency::{BANDS, History},
-    frequency_label, label,
+    frequency_label, label, settings_panel,
 };
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
@@ -34,10 +34,19 @@ impl Spectrogram {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.seconds, 2.0..=30.0).text("History s"));
-        self.palette.controls(ui);
-        ui.separator();
-        self.history.data.settings.controls(ui);
+        settings_panel(ui, "Time & History", true, |ui| {
+            ui.add(egui::Slider::new(&mut self.seconds, 2.0..=30.0).text("History s"));
+        });
+        settings_panel(ui, "Frequency Range", true, |ui| {
+            self.history.data.settings.range_controls(ui)
+        });
+        settings_panel(ui, "Signal Response", false, |ui| {
+            self.history.data.settings.response_controls(ui)
+        });
+        settings_panel(ui, "Appearance", true, |ui| {
+            self.palette.controls(ui);
+            self.history.data.settings.level_controls(ui);
+        });
     }
 
     pub fn draw(

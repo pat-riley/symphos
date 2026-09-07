@@ -4,8 +4,9 @@ use eframe::egui::{self, Pos2, Rect, Sense, Stroke, Vec2};
 
 use super::{
     Palette,
+    camera_gizmo::{self, Axis},
     frequency::{BANDS, History},
-    frequency_label, label, mix,
+    frequency_label, label, mix, settings_panel,
 };
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
@@ -25,6 +26,7 @@ pub struct Waterfall {
     yaw: f32,
     elevation: f32,
     zoom: f32,
+    pan: Vec2,
     grid: bool,
     floor_grid: bool,
     mode: RenderMode,
@@ -41,6 +43,7 @@ impl Default for Waterfall {
             yaw: -0.35,
             elevation: 0.65,
             zoom: 1.0,
+            pan: Vec2::ZERO,
             grid: true,
             floor_grid: true,
             mode: RenderMode::Surface,
@@ -58,6 +61,7 @@ impl Waterfall {
         self.yaw = -0.35;
         self.elevation = 0.65;
         self.zoom = 1.0;
+        self.pan = Vec2::ZERO;
     }
 
     fn orbit(&mut self, delta: Vec2) {
@@ -65,42 +69,113 @@ impl Waterfall {
         self.elevation = wrap_angle(self.elevation + delta.y * 0.006);
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.add(
-            egui::Slider::new(&mut self.seconds, 0.1..=30.0)
-                .logarithmic(true)
-                .text("History s"),
-        );
-        ui.add(egui::Slider::new(&mut self.height, 0.0..=MAX_HEIGHT).text("Height"));
-        ui.add(egui::Slider::new(&mut self.detail, 24..=128).text("Time slices"));
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.mode, RenderMode::Surface, "Surface");
-            ui.selectable_value(&mut self.mode, RenderMode::Lines, "Lines");
-        });
-        if self.mode == RenderMode::Surface {
-            ui.checkbox(&mut self.grid, "Surface grid");
+    fn camera(&self, plot: Rect) -> Camera {
+        let mut camera = Camera::fit(plot, self.yaw, self.elevation, self.zoom);
+        camera.center += self.pan * plot.size();
+        camera
+    }
+
+    fn orientation_gizmo(&mut self, ui: &mut egui::Ui, rect: Rect, compact: bool) {
+        let action = camera_gizmo::draw(ui, rect, self.yaw, self.elevation, compact);
+        if action.orbit != Vec2::ZERO {
+            self.orbit(action.orbit);
         }
-        ui.checkbox(&mut self.floor_grid, "Floor grid");
-        self.palette.controls(ui);
-        ui.collapsing("Camera", |ui| {
-            ui.add(
-                egui::Slider::new(&mut self.yaw, -std::f32::consts::PI..=std::f32::consts::PI)
-                    .text("Rotation"),
+        if let Some((axis, positive)) = action.snap {
+            (self.yaw, self.elevation) = axis.snap(positive, self.yaw, self.elevation);
+        }
+    }
+
+    pub fn controls(&mut self, ui: &mut egui::Ui) {
+        settings_panel(ui, "Camera", true, |ui| {
+            let (area, _) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 128.0), Sense::hover());
+            self.orientation_gizmo(
+                ui,
+                Rect::from_center_size(area.center(), Vec2::splat(128.0)),
+                false,
             );
-            ui.add(
-                egui::Slider::new(
-                    &mut self.elevation,
-                    -std::f32::consts::PI..=std::f32::consts::PI,
-                )
-                .text("Elevation"),
-            );
+            ui.small("X frequency · Y time · Z level");
+            ui.horizontal(|ui| {
+                for (label, axis, positive) in [
+                    ("Front", Axis::Y, false),
+                    ("Side", Axis::X, true),
+                    ("Top", Axis::Z, true),
+                ] {
+                    if ui
+                        .small_button(label)
+                        .on_hover_text("Click again for the opposite view")
+                        .clicked()
+                    {
+                        (self.yaw, self.elevation) = axis.snap(positive, self.yaw, self.elevation);
+                    }
+                }
+            });
+            egui::Grid::new("camera-angles")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    for (label, angle) in [
+                        ("Rotation", &mut self.yaw),
+                        ("Elevation", &mut self.elevation),
+                    ] {
+                        ui.label(label);
+                        let mut degrees = angle.to_degrees();
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut degrees)
+                                    .speed(0.5)
+                                    .range(-180.0..=180.0)
+                                    .suffix("°"),
+                            )
+                            .changed()
+                        {
+                            *angle = degrees.to_radians();
+                        }
+                        ui.end_row();
+                    }
+                });
             ui.add(egui::Slider::new(&mut self.zoom, 0.5..=2.0).text("Zoom"));
-            if ui.small_button("Reset camera").clicked() {
-                self.reset_camera();
-            }
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button("Center view")
+                    .on_hover_text("Reset pan; keep rotation and zoom")
+                    .clicked()
+                {
+                    self.pan = Vec2::ZERO;
+                }
+                if ui.small_button("Reset camera").clicked() {
+                    self.reset_camera();
+                }
+            });
         });
-        ui.separator();
-        self.history.data.settings.controls(ui);
+        settings_panel(ui, "Time & History", true, |ui| {
+            ui.add(
+                egui::Slider::new(&mut self.seconds, 0.1..=30.0)
+                    .logarithmic(true)
+                    .text("History s"),
+            );
+        });
+        settings_panel(ui, "Geometry", false, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.mode, RenderMode::Surface, "Surface");
+                ui.selectable_value(&mut self.mode, RenderMode::Lines, "Lines");
+            });
+            ui.add(egui::Slider::new(&mut self.height, 0.0..=MAX_HEIGHT).text("Height"));
+            ui.add(egui::Slider::new(&mut self.detail, 24..=128).text("Time slices"));
+        });
+        settings_panel(ui, "Frequency Range", false, |ui| {
+            self.history.data.settings.range_controls(ui)
+        });
+        settings_panel(ui, "Signal Response", false, |ui| {
+            self.history.data.settings.response_controls(ui)
+        });
+        settings_panel(ui, "Appearance", true, |ui| {
+            self.palette.controls(ui);
+            self.history.data.settings.level_controls(ui);
+            if self.mode == RenderMode::Surface {
+                ui.checkbox(&mut self.grid, "Surface grid");
+            }
+            ui.checkbox(&mut self.floor_grid, "Floor grid");
+        });
     }
 
     pub fn draw(
@@ -113,24 +188,35 @@ impl Waterfall {
         live: bool,
     ) {
         self.history.update(frame, now, live);
+        let plot = rect.shrink2(Vec2::new(44.0, 32.0));
         let response = ui.interact(
             rect,
             ui.id().with("waterfall-camera"),
             Sense::click_and_drag(),
         );
-        if response.dragged() {
+        let shift = ui.input(|input| input.modifiers.shift);
+        let panning = response.dragged_by(egui::PointerButton::Secondary)
+            || response.dragged_by(egui::PointerButton::Middle)
+            || (shift && response.dragged_by(egui::PointerButton::Primary));
+        if panning {
+            self.pan += response.drag_delta() / plot.size().max(Vec2::splat(1.0));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if response.dragged_by(egui::PointerButton::Primary) {
             self.orbit(response.drag_delta());
+        }
+        if response.hovered() && shift && !response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         if response.hovered() {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
             self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(0.5, 2.0);
         }
-        if response.double_clicked() {
+        if response.double_clicked_by(egui::PointerButton::Primary) && !shift {
             self.reset_camera();
         }
+        response.on_hover_text("Drag to rotate. Right-drag, middle-drag, or Shift + left-drag to pan. Scroll to zoom. Double-click to reset the camera.");
         let painter = ui.painter_at(rect);
-        let plot = rect.shrink2(Vec2::new(44.0, 32.0));
-        let camera = Camera::fit(plot, self.yaw, self.elevation, self.zoom);
+        let camera = self.camera(plot);
         let project = |x, y, z| camera.project([x, y, z]).0;
         let base_stroke = Stroke::new(0.6, mix(theme.background, theme.muted, 0.35));
         for step in 0..if self.floor_grid { 9 } else { 0 } {
@@ -321,18 +407,23 @@ impl Waterfall {
             format!("{:.0} dBFS", settings.ceiling),
             theme.muted,
         );
-        label(
-            &painter,
-            rect.left_top() + Vec2::new(12.0, 10.0),
-            "FREQUENCY × TIME · HEIGHT = LEVEL",
-            theme.muted,
-        );
+        if rect.width() > 380.0 {
+            label(
+                &painter,
+                rect.left_top() + Vec2::new(12.0, 10.0),
+                "FREQUENCY × TIME · HEIGHT = LEVEL",
+                theme.muted,
+            );
+        }
         label(
             &painter,
             rect.left_bottom() + Vec2::new(12.0, -18.0),
-            "Drag to rotate · Scroll to zoom · Double-click to reset",
+            "Drag: rotate · Right/Shift-drag: pan · Scroll: zoom",
             theme.muted,
         );
+        let gizmo_rect =
+            Rect::from_min_size(rect.right_top() + Vec2::new(-88.0, 6.0), Vec2::splat(80.0));
+        self.orientation_gizmo(ui, gizmo_rect, true);
     }
 }
 
@@ -358,16 +449,9 @@ impl Camera {
 
     fn project(&self, [x, y, z]: [f32; 3]) -> (Pos2, f32) {
         let y = y - MAX_HEIGHT * 0.5;
-        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
-        let (sin_el, cos_el) = self.elevation.sin_cos();
-        let horizontal = cos_yaw * x + sin_yaw * z;
-        let forward = -sin_yaw * x + cos_yaw * z;
-        let vertical = cos_el * y - sin_el * forward;
-        let depth = sin_el * y + cos_el * forward;
-        (
-            self.center + Vec2::new(horizontal, -vertical) * self.scale,
-            depth,
-        )
+        let (position, depth) =
+            camera_gizmo::project_direction(self.yaw, self.elevation, [x, y, z]);
+        (self.center + position * self.scale, depth)
     }
 }
 
@@ -405,6 +489,158 @@ fn mesh_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_gizmo_snaps_and_drags_without_panning_or_double_orbiting() {
+        let context = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let gizmo =
+            Rect::from_min_size(rect.right_top() + Vec2::new(-88.0, 6.0), Vec2::splat(80.0));
+        let mut waterfall = Waterfall {
+            pan: Vec2::new(0.2, -0.1),
+            zoom: 1.5,
+            ..Waterfall::default()
+        };
+        let render = |waterfall: &mut Waterfall, events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    waterfall.draw(
+                        ui,
+                        rect,
+                        &AnalysisFrame::default(),
+                        &AppTheme::default(),
+                        Instant::now(),
+                        false,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+        };
+        render(&mut waterfall, vec![]);
+        let axis = gizmo.center()
+            + camera_gizmo::project_direction(waterfall.yaw, waterfall.elevation, [1.0, 0.0, 0.0])
+                .0
+                * gizmo.width()
+                * 0.31;
+        for pressed in [true, false] {
+            render(
+                &mut waterfall,
+                vec![
+                    egui::Event::PointerMoved(axis),
+                    egui::Event::PointerButton {
+                        pos: axis,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!((waterfall.yaw + std::f32::consts::FRAC_PI_2).abs() < 1.0e-5);
+        assert_eq!(waterfall.elevation, 0.0);
+        assert_eq!(waterfall.pan, Vec2::new(0.2, -0.1));
+        assert_eq!(waterfall.zoom, 1.5);
+        let before = (waterfall.yaw, waterfall.elevation);
+        let start = gizmo.center();
+        let delta = Vec2::new(12.0, 18.0);
+        render(
+            &mut waterfall,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        render(
+            &mut waterfall,
+            vec![egui::Event::PointerMoved(start + delta)],
+        );
+        assert!((waterfall.yaw - wrap_angle(before.0 + delta.x * 0.008)).abs() < 1.0e-5);
+        assert!((waterfall.elevation - wrap_angle(before.1 + delta.y * 0.006)).abs() < 1.0e-5);
+        assert_eq!(waterfall.pan, Vec2::new(0.2, -0.1));
+    }
+
+    #[test]
+    fn pointer_gestures_pan_without_rotating_and_plain_left_drag_still_orbits() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let plot = rect.shrink2(Vec2::new(44.0, 32.0));
+        for (button, shift, should_pan) in [
+            (egui::PointerButton::Secondary, false, true),
+            (egui::PointerButton::Middle, false, true),
+            (egui::PointerButton::Primary, true, true),
+            (egui::PointerButton::Primary, false, false),
+        ] {
+            let context = egui::Context::default();
+            let mut waterfall = Waterfall::default();
+            let initial_angles = (waterfall.yaw, waterfall.elevation);
+            let initial_center = waterfall.camera(plot).center;
+            let modifiers = egui::Modifiers {
+                shift,
+                ..Default::default()
+            };
+            let start = rect.center();
+            let movement = Vec2::new(30.0, -20.0);
+            for events in [
+                vec![egui::Event::ModifiersChanged(modifiers)],
+                vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::PointerButton {
+                        pos: start,
+                        button,
+                        pressed: true,
+                        modifiers,
+                    },
+                ],
+                vec![egui::Event::PointerMoved(start + movement)],
+            ] {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        waterfall.draw(
+                            ui,
+                            rect,
+                            &AnalysisFrame::default(),
+                            &AppTheme::default(),
+                            Instant::now(),
+                            false,
+                        )
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            if should_pan {
+                assert_eq!((waterfall.yaw, waterfall.elevation), initial_angles);
+                assert!(
+                    (waterfall.camera(plot).center - initial_center - movement).length() < 0.01
+                );
+                waterfall.zoom = 2.0;
+                waterfall.orbit(Vec2::new(100.0, 200.0));
+                assert!(
+                    (waterfall.camera(plot).center - initial_center - movement).length() < 0.01
+                );
+            } else {
+                assert_eq!(waterfall.pan, Vec2::ZERO);
+                assert_ne!((waterfall.yaw, waterfall.elevation), initial_angles);
+            }
+            waterfall.reset_camera();
+            assert_eq!(waterfall.pan, Vec2::ZERO);
+            assert_eq!(waterfall.zoom, 1.0);
+            assert_eq!((waterfall.yaw, waterfall.elevation), initial_angles);
+        }
+    }
 
     #[test]
     fn camera_rotation_changes_depth_and_keeps_projection_finite() {
@@ -549,7 +785,7 @@ mod tests {
                     .iter()
                     .filter(|shape| matches!(shape.shape, egui::Shape::LineSegment { .. }))
                     .count();
-                assert_eq!(floor_and_axes, if floor_grid { 21 } else { 3 });
+                assert_eq!(floor_and_axes, if floor_grid { 27 } else { 9 });
                 let mesh = meshes[0];
                 assert!(mesh.vertices.len() > 40_000 && mesh.vertices.len() < 100_000);
                 assert!(mesh.is_valid());

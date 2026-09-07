@@ -4,7 +4,7 @@ use eframe::egui::{self, Pos2, Rect, Sense, Stroke, Vec2};
 
 use super::{
     frequency::{BANDS, FrequencyData},
-    frequency_label, label, mix,
+    frequency_label, label, mix, settings_panel,
 };
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
@@ -31,11 +31,19 @@ impl Spectrum {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
-        self.data.settings.controls(ui);
-        ui.checkbox(&mut self.peak_hold, "Peak hold");
-        if ui.small_button("Reset peaks").clicked() {
-            self.peaks.fill(-120.0);
-        }
+        settings_panel(ui, "Frequency Range", true, |ui| {
+            self.data.settings.range_controls(ui)
+        });
+        settings_panel(ui, "Signal Response", false, |ui| {
+            self.data.settings.response_controls(ui)
+        });
+        settings_panel(ui, "Appearance", true, |ui| {
+            self.data.settings.level_controls(ui);
+            ui.checkbox(&mut self.peak_hold, "Peak hold");
+            if ui.small_button("Reset peaks").clicked() {
+                self.peaks.fill(-120.0);
+            }
+        });
     }
 
     pub fn draw(

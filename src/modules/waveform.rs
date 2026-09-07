@@ -1,6 +1,6 @@
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 
-use super::{label, mix};
+use super::{label, mix, settings_panel};
 use crate::{
     analysis::{AnalysisFrame, ChannelMode},
     theme::AppTheme,
@@ -28,23 +28,29 @@ impl Waveform {
     pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
         let max_ms = frame.fft_size as f32 / frame.sample_rate.max(1) as f32 * 1000.0;
         self.time_ms = self.time_ms.min(max_ms);
-        ui.add(egui::Slider::new(&mut self.time_ms, 1.0..=max_ms.max(1.0)).text("Window ms"));
-        ui.add(
-            egui::Slider::new(&mut self.amplitude, 0.1..=10.0)
-                .logarithmic(true)
-                .text("Amplitude"),
-        );
-        ui.checkbox(&mut self.stereo, "Separate stereo channels");
-        if !self.stereo {
-            egui::ComboBox::from_id_salt("wave-channel")
-                .selected_text(self.channel.label())
-                .show_ui(ui, |ui| {
-                    for mode in ChannelMode::ALL {
-                        ui.selectable_value(&mut self.channel, mode, mode.label());
-                    }
-                });
-        }
-        ui.small("Time window is limited by the shared FFT capture window.");
+        settings_panel(ui, "Time Window", true, |ui| {
+            ui.add(egui::Slider::new(&mut self.time_ms, 1.0..=max_ms.max(1.0)).text("Window ms"));
+            ui.small("Limited by the shared FFT capture window.");
+        });
+        settings_panel(ui, "Amplitude", true, |ui| {
+            ui.add(
+                egui::Slider::new(&mut self.amplitude, 0.1..=10.0)
+                    .logarithmic(true)
+                    .text("Amplitude"),
+            );
+        });
+        settings_panel(ui, "Channels", true, |ui| {
+            ui.checkbox(&mut self.stereo, "Separate stereo channels");
+            if !self.stereo {
+                egui::ComboBox::from_id_salt("wave-channel")
+                    .selected_text(self.channel.label())
+                    .show_ui(ui, |ui| {
+                        for mode in ChannelMode::ALL {
+                            ui.selectable_value(&mut self.channel, mode, mode.label());
+                        }
+                    });
+            }
+        });
     }
 
     pub fn draw(
