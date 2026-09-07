@@ -14,17 +14,39 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
-- Selectable microphone and system-output sources through PipeWire
-- Linear and logarithmic frequency spectra
-- Stereo waveform, scrolling spectrogram, peak and RMS meters
-- Dominant frequency and musical note detection
-- Spectral centroid, rolloff, flatness, zero-crossing rate, and crest factor
-- Experimental BPM estimation with confidence reporting
-- FFT size, window function, smoothing, gain, frequency range, decay, channel,
-  and frame-rate controls
-- Raw FFT-bin inspection and fullscreen mode
+- Microphone and system-output selection in the top navigation through PipeWire
+- Four resizable panes with interchangeable waterfall, spectrum, waveform,
+  and spectrogram modules
+- A live 3D waterfall with surface or spectrum-line rendering, independent surface
+  and floor grids, rotation, zoom, and 0.1–30 second history (2 seconds by default)
+- Independent frequency range, linear/log scale, smoothing, gain, decay, and
+  intensity controls for each frequency module
+- Spectrum peak hold, stereo waveform time/amplitude controls, and color palettes
+- Compact, collapsible settings sidebar that follows the selected pane
+- Shared FFT size, window function, analysis channel, and frame-rate controls
+- Bottom status strip with capture status, FPS, sample rate, and peak level
+- Raw FFT-bin inspection, detailed diagnostics, and fullscreen mode
 - GPU rendering with `wgpu` on native Wayland
 - Colors derived from the active Omarchy theme
+
+## Using the dashboard
+
+Select an audio source in the navbar, then click a pane to edit its settings.
+Use the dropdown in any pane header to choose its module. Drag the divider below
+the main pane or between the lower panes to resize them. **Expand** fills the
+workspace with one pane; **Restore** or Escape returns to the dashboard.
+
+Drag the waterfall to rotate it, scroll over it to zoom, and double-click to
+reset the camera. History is live only; there is no recording or playback.
+Waterfall frequency, gain, smoothing, and decay controls reprocess the retained
+history immediately. Height stretches the surface above its fixed floor.
+The menu button at the upper left collapses or opens the settings sidebar.
+Shared audio settings are under **Audio analysis** in that sidebar. Waveform
+time windows are limited to the current FFT capture window.
+
+**View** includes pane-size reset, fullscreen (F11), and the FFT inspector with
+the detailed analyzer metrics and experimental tempo estimate. Pane assignments,
+sizes, and module settings currently last for the session.
 
 ## Requirements
 

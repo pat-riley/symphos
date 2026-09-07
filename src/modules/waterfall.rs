@@ -1,0 +1,523 @@
+use std::time::Instant;
+
+use eframe::egui::{self, Pos2, Rect, Sense, Stroke, Vec2};
+
+use super::{
+    Palette,
+    frequency::{BANDS, History},
+    frequency_label, label, mix,
+};
+use crate::{analysis::AnalysisFrame, theme::AppTheme};
+
+const MAX_HEIGHT: f32 = 2.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    Surface,
+    Lines,
+}
+
+pub struct Waterfall {
+    history: History,
+    seconds: f32,
+    height: f32,
+    detail: usize,
+    yaw: f32,
+    elevation: f32,
+    zoom: f32,
+    grid: bool,
+    floor_grid: bool,
+    mode: RenderMode,
+    palette: Palette,
+}
+
+impl Default for Waterfall {
+    fn default() -> Self {
+        Self {
+            history: History::default(),
+            seconds: 2.0,
+            height: 0.85,
+            detail: 72,
+            yaw: -0.35,
+            elevation: 0.65,
+            zoom: 1.0,
+            grid: true,
+            floor_grid: true,
+            mode: RenderMode::Surface,
+            palette: Palette::default(),
+        }
+    }
+}
+
+impl Waterfall {
+    pub fn clear(&mut self) {
+        self.history.clear();
+    }
+
+    fn reset_camera(&mut self) {
+        self.yaw = -0.35;
+        self.elevation = 0.65;
+        self.zoom = 1.0;
+    }
+
+    pub fn controls(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::Slider::new(&mut self.seconds, 0.1..=30.0)
+                .logarithmic(true)
+                .text("History s"),
+        );
+        ui.add(egui::Slider::new(&mut self.height, 0.0..=MAX_HEIGHT).text("Height"));
+        ui.add(egui::Slider::new(&mut self.detail, 24..=128).text("Time slices"));
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mode, RenderMode::Surface, "Surface");
+            ui.selectable_value(&mut self.mode, RenderMode::Lines, "Lines");
+        });
+        if self.mode == RenderMode::Surface {
+            ui.checkbox(&mut self.grid, "Surface grid");
+        }
+        ui.checkbox(&mut self.floor_grid, "Floor grid");
+        self.palette.controls(ui);
+        ui.collapsing("Camera", |ui| {
+            ui.add(
+                egui::Slider::new(&mut self.yaw, -std::f32::consts::PI..=std::f32::consts::PI)
+                    .text("Rotation"),
+            );
+            ui.add(egui::Slider::new(&mut self.elevation, 0.15..=1.45).text("Elevation"));
+            ui.add(egui::Slider::new(&mut self.zoom, 0.5..=2.0).text("Zoom"));
+            if ui.small_button("Reset camera").clicked() {
+                self.reset_camera();
+            }
+        });
+        ui.separator();
+        self.history.data.settings.controls(ui);
+    }
+
+    pub fn draw(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        frame: &AnalysisFrame,
+        theme: &AppTheme,
+        now: Instant,
+        live: bool,
+    ) {
+        self.history.update(frame, now, live);
+        let response = ui.interact(
+            rect,
+            ui.id().with("waterfall-camera"),
+            Sense::click_and_drag(),
+        );
+        if response.dragged() {
+            let delta = response.drag_delta();
+            self.yaw = (self.yaw + delta.x * 0.008 + std::f32::consts::PI)
+                .rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
+            self.elevation = (self.elevation + delta.y * 0.006).clamp(0.15, 1.45);
+        }
+        if response.hovered() {
+            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(0.5, 2.0);
+        }
+        if response.double_clicked() {
+            self.reset_camera();
+        }
+        let painter = ui.painter_at(rect);
+        let plot = rect.shrink2(Vec2::new(44.0, 32.0));
+        let camera = Camera::fit(plot, self.yaw, self.elevation, self.zoom);
+        let project = |x, y, z| camera.project([x, y, z]).0;
+        let base_stroke = Stroke::new(0.6, mix(theme.background, theme.muted, 0.35));
+        for step in 0..if self.floor_grid { 9 } else { 0 } {
+            let t = step as f32 / 8.0;
+            painter.line_segment(
+                [
+                    project(-1.4 + t * 2.8, 0.0, -1.0),
+                    project(-1.4 + t * 2.8, 0.0, 1.0),
+                ],
+                base_stroke,
+            );
+            painter.line_segment(
+                [
+                    project(-1.4, 0.0, -1.0 + t * 2.0),
+                    project(1.4, 0.0, -1.0 + t * 2.0),
+                ],
+                base_stroke,
+            );
+        }
+
+        // CPU projection feeds a single GPU mesh. Cells and their subtle grid edges
+        // are emitted back-to-front so rotating the surface preserves occlusion.
+        let settings = &self.history.data.settings;
+        let slices: Vec<_> = (0..self.detail)
+            .map(|row| {
+                let age = row as f32 / (self.detail - 1) as f32 * self.seconds;
+                self.history.sample(now, age)
+            })
+            .collect();
+        let mut vertices = Vec::with_capacity(self.detail * BANDS);
+        for (row, levels) in slices.iter().enumerate() {
+            let z = 1.0 - row as f32 / (self.detail - 1) as f32 * 2.0;
+            for band in 0..BANDS {
+                let intensity = levels.map_or(0.0, |values| settings.intensity(values[band]));
+                let (pos, depth) = camera.project([
+                    -1.4 + band as f32 / (BANDS - 1) as f32 * 2.8,
+                    intensity * self.height,
+                    z,
+                ]);
+                vertices.push((pos, depth, self.palette.color(intensity, theme)));
+            }
+        }
+        let mut mesh = egui::Mesh::default();
+        match self.mode {
+            RenderMode::Lines => {
+                let mut segments = Vec::with_capacity(self.detail * (BANDS - 1));
+                for (row, levels) in slices.iter().enumerate() {
+                    if levels.is_none() {
+                        continue;
+                    }
+                    for band in 0..BANDS - 1 {
+                        let a = row * BANDS + band;
+                        segments.push(((vertices[a].1 + vertices[a + 1].1) / 2.0, a, a + 1));
+                    }
+                }
+                segments.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+                for (_, a, b) in segments {
+                    mesh_segment(
+                        &mut mesh,
+                        vertices[a].0,
+                        vertices[b].0,
+                        vertices[a].2,
+                        vertices[b].2,
+                        1.1,
+                    );
+                }
+            }
+            RenderMode::Surface => {
+                let floor_offset = vertices.len();
+                for row in 0..self.detail {
+                    let z = 1.0 - row as f32 / (self.detail - 1) as f32 * 2.0;
+                    for band in 0..BANDS {
+                        let (position, depth) =
+                            camera.project([-1.4 + band as f32 / (BANDS - 1) as f32 * 2.8, 0.0, z]);
+                        let color = mix(theme.background, vertices[row * BANDS + band].2, 0.6);
+                        vertices.push((position, depth, color));
+                    }
+                }
+                let mut faces = Vec::with_capacity((self.detail - 1) * (BANDS - 1));
+                let mut add_face = |indices: [usize; 4], grid_edges: [bool; 2]| {
+                    let depth = indices.iter().map(|i| vertices[*i].1).sum::<f32>() / 4.0;
+                    faces.push((depth, indices, grid_edges));
+                };
+                for row in 0..self.detail - 1 {
+                    if slices[row].is_none() || slices[row + 1].is_none() {
+                        continue;
+                    }
+                    for band in 0..BANDS - 1 {
+                        let a = row * BANDS + band;
+                        add_face(
+                            [a, a + 1, a + BANDS + 1, a + BANDS],
+                            [self.grid && row % 3 == 0, self.grid && band % 4 == 0],
+                        );
+                        // Perimeter walls share the same y=0 plane as the floor.
+                        // Height stretches the terrain from that fixed foundation.
+                        if row == 0 || slices[row - 1].is_none() {
+                            add_face(
+                                [a, a + 1, floor_offset + a + 1, floor_offset + a],
+                                [false; 2],
+                            );
+                        }
+                        if row + 2 == self.detail || slices[row + 2].is_none() {
+                            let b = a + BANDS;
+                            add_face(
+                                [b, b + 1, floor_offset + b + 1, floor_offset + b],
+                                [false; 2],
+                            );
+                        }
+                    }
+                    let a = row * BANDS;
+                    add_face(
+                        [a, a + BANDS, floor_offset + a + BANDS, floor_offset + a],
+                        [false; 2],
+                    );
+                    let b = a + BANDS - 1;
+                    add_face(
+                        [b, b + BANDS, floor_offset + b + BANDS, floor_offset + b],
+                        [false; 2],
+                    );
+                }
+                faces.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+                for (_, indices, grid_edges) in faces {
+                    let offset = mesh.vertices.len() as u32;
+                    for index in indices {
+                        let (pos, _, color) = vertices[index];
+                        mesh.colored_vertex(pos, color);
+                    }
+                    mesh.add_triangle(offset, offset + 1, offset + 2);
+                    mesh.add_triangle(offset, offset + 2, offset + 3);
+                    let color = mix(theme.background, theme.foreground, 0.22);
+                    if grid_edges[0] {
+                        mesh_line(
+                            &mut mesh,
+                            vertices[indices[0]].0,
+                            vertices[indices[1]].0,
+                            color,
+                        );
+                    }
+                    if grid_edges[1] {
+                        mesh_line(
+                            &mut mesh,
+                            vertices[indices[0]].0,
+                            vertices[indices[3]].0,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        let axis_stroke = Stroke::new(1.0, theme.muted);
+        painter.line_segment(
+            [project(-1.4, 0.0, 1.0), project(1.4, 0.0, 1.0)],
+            axis_stroke,
+        );
+        painter.line_segment(
+            [project(1.4, 0.0, 1.0), project(1.4, 0.0, -1.0)],
+            axis_stroke,
+        );
+        painter.line_segment(
+            [project(-1.4, 0.0, 1.0), project(-1.4, self.height, 1.0)],
+            axis_stroke,
+        );
+        for step in 0..=4 {
+            let t = step as f32 / 4.0;
+            label(
+                &painter,
+                project(-1.4 + t * 2.8, 0.0, 1.0) + Vec2::new(-8.0, 6.0),
+                frequency_label(settings.frequency(t, frame.sample_rate)),
+                theme.muted,
+            );
+        }
+        label(
+            &painter,
+            project(1.4, 0.0, -1.0) + Vec2::new(5.0, 0.0),
+            format!("−{} s", self.seconds),
+            theme.muted,
+        );
+        label(
+            &painter,
+            project(1.4, 0.0, 1.0) + Vec2::new(12.0, -12.0),
+            "now",
+            theme.muted,
+        );
+        label(
+            &painter,
+            project(-1.4, self.height, 1.0) + Vec2::new(-8.0, -16.0),
+            format!("{:.0} dBFS", settings.ceiling),
+            theme.muted,
+        );
+        label(
+            &painter,
+            rect.left_top() + Vec2::new(12.0, 10.0),
+            "FREQUENCY × TIME · HEIGHT = LEVEL",
+            theme.muted,
+        );
+        label(
+            &painter,
+            rect.left_bottom() + Vec2::new(12.0, -18.0),
+            "Drag to rotate · Scroll to zoom · Double-click to reset",
+            theme.muted,
+        );
+    }
+}
+
+struct Camera {
+    yaw: f32,
+    elevation: f32,
+    scale: f32,
+    center: Pos2,
+}
+
+impl Camera {
+    fn fit(rect: Rect, yaw: f32, elevation: f32, zoom: f32) -> Self {
+        let mut camera = Self {
+            yaw,
+            elevation,
+            scale: 1.0,
+            center: Pos2::ZERO,
+        };
+        let mut bounds = Rect::NOTHING;
+        // Fit the entire supported height range. Changing height alone never
+        // moves the camera or any point on the y=0 floor.
+        for x in [-1.4, 1.4] {
+            for z in [-1.0, 1.0] {
+                for y in [0.0, MAX_HEIGHT] {
+                    bounds.extend_with(camera.project([x, y, z]).0);
+                }
+            }
+        }
+        camera.scale = (rect.width() / bounds.width())
+            .min(rect.height() / bounds.height())
+            .max(0.0)
+            * zoom;
+        camera.center = rect.center() - bounds.center().to_vec2() * camera.scale;
+        camera
+    }
+
+    fn project(&self, [x, y, z]: [f32; 3]) -> (Pos2, f32) {
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_el, cos_el) = self.elevation.sin_cos();
+        let horizontal = cos_yaw * x + sin_yaw * z;
+        let forward = -sin_yaw * x + cos_yaw * z;
+        let vertical = cos_el * y - sin_el * forward;
+        let depth = sin_el * y + cos_el * forward;
+        (
+            self.center + Vec2::new(horizontal, -vertical) * self.scale,
+            depth,
+        )
+    }
+}
+
+fn mesh_line(mesh: &mut egui::Mesh, a: Pos2, b: Pos2, color: egui::Color32) {
+    mesh_segment(mesh, a, b, color, color, 0.6);
+}
+
+fn mesh_segment(
+    mesh: &mut egui::Mesh,
+    a: Pos2,
+    b: Pos2,
+    color_a: egui::Color32,
+    color_b: egui::Color32,
+    width: f32,
+) {
+    let delta = b - a;
+    let normal = Vec2::new(-delta.y, delta.x).normalized() * width * 0.5;
+    let offset = mesh.vertices.len() as u32;
+    for (point, color) in [
+        (a + normal, color_a),
+        (b + normal, color_b),
+        (b - normal, color_b),
+        (a - normal, color_a),
+    ] {
+        mesh.colored_vertex(point, color);
+    }
+    mesh.add_triangle(offset, offset + 1, offset + 2);
+    mesh.add_triangle(offset, offset + 2, offset + 3);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_rotation_changes_depth_and_keeps_projection_finite() {
+        let mut camera = Camera {
+            yaw: 0.0,
+            elevation: 0.65,
+            scale: 100.0,
+            center: Pos2::ZERO,
+        };
+        let (_, front) = camera.project([0.0, 0.0, 1.0]);
+        camera.yaw = std::f32::consts::PI;
+        let (position, back) = camera.project([0.0, 0.0, 1.0]);
+        assert!(front > 0.0 && back < 0.0);
+        assert!(position.x.is_finite() && position.y.is_finite());
+    }
+
+    #[test]
+    fn full_height_range_fits_above_a_fixed_floor() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 500.0));
+        for yaw in [-3.0, -1.5, 0.0, 1.5, 3.0] {
+            for elevation in [0.15, 0.65, 1.45] {
+                let camera = Camera::fit(rect, yaw, elevation, 1.0);
+                for x in [-1.4, 0.0, 1.4] {
+                    for z in [-1.0, 0.0, 1.0] {
+                        let floor = camera.project([x, 0.0, z]).0;
+                        for height in [0.0, 0.85, MAX_HEIGHT] {
+                            let top = camera.project([x, height, z]).0;
+                            assert!(rect.expand(0.01).contains(top));
+                            assert!((top.x - floor.x).abs() < 0.01);
+                            assert!(top.y <= floor.y + 0.01);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_history_renders_bounded_finite_mesh_at_multiple_angles_and_sizes() {
+        use super::super::frequency::HistoryRow;
+        use std::time::Duration;
+
+        let mut waterfall = Waterfall {
+            detail: 128,
+            ..Waterfall::default()
+        };
+        let start = Instant::now();
+        for row in 0..=240 {
+            let mut levels = [-120.0; BANDS];
+            for (band, level) in levels.iter_mut().enumerate() {
+                *level = -45.0 + (band as f32 * 0.2 + row as f32 * 0.1).sin() * 30.0;
+            }
+            waterfall.history.rows.push_back(HistoryRow {
+                time: start + Duration::from_secs_f32(row as f32 / 30.0),
+                levels,
+                magnitudes: Vec::new(),
+                sequence: row + 1,
+            });
+        }
+        let now = start + Duration::from_secs(8);
+        let context = egui::Context::default();
+        let theme = AppTheme::default();
+        let started = Instant::now();
+        for (size, mode, seconds, floor_grid) in [
+            (Vec2::new(180.0, 200.0), RenderMode::Surface, 2.0, true),
+            (Vec2::new(1100.0, 500.0), RenderMode::Surface, 0.1, false),
+            (Vec2::new(180.0, 200.0), RenderMode::Lines, 0.1, true),
+            (Vec2::new(1100.0, 500.0), RenderMode::Lines, 2.0, false),
+        ] {
+            waterfall.mode = mode;
+            waterfall.seconds = seconds;
+            waterfall.floor_grid = floor_grid;
+            for yaw in [-3.0, -1.5, 0.0, 1.5, 3.0] {
+                waterfall.yaw = yaw;
+                let rect = Rect::from_min_size(Pos2::ZERO, size);
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    waterfall.draw(ui, rect, &AnalysisFrame::default(), &theme, now, false);
+                });
+                // This headless geometry check intentionally does not upload textures.
+                output.textures_delta.clear();
+                let meshes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Mesh(mesh) = &shape.shape {
+                            Some(mesh)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(meshes.len(), 1);
+                let floor_and_axes = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| matches!(shape.shape, egui::Shape::LineSegment { .. }))
+                    .count();
+                assert_eq!(floor_and_axes, if floor_grid { 21 } else { 3 });
+                let mesh = meshes[0];
+                assert!(mesh.vertices.len() > 40_000 && mesh.vertices.len() < 100_000);
+                assert!(mesh.is_valid());
+                assert!(
+                    mesh.vertices
+                        .iter()
+                        .all(|vertex| vertex.pos.x.is_finite() && vertex.pos.y.is_finite())
+                );
+                assert!(waterfall.history.rows.len() <= 901);
+            }
+        }
+        eprintln!(
+            "20 maximum-detail waterfall frames: {:?}",
+            started.elapsed()
+        );
+    }
+}
