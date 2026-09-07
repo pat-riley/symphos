@@ -31,6 +31,11 @@ jobs:
           libxcb-shape0-dev
           libxcb-xfixes0-dev
 
+      - name: Check PipeWire API baseline
+        run: |
+          pkg-config --modversion libpipewire-0.3
+          pkg-config --atleast-version=1.0 libpipewire-0.3
+
       - name: Install Rust components
         run: rustup component add clippy rustfmt
 
@@ -48,7 +53,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Run tests
         run: cargo test --all-targets --locked

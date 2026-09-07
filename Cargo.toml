@@ -17,7 +17,8 @@ arc-swap = "1.7"
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wayland", "wgpu", "x11"] }
 env_logger = "0.11"
 log = "0.4"
-pipewire = { version = "0.10.1", features = ["v1_2_0"] }
+# Keep the API baseline compatible with Ubuntu 24.04's PipeWire 1.0 headers.
+pipewire = { version = "0.10.1", features = ["v1_0_0"] }
 realfft = "3.5.0"
 rtrb = "0.4.0"
 

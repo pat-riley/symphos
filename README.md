@@ -69,7 +69,7 @@ on Omarchy and tested on ARM64 Apple Silicon with the Asahi graphics stack.
 You need:
 
 - Rust 1.95 or newer
-- PipeWire development headers
+- PipeWire 1.0 or newer and its development headers
 - Wayland and XKB development headers
 - A Vulkan, OpenGL, or other `wgpu`-supported graphics driver
 
