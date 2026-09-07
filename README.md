@@ -49,7 +49,7 @@ Install Rust with your distribution package or the official `rustup` installer.
 ## Build and run
 
 ```sh
-git clone <repository-url>
+git clone https://github.com/pat-riley/symphos.git
 cd symphos
 cargo run --release
 ```

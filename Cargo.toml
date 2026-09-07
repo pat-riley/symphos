@@ -6,6 +6,8 @@ rust-version = "1.95"
 description = "A high-performance native audio analyzer and visualizer for Omarchy"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/pat-riley/symphos"
+homepage = "https://github.com/pat-riley/symphos"
 keywords = ["audio", "visualizer", "pipewire", "wgpu", "omarchy"]
 categories = ["multimedia::audio", "visualization"]
 

@@ -13,6 +13,9 @@
   </developer>
   <content_rating type="oars-1.1" />
   <launchable type="desktop-id">io.github.riley.Symphos.desktop</launchable>
+  <url type="homepage">https://github.com/pat-riley/symphos</url>
+  <url type="bugtracker">https://github.com/pat-riley/symphos/issues</url>
+  <url type="vcs-browser">https://github.com/pat-riley/symphos</url>
   <categories>
     <category>AudioVideo</category>
     <category>Audio</category>
