@@ -188,6 +188,9 @@ impl SymphosApp {
     }
 
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
+        let live = matches!(self.status, AudioStatus::Streaming)
+            && self.selected_node.is_some()
+            && frame.sequence > 0;
         let selected = self.selected_pane == index;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 7.0, self.theme.panel);
@@ -225,7 +228,7 @@ impl SymphosApp {
         child.horizontal(|ui| {
             let before = self.panes[index].kind;
             egui::ComboBox::from_id_salt("module-kind")
-                .width((ui.available_width() - 36.0).clamp(45.0, 180.0))
+                .width((ui.available_width() - 68.0).clamp(45.0, 180.0))
                 .truncate()
                 .selected_text(before.label())
                 .show_ui(ui, |ui| {
@@ -250,15 +253,21 @@ impl SymphosApp {
                     self.focused_pane = if focused { None } else { Some(index) };
                     self.selected_pane = index;
                 }
+                let frozen = self.panes[index].is_frozen();
+                ui.add_enabled_ui(live || frozen, |ui| {
+                    if icons::sized_button(ui, if frozen { Icon::Play } else { Icon::Pause }, frozen, 24.0,
+                        if frozen { "Resume this pane. Capture and other panes have kept running; paused time is omitted from this pane's history." }
+                        else { "Freeze this pane for inspection. Audio capture and other panes keep running; settings remain editable." }).clicked() {
+                        self.panes[index].toggle_freeze(frame, Instant::now());
+                        self.selected_pane = index;
+                    }
+                });
             });
         });
         let canvas = Rect::from_min_max(
             Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
             rect.max - Vec2::splat(8.0),
         );
-        let live = matches!(self.status, AudioStatus::Streaming)
-            && self.selected_node.is_some()
-            && frame.sequence > 0;
         self.panes[index].draw(&mut child, canvas, frame, &self.theme, live);
     }
 

@@ -132,7 +132,32 @@ the default tab and includes history duration, so the waterfall no longer needs
 a separate Time & History tab. Other modules show only relevant tabs; the
 spectrogram retains its Time & History tab. One section is visible at a time; the selected tab
 and scroll position are remembered separately for each pane/module/tab during the session. Waveform
-has Time Window and Amplitude tabs; channel display is now a global setting.
+has Time Window, Amplitude, and Appearance tabs; channel display is a global setting.
+
+Each pane has a **pause/resume** icon beside expand/restore. Pausing freezes that
+pane's captured frame and history clock while capture and other panes continue.
+Settings remain editable; paused time is omitted when the pane resumes. Changing
+source, FFT format, or the pane's module clears the frozen capture. **Reset module
+settings** restores only the selected module in that pane, preserving retained
+history and leaving global settings and other panes alone.
+
+- **Frequency spectrum:** Bars, Line, and Filled area styles with contextual bar
+  gap, thickness, and opacity controls. Signal Response includes peak hold with
+  a timed hold, independent dB/s falloff, indefinite hold, and peak reset. Appearance
+  adds palettes, heatmap contrast, and independent grid/axis-label switches.
+- **Waveform:** 1–250 ms windows independent of FFT size, with full-rate capture
+  and peak-preserving display reduction. Optional rising/falling threshold trigger
+  aligns repeating signals (left channel in stereo, selected channel in single
+  view), falling back to the latest window when no crossing exists. Auto scale uses
+  a common, bounded gain for both channels; manual amplitude remains available.
+  Line/Filled area styles have thickness/opacity controls, plus separate centerline,
+  grid, and label switches. Trigger and auto scale default off; window remains 40 ms.
+- **Spectrogram:** 0.1–30 seconds of visible history (8 seconds by default), newest
+  at right or bottom, smooth or pixelated rendering, 64–1024 time cells and 24–96
+  frequency cells. Lower frequency display resolution preserves the loudest band
+  in each cell. Display detail does not increase FFT resolution or the 30 Hz history
+  capture rate. Palettes, contrast, levels, grid, and labels are independently
+  adjustable without clearing history.
 
 The bottom bar keeps **FFT** and **Rate** visible. The overlapping-circles icon
 switches all waveform panes and meters between separate **L/R stereo** and a
@@ -141,7 +166,7 @@ The shared-options icon holds the FFT window, frequency-analysis channel,
 single-view channel (mix/left/right), diagnostics, capture details, and theme info.
 Level bars show RMS with peak markers and peak dBFS readouts. Mixed levels are
 measured from the summed signal, including phase cancellation. Waveform time
-windows remain limited to the current FFT capture window. The source selector
+windows are independent of the FFT capture window. The source selector
 and a compact settings icon remain at the top right; there is no top-left menu button.
 
 The top-right **settings icon**, matched to the source picker's height, opens

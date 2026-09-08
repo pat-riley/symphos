@@ -3,6 +3,8 @@ use eframe::egui::{self, Color32, Pos2, Rect, Response, Stroke, Vec2};
 
 #[derive(Clone, Copy)]
 pub enum Icon {
+    Pause,
+    Play,
     Camera,
     Time,
     Geometry,
@@ -68,6 +70,18 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         );
     };
     match icon {
+        Icon::Pause => {
+            for x in [5.0, 12.0] {
+                painter.rect_filled(Rect::from_min_max(p(x, 4.0), p(x + 3.0, 16.0)), 0.5, color);
+            }
+        }
+        Icon::Play => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(5.0, 3.0), p(17.0, 10.0), p(5.0, 17.0)],
+                color,
+                Stroke::NONE,
+            ));
+        }
         Icon::Fullscreen | Icon::Restore => {
             for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 let outer = if matches!(icon, Icon::Fullscreen) {
