@@ -210,6 +210,14 @@ from the analysis-side archive. No audio callback work was added.
 
 ## Frequency analysis
 
+- Legacy diagnostic log bands use an ordered single pass over FFT bins, preserving
+  the original boundaries and maxima without rescanning all bins for every band.
+- The target Rate determines the analysis hop independently of FFT size; small
+  FFTs no longer force excess transforms just to maintain an overlap fraction.
+  Capture and waveform history still receive every sample. Large hops can leave
+  gaps between FFT windows; overlapping windows occur when the hop is smaller.
+- Experimental BPM autocorrelation runs approximately twice per second while
+  every frame's onset flux is retained. Rate/format changes reset its timing state.
 - Selectable power-of-two FFT sizes from 512 through 16,384 samples.
 - Hann, Hamming, Blackman-Harris, and rectangular windows.
 - Configurable overlap/hop size and exponential attack/release smoothing.

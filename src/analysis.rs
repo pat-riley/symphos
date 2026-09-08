@@ -254,6 +254,9 @@ struct Analyzer {
     smoothed_db: Vec<f32>,
     previous_magnitudes: Vec<f32>,
     flux_history: VecDeque<f32>,
+    tempo_rate: u32,
+    tempo_countdown: u32,
+    cached_tempo: (f32, f32),
     last_window: WindowFunction,
 }
 
@@ -273,6 +276,9 @@ impl Analyzer {
             smoothed_db: vec![-120.0; bins],
             previous_magnitudes: vec![0.0; bins],
             flux_history: VecDeque::with_capacity(1024),
+            tempo_rate: 0,
+            tempo_countdown: 0,
+            cached_tempo: (0.0, 0.0),
             last_window: window,
         }
     }
@@ -407,12 +413,25 @@ impl Analyzer {
             .sum::<f32>()
             / magnitude_sum.max(1.0e-12);
         self.previous_magnitudes.copy_from_slice(&magnitudes);
+        if self.tempo_rate != settings.analysis_fps {
+            self.tempo_rate = settings.analysis_fps;
+            self.flux_history.clear();
+            self.cached_tempo = (0.0, 0.0);
+            self.tempo_countdown = 0;
+        }
         self.flux_history.push_back(flux);
         let max_flux_samples = (settings.analysis_fps * 10) as usize;
         while self.flux_history.len() > max_flux_samples {
             self.flux_history.pop_front();
         }
-        let (bpm, bpm_confidence) = estimate_bpm(&self.flux_history, settings.analysis_fps);
+        // Keep every onset sample, but run the diagnostic autocorrelation only
+        // twice a second rather than once per analysis frame.
+        if self.tempo_countdown == 0 {
+            self.cached_tempo = estimate_bpm(&self.flux_history, settings.analysis_fps);
+            self.tempo_countdown = (settings.analysis_fps / 2).max(1);
+        }
+        self.tempo_countdown -= 1;
+        let (bpm, bpm_confidence) = self.cached_tempo;
 
         let rms = [
             (squares[0] / self.size as f64).sqrt() as f32,
@@ -490,6 +509,7 @@ fn run_analysis(
             write_cursor = 0;
             available = 0;
             since_analysis = 0;
+            analyzer = Analyzer::new(analyzer.size, analyzer.last_window);
         }
         let mut received = 0_usize;
         while let Ok(sample) = consumer.pop() {
@@ -505,8 +525,7 @@ fn run_analysis(
             analyzer = Analyzer::new(current.fft_size, current.window);
             since_analysis = current.fft_size;
         }
-        let hop = ((rate / current.analysis_fps.max(1)) as usize)
-            .clamp((current.fft_size / 16).max(1), current.fft_size / 2);
+        let hop = analysis_hop(rate, current.analysis_fps);
 
         if available >= current.fft_size && since_analysis >= hop {
             since_analysis %= hop;
@@ -545,6 +564,12 @@ fn selected_sample(sample: StereoSample, mode: ChannelMode) -> f32 {
     }
 }
 
+fn analysis_hop(sample_rate: u32, target_fps: u32) -> usize {
+    // A small FFT must not force extra transforms above the requested rate.
+    // The capture ring still receives every sample, even when hop > FFT size.
+    (sample_rate / target_fps.max(1)).max(1) as usize
+}
+
 fn build_window(size: usize, kind: WindowFunction) -> Vec<f32> {
     let denominator = size.saturating_sub(1).max(1) as f32;
     (0..size)
@@ -569,19 +594,24 @@ fn make_log_bands(
     max_frequency: f32,
     count: usize,
 ) -> Vec<SpectrumBand> {
-    if bins.len() < 2 || min_frequency >= max_frequency {
+    if bins.len() < 2 || min_frequency >= max_frequency || count == 0 {
         return Vec::new();
     }
     let ratio = (max_frequency / min_frequency.max(1.0)).powf(1.0 / count as f32);
+    let mut cursor = 0;
     (0..count)
         .map(|band| {
             let low = min_frequency * ratio.powf(band as f32);
             let high = min_frequency * ratio.powf((band + 1) as f32);
             let mut db = -120.0_f32;
-            for bin in bins {
-                if bin.frequency_hz >= low && bin.frequency_hz < high {
-                    db = db.max(bin.dbfs);
-                }
+            // FFT bins are ordered by frequency. Visit each bin once instead
+            // of scanning the whole spectrum for every summary band.
+            while cursor < bins.len() && bins[cursor].frequency_hz < low {
+                cursor += 1;
+            }
+            while cursor < bins.len() && bins[cursor].frequency_hz < high {
+                db = db.max(bins[cursor].dbfs);
+                cursor += 1;
             }
             SpectrumBand {
                 center_hz: (low * high).sqrt(),
@@ -652,6 +682,126 @@ fn estimate_bpm(flux: &VecDeque<f32>, fps: u32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_log_bands(
+        bins: &[FrequencyBin],
+        min_frequency: f32,
+        max_frequency: f32,
+        count: usize,
+    ) -> Vec<SpectrumBand> {
+        if bins.len() < 2 || min_frequency >= max_frequency {
+            return Vec::new();
+        }
+        let ratio = (max_frequency / min_frequency.max(1.0)).powf(1.0 / count as f32);
+        (0..count)
+            .map(|band| {
+                let low = min_frequency * ratio.powf(band as f32);
+                let high = min_frequency * ratio.powf((band + 1) as f32);
+                let mut db = -120.0_f32;
+                for bin in bins {
+                    if bin.frequency_hz >= low && bin.frequency_hz < high {
+                        db = db.max(bin.dbfs);
+                    }
+                }
+                SpectrumBand {
+                    center_hz: (low * high).sqrt(),
+                    dbfs: db,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn linear_summary_pass_matches_the_original_band_boundaries_and_levels() {
+        for rate in [44100.0, 48000.0, 96000.0] {
+            for size in [512, 4096, 16384] {
+                let bins: Vec<_> = (0..=size / 2)
+                    .map(|i| FrequencyBin {
+                        frequency_hz: i as f32 * rate / size as f32,
+                        magnitude: 0.0,
+                        dbfs: -70.0 + (i as f32 * 0.03).sin() * 50.0,
+                    })
+                    .collect();
+                for (low, high) in [(20.0, 20000.0), (500.0, 900.0), (1.0, rate * 0.5)] {
+                    let before = legacy_log_bands(&bins, low, high, 96);
+                    let after = make_log_bands(&bins, low, high, 96);
+                    assert_eq!(before.len(), after.len());
+                    for (a, b) in before.iter().zip(after) {
+                        assert_eq!(a.center_hz, b.center_hz);
+                        assert_eq!(a.dbfs, b.dbfs);
+                    }
+                }
+            }
+        }
+        assert!(make_log_bands(&[], 20.0, 20000.0, 0).is_empty());
+    }
+
+    #[test]
+    fn tempo_is_throttled_without_dropping_flux_and_resets_when_rate_changes() {
+        let mut analyzer = Analyzer::new(512, WindowFunction::Hann);
+        let mut settings = AnalysisSettings {
+            fft_size: 512,
+            ..Default::default()
+        };
+        let ring = vec![[0.1; 2]; 512];
+        analyzer.analyze(&ring, 0, 48000, 2, &settings, 1, 0);
+        assert_eq!(analyzer.tempo_countdown, 29);
+        analyzer.cached_tempo = (123.0, 0.7);
+        for sequence in 2..=30 {
+            let frame = analyzer.analyze(&ring, 0, 48000, 2, &settings, sequence, 0);
+            assert_eq!(frame.bpm, 123.0);
+        }
+        assert_eq!(analyzer.flux_history.len(), 30);
+        let frame = analyzer.analyze(&ring, 0, 48000, 2, &settings, 31, 0);
+        assert_eq!(frame.bpm, 0.0); // Recomputed, still insufficient audio.
+        settings.analysis_fps = 120;
+        analyzer.analyze(&ring, 0, 48000, 2, &settings, 32, 0);
+        assert_eq!(analyzer.flux_history.len(), 1);
+        assert_eq!(analyzer.tempo_countdown, 59);
+    }
+
+    #[test]
+    fn analysis_hop_obeys_requested_rate_instead_of_small_fft_overlap_limits() {
+        assert_eq!(analysis_hop(48000, 60), 800);
+        assert_eq!(analysis_hop(48000, 120), 400);
+        assert_eq!(analysis_hop(192000, 30), 6400);
+        assert_eq!(analysis_hop(0, 0), 1);
+    }
+
+    #[test]
+    #[ignore = "manual performance measurement; run with --ignored --nocapture"]
+    fn benchmark_summary_band_scan() {
+        let bins: Vec<_> = (0..=8192)
+            .map(|i| FrequencyBin {
+                frequency_hz: i as f32 * 48000.0 / 16384.0,
+                magnitude: 0.1,
+                dbfs: -50.0 + (i as f32 * 0.1).sin() * 30.0,
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        for _ in 0..200 {
+            std::hint::black_box(legacy_log_bands(
+                std::hint::black_box(&bins),
+                20.0,
+                20000.0,
+                96,
+            ));
+        }
+        let legacy = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..200 {
+            std::hint::black_box(make_log_bands(
+                std::hint::black_box(&bins),
+                20.0,
+                20000.0,
+                96,
+            ));
+        }
+        eprintln!(
+            "200 summary-band builds (FFT 16384): legacy={legacy:?}, linear={:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn waveform_capture_is_full_rate_chronological_and_independent_of_fft() {
