@@ -14,6 +14,12 @@ pub type StereoSample = [f32; 2];
 
 pub const FFT_SIZES: [usize; 6] = [512, 1024, 2048, 4096, 8192, 16384];
 
+// Full-rate waveform history is independent of FFT size. Half a second leaves
+// trigger-search headroom before the longest (250 ms) visible window.
+fn capture_capacity(sample_rate: u32) -> usize {
+    (sample_rate.clamp(1, 384_000) as usize / 2).max(FFT_SIZES[FFT_SIZES.len() - 1])
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowFunction {
     Hann,
@@ -270,9 +276,14 @@ impl Analyzer {
         let mut mix_squares = 0.0_f64;
         let mut zero_crossings = 0_u32;
         let mut previous = 0.0_f32;
-        let mut waveform_left = Vec::with_capacity(512);
-        let mut waveform_right = Vec::with_capacity(512);
-        let waveform_stride = (self.size / 512).max(1);
+        let waveform_count = (sample_rate as usize / 2).min(ring.len());
+        let mut waveform_left = Vec::with_capacity(waveform_count);
+        let mut waveform_right = Vec::with_capacity(waveform_count);
+        for i in 0..waveform_count {
+            let sample = ring[(write_cursor + ring.len() - waveform_count + i) % ring.len()];
+            waveform_left.push(sample[0]);
+            waveform_right.push(sample[1]);
+        }
 
         let mean = (0..self.size)
             .map(|i| {
@@ -298,11 +309,6 @@ impl Analyzer {
             }
             previous = mono;
             self.input[i] = mono * self.window[i];
-
-            if i % waveform_stride == 0 && waveform_left.len() < 512 {
-                waveform_left.push(sample[0]);
-                waveform_right.push(sample[1]);
-            }
         }
 
         if self.fft.process(&mut self.input, &mut self.output).is_err() {
@@ -427,7 +433,8 @@ fn run_analysis(
     dropped_samples: Arc<std::sync::atomic::AtomicU64>,
     stop: Arc<AtomicBool>,
 ) {
-    let mut ring = vec![[0.0; 2]; FFT_SIZES[FFT_SIZES.len() - 1]];
+    let mut capture_rate = sample_rate.load(Ordering::Relaxed).max(1);
+    let mut ring = vec![[0.0; 2]; capture_capacity(capture_rate)];
     let mut write_cursor = 0_usize;
     let mut available = 0_usize;
     let mut since_analysis = 0_usize;
@@ -435,6 +442,14 @@ fn run_analysis(
     let mut analyzer = Analyzer::new(4096, WindowFunction::Hann);
 
     while !stop.load(Ordering::Acquire) {
+        let rate = sample_rate.load(Ordering::Relaxed).max(1);
+        if rate != capture_rate {
+            capture_rate = rate;
+            ring = vec![[0.0; 2]; capture_capacity(rate)];
+            write_cursor = 0;
+            available = 0;
+            since_analysis = 0;
+        }
         let mut received = 0_usize;
         while let Ok(sample) = consumer.pop() {
             ring[write_cursor] = sample;
@@ -449,7 +464,6 @@ fn run_analysis(
             analyzer = Analyzer::new(current.fft_size, current.window);
             since_analysis = current.fft_size;
         }
-        let rate = sample_rate.load(Ordering::Relaxed).max(1);
         let hop = ((rate / current.analysis_fps.max(1)) as usize)
             .clamp((current.fft_size / 16).max(1), current.fft_size / 2);
 
@@ -589,6 +603,39 @@ fn estimate_bpm(flux: &VecDeque<f32>, fps: u32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waveform_capture_is_full_rate_chronological_and_independent_of_fft() {
+        let sample_rate = 48_000;
+        let capacity = capture_capacity(sample_rate);
+        let ring: Vec<_> = (0..capacity)
+            .map(|i| [i as f32 / capacity as f32, -(i as f32) / capacity as f32])
+            .collect();
+        let cursor = 137;
+        for size in [512, 16_384] {
+            let settings = AnalysisSettings {
+                fft_size: size,
+                ..AnalysisSettings::default()
+            };
+            let frame = Analyzer::new(size, settings.window).analyze(
+                &ring,
+                cursor,
+                sample_rate,
+                2,
+                &settings,
+                1,
+                0,
+            );
+            assert_eq!(frame.waveform_left.len(), 24_000);
+            for i in 0..capacity {
+                assert_eq!(frame.waveform_left[i], ring[(cursor + i) % capacity][0]);
+                assert_eq!(frame.waveform_right[i], ring[(cursor + i) % capacity][1]);
+            }
+        }
+        assert_eq!(capture_capacity(192_000), 96_000);
+        assert!(capture_capacity(8_000) >= 16_384);
+        assert!(capture_capacity(u32::MAX) <= 192_000);
+    }
 
     #[test]
     fn mix_meters_measure_summed_samples_including_phase_cancellation() {

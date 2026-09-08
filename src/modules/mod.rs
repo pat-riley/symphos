@@ -5,7 +5,7 @@ mod spectrum;
 mod waterfall;
 mod waveform;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 
@@ -54,7 +54,7 @@ impl ModuleKind {
                 "Audio amplitude over a short time window. Use the bottom-bar stereo/mix icon to switch between separate channels and a combined signal."
             }
             Self::Spectrogram => {
-                "Frequency over time, with color showing signal level. Newest audio appears on the right."
+                "Frequency over time, with color showing signal level. Newest audio appears on the right or bottom, depending on orientation."
             }
         }
     }
@@ -67,6 +67,14 @@ pub struct ModulePane {
     waveform: Waveform,
     spectrogram: Spectrogram,
     active_sections: [usize; 4],
+    frozen: Option<FrozenFrame>,
+    paused_duration: Duration,
+}
+
+struct FrozenFrame {
+    frame: AnalysisFrame,
+    started: Instant,
+    time: Instant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,24 +124,61 @@ impl ModulePane {
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
             active_sections: [0; 4],
+            frozen: None,
+            paused_duration: Duration::ZERO,
         }
     }
 
     pub fn reset(&mut self) {
+        self.frozen = None;
+        self.paused_duration = Duration::ZERO;
         self.waterfall.clear();
         self.spectrum.clear();
         self.spectrogram.clear();
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+    pub fn is_frozen(&self) -> bool {
+        self.frozen.is_some()
+    }
+
+    pub fn toggle_freeze(&mut self, frame: &AnalysisFrame, now: Instant) {
+        if let Some(frozen) = self.frozen.take() {
+            self.paused_duration += now.saturating_duration_since(frozen.started);
+        } else {
+            self.frozen = Some(FrozenFrame {
+                frame: frame.clone(),
+                started: now,
+                time: now - self.paused_duration,
+            });
+        }
+    }
+
+    fn reset_settings(&mut self) {
+        match self.kind {
+            ModuleKind::Waterfall => self.waterfall.reset_settings(),
+            ModuleKind::Spectrum => self.spectrum.reset_settings(),
+            ModuleKind::Waveform => self.waveform.reset_settings(),
+            ModuleKind::Spectrogram => self.spectrogram.reset_settings(),
+        }
+    }
+
+    pub fn controls(&mut self, ui: &mut egui::Ui, _frame: &AnalysisFrame) {
+        ui.spacing_mut().slider_width = ui.spacing().slider_width.min(78.0);
         let section = self.active_section();
         ui.push_id(self.kind.label(), |ui| {
             ui.data_mut(|data| data.insert_temp(ui.id().with("active-module-section"), section));
             match self.kind {
                 ModuleKind::Waterfall => self.waterfall.controls(ui),
                 ModuleKind::Spectrum => self.spectrum.controls(ui),
-                ModuleKind::Waveform => self.waveform.controls(ui, frame),
+                ModuleKind::Waveform => self.waveform.controls(ui),
                 ModuleKind::Spectrogram => self.spectrogram.controls(ui),
+            }
+            ui.add_space(12.0);
+            ui.separator();
+            if ui.small_button("Reset module settings")
+                .help_text("Restore all settings for this module in this pane only. Retains captured history and leaves other panes, audio, and global settings unchanged.")
+                .clicked() {
+                self.reset_settings();
             }
         });
     }
@@ -144,7 +189,7 @@ impl ModulePane {
             ModuleKind::Waterfall => &[Geometry, Frequency, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
-            ModuleKind::Waveform => &[TimeWindow, Amplitude],
+            ModuleKind::Waveform => &[TimeWindow, Amplitude, Appearance],
         }
     }
 
@@ -174,7 +219,12 @@ impl ModulePane {
         theme: &AppTheme,
         live: bool,
     ) {
-        let now = Instant::now();
+        let now = self.frozen.as_ref().map_or_else(
+            || Instant::now() - self.paused_duration,
+            |frozen| frozen.time,
+        );
+        let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
+        let live = live || self.frozen.is_some();
         ui.painter().rect_filled(rect, 4.0, theme.background);
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
@@ -183,6 +233,15 @@ impl ModulePane {
             ModuleKind::Spectrum => self.spectrum.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Waveform => self.waveform.draw(ui, rect, frame, theme, live),
             ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, live),
+        }
+        if self.frozen.is_some() {
+            ui.painter().text(
+                rect.right_top() + egui::vec2(-6.0, 4.0),
+                egui::Align2::RIGHT_TOP,
+                "PAUSED",
+                FontId::monospace(10.0),
+                theme.foreground,
+            );
         }
         if !live {
             ui.painter().text(
@@ -194,6 +253,110 @@ impl ModulePane {
             );
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TraceStyle {
+    Bars,
+    Line,
+    Filled,
+}
+
+impl TraceStyle {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bars => "Bars",
+            Self::Line => "Line",
+            Self::Filled => "Filled area",
+        }
+    }
+
+    fn controls(&mut self, ui: &mut egui::Ui, bars: bool) {
+        egui::ComboBox::from_id_salt("trace-style")
+            .width(176.0)
+            .height(110.0)
+            .selected_text(self.label())
+            .show_ui(ui, |ui| {
+                for style in [Self::Bars, Self::Line, Self::Filled] {
+                    if style == Self::Bars && !bars {
+                        continue;
+                    }
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(176.0, 24.0), egui::Sense::click());
+                    if response.hovered() || *self == style {
+                        ui.painter()
+                            .rect_filled(rect, 3.0, ui.visuals().selection.bg_fill);
+                    }
+                    let icon_rect = Rect::from_min_size(rect.min, egui::vec2(24.0, 24.0));
+                    crate::icons::paint(
+                        ui,
+                        icon_rect,
+                        match style {
+                            Self::Bars => Icon::Bars,
+                            Self::Line => Icon::Waveform,
+                            Self::Filled => Icon::Surface,
+                        },
+                        ui.visuals().text_color(),
+                    );
+                    ui.painter().text(
+                        rect.left_center() + egui::vec2(30.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        style.label(),
+                        FontId::proportional(13.0),
+                        ui.visuals().text_color(),
+                    );
+                    if response.clicked() {
+                        *self = style;
+                        ui.close();
+                    }
+                    response.help_text(
+                        "Choose a trace style. Its relevant appearance controls are shown below.",
+                    );
+                }
+            })
+            .response
+            .help_text("Choose how the signal is drawn; does not change analysis.");
+    }
+}
+
+fn trace_mesh(points: &[Pos2], baseline: f32, color: Color32) -> egui::Mesh {
+    let mut mesh = egui::Mesh::default();
+    for pair in points.windows(2) {
+        let base = mesh.vertices.len() as u32;
+        // Split at zero crossings: an unsplit quad would self-intersect and
+        // double-blend part of a translucent waveform fill.
+        if (pair[0].y - baseline) * (pair[1].y - baseline) < 0.0 {
+            let t = (baseline - pair[0].y) / (pair[1].y - pair[0].y);
+            let crossing = Pos2::new(egui::lerp(pair[0].x..=pair[1].x, t), baseline);
+            for p in [
+                pair[0],
+                crossing,
+                Pos2::new(pair[0].x, baseline),
+                pair[1],
+                Pos2::new(pair[1].x, baseline),
+            ] {
+                mesh.colored_vertex(p, color);
+            }
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base + 1, base + 3, base + 4);
+            continue;
+        }
+        for p in [
+            pair[0],
+            pair[1],
+            Pos2::new(pair[1].x, baseline),
+            Pos2::new(pair[0].x, baseline),
+        ] {
+            mesh.colored_vertex(p, color);
+        }
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
+    }
+    mesh
+}
+
+fn fill_trace(painter: &egui::Painter, points: &[Pos2], baseline: f32, color: Color32) {
+    painter.add(egui::Shape::mesh(trace_mesh(points, baseline, color)));
 }
 
 pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
@@ -243,6 +406,138 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pause_captures_only_one_pane_and_resume_omits_paused_time() {
+        let mut pane = ModulePane::new(ModuleKind::Waveform);
+        let other = ModulePane::new(ModuleKind::Waveform);
+        let now = Instant::now();
+        let mut frame = AnalysisFrame {
+            sequence: 42,
+            ..AnalysisFrame::default()
+        };
+        pane.toggle_freeze(&frame, now);
+        frame.sequence = 43;
+        frame.waveform_left.fill(1.0);
+        assert_eq!(pane.frozen.as_ref().unwrap().frame.sequence, 42);
+        assert_eq!(pane.frozen.as_ref().unwrap().frame.waveform_left[0], 0.0);
+        assert!(!other.is_frozen());
+        pane.reset_settings();
+        assert!(pane.is_frozen());
+        let later = now + Duration::from_secs(90);
+        pane.toggle_freeze(&frame, later);
+        assert!(!pane.is_frozen());
+        assert_eq!(later - pane.paused_duration, now);
+        pane.toggle_freeze(&frame, later + Duration::from_secs(1));
+        assert_eq!(
+            pane.frozen.as_ref().unwrap().time,
+            now + Duration::from_secs(1)
+        );
+        pane.reset();
+        assert!(!pane.is_frozen());
+        assert_eq!(pane.paused_duration, Duration::ZERO);
+    }
+
+    #[test]
+    fn filled_waveform_splits_zero_crossings_without_overlapping_triangles() {
+        let mesh = trace_mesh(
+            &[Pos2::new(0.0, -1.0), Pos2::new(2.0, 1.0)],
+            0.0,
+            Color32::WHITE,
+        );
+        let area: f32 = mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|triangle| {
+                let a = mesh.vertices[triangle[0] as usize].pos;
+                let b = mesh.vertices[triangle[1] as usize].pos;
+                let c = mesh.vertices[triangle[2] as usize].pos;
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum();
+        assert_eq!(area, 1.0);
+        assert!(mesh.vertices.iter().any(|v| v.pos == Pos2::new(1.0, 0.0)));
+    }
+
+    #[test]
+    fn frozen_waveform_ignores_new_frames_and_live_status() {
+        let context = egui::Context::default();
+        let mut pane = ModulePane::new(ModuleKind::Waveform);
+        let mut frame = AnalysisFrame::default();
+        pane.toggle_freeze(&frame, Instant::now());
+        let render = |pane: &mut ModulePane, frame: &AnalysisFrame, live| {
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                pane.draw(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 300.0)),
+                    frame,
+                    &AppTheme::default(),
+                    live,
+                );
+            });
+            output.textures_delta.clear();
+            context
+                .tessellate(output.shapes, output.pixels_per_point)
+                .into_iter()
+                .flat_map(|p| match p.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => mesh
+                        .vertices
+                        .into_iter()
+                        .map(|v| (v.pos, v.color))
+                        .collect(),
+                    _ => vec![],
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = render(&mut pane, &frame, true);
+        frame.waveform_left.fill(1.0);
+        frame.waveform_right.fill(-1.0);
+        let after = render(&mut pane, &frame, false);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn module_controls_fit_the_compact_sidebar_and_reset_is_always_available() {
+        for kind in [
+            ModuleKind::Spectrum,
+            ModuleKind::Waveform,
+            ModuleKind::Spectrogram,
+        ] {
+            let context = egui::Context::default();
+            let mut pane = ModulePane::new(kind);
+            for &section in pane.sections() {
+                pane.select_section(section);
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(216.0, 1000.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                        ui.style_mut()
+                            .text_styles
+                            .insert(egui::TextStyle::Body, FontId::proportional(13.0));
+                        ui.style_mut()
+                            .text_styles
+                            .insert(egui::TextStyle::Button, FontId::proportional(13.0));
+                        pane.controls(ui, &AnalysisFrame::default());
+                        assert!(
+                            ui.min_rect().right() <= 216.0,
+                            "{kind:?}/{section:?} width {}",
+                            ui.min_rect().right()
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Reset module settings")));
+            }
+        }
+    }
+
+    #[test]
     fn icon_tabs_show_one_section_and_preserve_per_module_and_pane_selection() {
         let context = egui::Context::default();
         let mut pane = ModulePane::new(ModuleKind::Waterfall);
@@ -288,7 +583,11 @@ mod tests {
         pane.kind = ModuleKind::Waveform;
         assert_eq!(
             pane.sections(),
-            &[SettingsSection::TimeWindow, SettingsSection::Amplitude]
+            &[
+                SettingsSection::TimeWindow,
+                SettingsSection::Amplitude,
+                SettingsSection::Appearance
+            ]
         );
     }
 

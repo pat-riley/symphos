@@ -41,6 +41,16 @@ impl Default for FrequencySettings {
 }
 
 impl FrequencySettings {
+    pub fn same_processing(&self, other: &Self) -> bool {
+        self.logarithmic == other.logarithmic
+            && self.min_hz == other.min_hz
+            && self.max_hz == other.max_hz
+            && self.gain == other.gain
+            && self.smoothing == other.smoothing
+            && self.frequency_smoothing == other.frequency_smoothing
+            && self.decay == other.decay
+    }
+
     pub fn range_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.logarithmic, true, "Log").help_text("Space frequencies logarithmically to give bass and treble comparable room. Retained history is redrawn, not cleared.");
@@ -300,15 +310,10 @@ impl History {
         }
         // Replay retained raw magnitudes when display processing changes. Merely
         // relabeling old bands would incorrectly move their frequencies.
-        let processing_changed = self.applied_settings.as_ref().is_none_or(|previous| {
-            previous.logarithmic != self.data.settings.logarithmic
-                || previous.min_hz != self.data.settings.min_hz
-                || previous.max_hz != self.data.settings.max_hz
-                || previous.gain != self.data.settings.gain
-                || previous.smoothing != self.data.settings.smoothing
-                || previous.frequency_smoothing != self.data.settings.frequency_smoothing
-                || previous.decay != self.data.settings.decay
-        });
+        let processing_changed = self
+            .applied_settings
+            .as_ref()
+            .is_none_or(|previous| !previous.same_processing(&self.data.settings));
         if processing_changed {
             self.data.clear();
             if let Some((sample_rate, fft_size)) = self.format {

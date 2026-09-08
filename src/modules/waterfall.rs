@@ -167,6 +167,15 @@ impl Default for Waterfall {
 }
 
 impl Waterfall {
+    pub fn reset_settings(&mut self) {
+        let mut history = std::mem::take(&mut self.history);
+        history.data.settings = Default::default();
+        *self = Self {
+            history,
+            ..Self::default()
+        };
+    }
+
     pub fn clear(&mut self) {
         self.history.clear();
     }

@@ -7,7 +7,7 @@
    logs, or performs FFT work.
 2. **Analysis lane** drains the ring, maintains overlapping windows, computes
    reusable real FFT plans, derives metrics, and atomically publishes an
-   immutable `AnalysisFrame`.
+immutable `AnalysisFrame`.
 3. **UI/GPU lane** reads the newest snapshot and renders it. It never waits for
    the audio or analysis lane and may safely skip intermediate frames.
 
@@ -28,6 +28,16 @@ magnitude, and smoothed dBFS value.
 The contract is deliberately renderer-agnostic so future scenes can consume
 the same data through GPU buffers, shader uniforms, or native Rust modules.
 
+Waveform arrays contain chronological, full-rate samples from a half-second
+analysis-lane ring, independent of FFT size. Capacity is at least the maximum
+FFT size and capped at 192,000 stereo samples (half a second at 384 kHz).
+Rate changes reset this ring. The callback and SPSC buffer remain unchanged.
+Waveform display windows are capped at 250 ms, leaving trigger-search headroom;
+per-pixel extrema reduction preserves brief transients and their time order.
+Stereo trigger alignment uses the left channel, and automatic display gain is
+shared between lanes to preserve relative levels. Translucent fills split at
+zero crossings instead of emitting self-intersecting quads.
+
 ## Visualization modules
 
 The UI coalesces source-discovery events and selects a system output on startup,
@@ -41,6 +51,19 @@ Each dashboard pane owns independent waterfall, spectrum, waveform, and
 spectrogram state in `src/modules/`. Selecting a pane directs the compact
 sidebar to its active module. Pane assignment and sizing live in the UI;
 capture and analysis remain independent of layout and rendering.
+
+Per-pane freeze holds a cloned analysis snapshot and a fixed virtual timestamp.
+Resume accumulates the paused duration into that pane's clock offset, so old
+history does not expire while paused or jump forward on resume. Other panes and
+capture are unaffected; skipped wall-clock time is intentionally not recorded
+in the paused pane. Capture/module resets discard freeze state and clock offset.
+Module-settings resets retain capture/history and global waveform channel state.
+Spectrogram raster caching keys on retained rows, pixel-scale time movement,
+display processing, palette, and theme; paused or empty views do not repeatedly
+rebuild/upload the same texture. Display resolution never changes analysis rate.
+Frequency-cell reduction takes the loudest constituent band. Spectrum peak
+hold uses per-band deadlines and elapsed-time dB release, independent of paint
+rate; reprocessing a paused spectrum applies the new gain/range immediately.
 
 Sidebar controls use a shared section filter and a persistent icon rail.
 Only the selected section renders. Tab selections belong to each pane/module,
