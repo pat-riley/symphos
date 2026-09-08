@@ -126,40 +126,19 @@ impl SymphosApp {
         context.request_repaint();
     }
 
-    fn source_selector(&mut self, ui: &mut egui::Ui) {
-        let previous_node = self.selected_node.clone();
-        let selected_label = self
-            .sources
-            .iter()
-            .find(|source| Some(&source.node_name) == self.selected_node.as_ref())
-            .map(|source| source.display_name.clone())
-            .unwrap_or_else(|| {
-                if self.sources.is_empty() {
-                    "Looking for outputs…".into()
-                } else {
-                    "Select an audio source…".into()
-                }
-            });
-        egui::ComboBox::from_id_salt("audio-source")
-            .width(260.0)
-            .truncate()
-            .selected_text(selected_label)
-            .show_ui(ui, |ui| {
-                for source in &self.sources {
-                    let selected = Some(&source.node_name) == self.selected_node.as_ref();
-                    let label = format!("{}  {}", source.kind.label(), source.display_name);
-                    if ui.selectable_label(selected, label).help_text(format!("Analyze {}: {}. Changing sources clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
-                        self.source_manually_selected = true;
-                        self.selected_node = Some(source.node_name.clone());
-                        self.engine.select_source(source.clone());
-                    }
-                }
-            }).response.help_text(format!("Audio source: {}. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session.",
-                self.sources.iter().find(|source| Some(&source.node_name) == self.selected_node.as_ref())
-                    .map_or("none", |source| source.display_name.as_str())));
-        if self.selected_node != previous_node {
-            self.reset_modules();
+    fn source_selector(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let (response, choice) =
+            audio_source_picker(ui, &self.sources, self.selected_node.as_deref());
+        if let Some(source) = choice {
+            self.source_manually_selected = true;
+            if self.selected_node.as_deref() != Some(source.node_name.as_str()) {
+                self.selected_node = Some(source.node_name.clone());
+                self.status = AudioStatus::Connecting;
+                self.engine.select_source(source);
+                self.reset_modules();
+            }
         }
+        response
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
@@ -245,11 +224,8 @@ impl SymphosApp {
         child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
         child.horizontal(|ui| {
             let before = self.panes[index].kind;
-            let compact = rect.width() < 250.0;
             egui::ComboBox::from_id_salt("module-kind")
-                .width(
-                    (ui.available_width() - if compact { 36.0 } else { 78.0 }).clamp(45.0, 180.0),
-                )
+                .width((ui.available_width() - 36.0).clamp(45.0, 180.0))
                 .truncate()
                 .selected_text(before.label())
                 .show_ui(ui, |ui| {
@@ -263,20 +239,13 @@ impl SymphosApp {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let focused = self.focused_pane == Some(index);
-                if ui
-                    .small_button(if compact {
-                        "+"
-                    } else if focused {
-                        "Restore"
-                    } else {
-                        "Expand"
-                    })
-                    .help_text(if focused {
-                        "Restore dashboard"
-                    } else {
-                        "Expand pane"
-                    })
-                    .clicked()
+                if icons::sized_button(
+                    ui,
+                    if focused { Icon::Restore } else { Icon::Fullscreen },
+                    false,
+                    24.0,
+                    if focused { "Restore dashboard" } else { "Expand pane" },
+                ).clicked()
                 {
                     self.focused_pane = if focused { None } else { Some(index) };
                     self.selected_pane = index;
@@ -402,24 +371,13 @@ impl eframe::App for SymphosApp {
         );
         let mut nav = ui.new_child(egui::UiBuilder::new().id_salt("navbar").max_rect(header));
         nav.horizontal_centered(|ui| {
-            ui.label(
-                RichText::new("SYMPHOS")
-                    .size(20.0)
-                    .strong()
-                    .color(self.theme.foreground),
-            );
-            ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.scope(|ui| {
-                    ui.spacing_mut().interact_size.y = 26.0;
-                    ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
-                    ui.style_mut().override_font_id = Some(FontId::proportional(13.0));
-                    self.source_selector(ui);
-                });
-                if ui.small_button("↻").help_text("Refresh audio sources").clicked() {
-                    self.engine.refresh_sources();
-                }
-                ui.menu_button("View", |ui| {
+                ui.spacing_mut().interact_size.y = 26.0;
+                ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
+                ui.style_mut().override_font_id = Some(FontId::proportional(13.0));
+                let source = self.source_selector(ui);
+                let options = icons::sized_button(ui, Icon::Gear, false, source.rect.height(), "View settings: dashboard layout, fullscreen, and detailed diagnostics.");
+                egui::Popup::menu(&options).show(|ui| {
                     if ui.button("Reset pane sizes").help_text("Restore the default dashboard proportions and leave expanded-pane mode.").clicked() {
                         self.top_fraction = 0.62;
                         self.bottom_splits = [1.0 / 3.0, 2.0 / 3.0];
@@ -431,7 +389,7 @@ impl eframe::App for SymphosApp {
                         ui.close();
                     }
                     ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics").help_text("Open raw FFT bins and detailed audio-analysis statistics.");
-                }).response.help_text("Dashboard layout, fullscreen, and detailed diagnostics.");
+                });
             });
         });
         let footer = Rect::from_min_max(
@@ -475,17 +433,22 @@ impl eframe::App for SymphosApp {
             Pos2::new(rect.right() - 12.0, rect.bottom() - 50.0),
         );
         let initial_layout = workspace_layout(content, self.sidebar_open, self.help_open);
+        let sidebar_background = ui.painter().add(egui::Shape::Noop);
         settings_rail(
             ui,
             initial_layout.rail,
-            &self.theme,
             &mut self.panes[self.selected_pane],
             &mut self.sidebar_open,
         );
         let layout = workspace_layout(content, self.sidebar_open, self.help_open);
+        let settings_rect = layout
+            .sidebar
+            .map_or(layout.rail, |sidebar| layout.rail.union(sidebar));
+        ui.painter().set(
+            sidebar_background,
+            egui::Shape::rect_filled(settings_rect, 7.0, self.theme.panel),
+        );
         if let Some(sidebar_rect) = layout.sidebar {
-            ui.painter()
-                .rect_filled(sidebar_rect, 7.0, self.theme.panel);
             let mut sidebar = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("sidebar")
@@ -520,14 +483,7 @@ impl eframe::App for SymphosApp {
     }
 }
 
-fn settings_rail(
-    ui: &mut egui::Ui,
-    rect: Rect,
-    theme: &AppTheme,
-    pane: &mut ModulePane,
-    open: &mut bool,
-) {
-    ui.painter().rect_filled(rect, 6.0, theme.panel);
+fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mut bool) {
     let mut rail = ui.new_child(
         egui::UiBuilder::new()
             .id_salt("settings-rail")
@@ -582,6 +538,53 @@ struct WorkspaceLayout {
     rail: Rect,
 }
 
+fn audio_source_picker(
+    ui: &mut egui::Ui,
+    sources: &[AudioSource],
+    selected_node: Option<&str>,
+) -> (egui::Response, Option<AudioSource>) {
+    let selected = sources
+        .iter()
+        .find(|source| Some(source.node_name.as_str()) == selected_node);
+    let label = selected.map_or_else(
+        || {
+            if selected_node.is_some() {
+                "Source unavailable"
+            } else if sources.is_empty() {
+                "Looking for outputs…"
+            } else {
+                "Select an audio source…"
+            }
+        },
+        |source| source.display_name.as_str(),
+    );
+    let mut choice = None;
+    let response = ui.scope(|ui| {
+        // ComboBox::width is a minimum, not a maximum. Constrain the child UI
+        // so long selected names truncate instead of moving the settings button.
+        ui.set_width(260.0);
+        egui::ComboBox::from_id_salt("audio-source")
+            .width(260.0).height(300.0).truncate().selected_text(label)
+            .show_ui(ui, |ui| {
+                ui.set_width(360.0);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                if sources.is_empty() { ui.label("No audio sources available. Devices appear here automatically."); }
+                for source in sources {
+                    ui.push_id(&source.node_name, |ui| {
+                        let selected = Some(source.node_name.as_str()) == selected_node;
+                        let text = format!("{}  {}", source.kind.label(), source.display_name);
+                        if ui.add(egui::Button::selectable(selected, text).wrap())
+                            .help_text(format!("Analyze {}: {}. Choosing a different source clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
+                            choice = Some(source.clone());
+                            ui.close();
+                        }
+                    });
+                }
+            }).response
+    }).inner.help_text(format!("Audio source: {label}. Available devices update automatically. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session."));
+    (response, choice)
+}
+
 fn default_output_source<'a>(
     sources: &'a [AudioSource],
     selected_node: Option<&str>,
@@ -610,7 +613,7 @@ fn workspace_layout(content: Rect, sidebar_open: bool, help_open: bool) -> Works
             Pos2::new(
                 content.left()
                     + if sidebar_open {
-                        RAIL_WIDTH + 6.0 + SETTINGS_WIDTH
+                        RAIL_WIDTH + SETTINGS_WIDTH
                     } else {
                         SETTINGS_WIDTH
                     },
@@ -627,8 +630,8 @@ fn workspace_layout(content: Rect, sidebar_open: bool, help_open: bool) -> Works
     );
     let sidebar = sidebar_open.then(|| {
         Rect::from_min_max(
-            Pos2::new(rail.right() + 6.0, content.top()),
-            Pos2::new(rail.right() + 6.0 + SETTINGS_WIDTH, rail.bottom()),
+            Pos2::new(rail.right(), content.top()),
+            Pos2::new(rail.right() + SETTINGS_WIDTH, rail.bottom()),
         )
     });
     let mut dashboard = content;
@@ -836,6 +839,102 @@ mod layout_tests {
     use super::*;
 
     #[test]
+    fn source_picker_has_stable_width_wraps_menu_names_and_closes_on_selection() {
+        let sources = vec![
+            AudioSource { global_id: 1, node_name: "speakers".into(), display_name: "Speakers".into(), kind: crate::audio::SourceKind::SystemOutput },
+            AudioSource { global_id: 2, node_name: "long-output".into(), display_name: "External USB Audio Interface With A Very Long Manufacturer And Device Name For Studio Speakers".into(), kind: crate::audio::SourceKind::SystemOutput },
+        ];
+        let context = egui::Context::default();
+        let render = |selected: Option<&str>, events| {
+            let mut picker_rect = Rect::NOTHING;
+            let mut choice = None;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut nav = ui.new_child(egui::UiBuilder::new().max_rect(
+                        Rect::from_min_max(Pos2::new(12.0, 8.0), Pos2::new(1012.0, 48.0)),
+                    ));
+                    nav.horizontal_centered(|ui| {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.spacing_mut().interact_size.y = 26.0;
+                            ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
+                            ui.style_mut().override_font_id = Some(FontId::proportional(13.0));
+                            let (response, result) = audio_source_picker(ui, &sources, selected);
+                            picker_rect = response.rect;
+                            choice = result;
+                            let gear = icons::sized_button(
+                                ui,
+                                Icon::Gear,
+                                false,
+                                response.rect.height(),
+                                "View settings",
+                            );
+                            assert!((gear.rect.height() - response.rect.height()).abs() < 0.01);
+                            assert!((gear.rect.center().y - response.rect.center().y).abs() < 0.01);
+                        });
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                (picker_rect.width() - 260.0).abs() < 0.01,
+                "picker {picker_rect:?}"
+            );
+            assert!((picker_rect.height() - 26.0).abs() < 0.01);
+            (output, picker_rect, choice)
+        };
+        for selected in [
+            None,
+            Some("speakers"),
+            Some("long-output"),
+            Some("unavailable"),
+        ] {
+            render(selected, vec![]);
+        }
+        let (_, rect, _) = render(Some("speakers"), vec![]);
+        let click = |position, pressed| {
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        for pressed in [true, false] {
+            render(Some("speakers"), click(rect.center(), pressed));
+        }
+        let (menu, _, _) = render(Some("speakers"), vec![]);
+        let full_label = format!("System output  {}", sources[1].display_name);
+        let row = menu
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == full_label => Some(text),
+                _ => None,
+            })
+            .expect("full device name is visible in the menu");
+        assert!(row.galley.size().x <= 360.0);
+        assert!(row.pos.x >= 0.0 && row.pos.x + row.galley.size().x <= 1024.0);
+        assert!(
+            row.galley.rows.len() > 1,
+            "long names wrap instead of widening the popup"
+        );
+        let position = row.pos + row.galley.size() * 0.5;
+        render(Some("speakers"), click(position, true));
+        let (_, _, choice) = render(Some("speakers"), click(position, false));
+        assert_eq!(choice.unwrap().node_name, "long-output");
+        let (closed, _, _) = render(Some("long-output"), vec![]);
+        assert!(!closed.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == full_label)));
+    }
+
+    #[test]
     fn sidebar_chevron_collapses_and_icon_tab_reopens_the_requested_section() {
         let context = egui::Context::default();
         let mut pane = ModulePane::new(ModuleKind::Waterfall);
@@ -851,7 +950,6 @@ mod layout_tests {
                     settings_rail(
                         ui,
                         Rect::from_min_size(Pos2::new(12.0, 56.0), Vec2::new(36.0, 580.0)),
-                        &AppTheme::default(),
                         pane,
                         open,
                     )
@@ -991,7 +1089,16 @@ mod layout_tests {
                     }
                     assert!(!layout.rail.intersects(layout.dashboard));
                     if let Some(sidebar) = layout.sidebar {
-                        assert!(!layout.rail.intersects(sidebar));
+                        assert_eq!(
+                            layout.rail.right(),
+                            sidebar.left(),
+                            "one continuous settings panel without a gutter"
+                        );
+                        assert_eq!(layout.rail.top(), sidebar.top());
+                        assert_eq!(layout.rail.bottom(), sidebar.bottom());
+                        if let Some(help) = layout.help {
+                            assert_eq!(help.right(), sidebar.right());
+                        }
                     }
                     if let Some(help) = layout.help {
                         assert!(!layout.rail.intersects(help));

@@ -141,7 +141,7 @@ impl ModulePane {
     pub fn sections(&self) -> &'static [SettingsSection] {
         use SettingsSection::*;
         match self.kind {
-            ModuleKind::Waterfall => &[Camera, History, Geometry, Frequency, Response, Appearance],
+            ModuleKind::Waterfall => &[Geometry, Frequency, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
             ModuleKind::Waveform => &[TimeWindow, Amplitude],
@@ -246,6 +246,10 @@ mod tests {
     fn icon_tabs_show_one_section_and_preserve_per_module_and_pane_selection() {
         let context = egui::Context::default();
         let mut pane = ModulePane::new(ModuleKind::Waterfall);
+        assert_eq!(pane.active_section(), SettingsSection::Geometry);
+        assert_eq!(pane.sections().last(), Some(&SettingsSection::Camera));
+        assert!(!pane.sections().contains(&SettingsSection::History));
+        pane.select_section(SettingsSection::Camera);
         let render = |pane: &mut ModulePane| {
             let mut output = context.run_ui(egui::RawInput::default(), |ui| {
                 pane.controls(ui, &AnalysisFrame::default());
@@ -266,10 +270,11 @@ mod tests {
         pane.select_section(SettingsSection::Geometry);
         let labels = render(&mut pane);
         assert!(labels.iter().any(|label| label == "Length X"));
+        assert!(labels.iter().any(|label| label == "History s"));
         assert!(
             !labels
                 .iter()
-                .any(|label| label == "Camera" || label == "History s")
+                .any(|label| label == "Camera" || label == "Auto-orbit")
         );
         pane.kind = ModuleKind::Spectrum;
         assert_eq!(pane.active_section(), SettingsSection::Frequency);
