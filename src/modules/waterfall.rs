@@ -367,25 +367,23 @@ impl Waterfall {
                         ("Rotation", &mut self.yaw),
                         ("Elevation", &mut self.elevation),
                     ] {
-                        ui.label(label);
                         let mut degrees = angle.to_degrees();
+                        let default = if label == "Rotation" { -0.35_f32 } else { 0.65_f32 }.to_degrees();
                         if ui
                             .add(
-                                egui::DragValue::new(&mut degrees)
-                                    .speed(0.5)
-                                    .range(-180.0..=180.0)
-                                    .suffix("°"),
+                                crate::parameter::Parameter::new(&mut degrees, -180.0..=180.0, default)
+                                    .bounds(-3600.0..=3600.0).text(format!("{label} °")),
                             )
                             .help_text("Rotate the camera around the waterfall. Angles are in degrees; full rotation is supported.")
                             .changed()
                         {
-                            *angle = degrees.to_radians();
+                            *angle = wrap_angle(degrees.to_radians());
                             self.auto_orbit = false;
                         }
                         ui.end_row();
                     }
                 });
-            if ui.add(egui::Slider::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM).logarithmic(true).text("Zoom"))
+            if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).logarithmic(true).text("Zoom"))
                 .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
                 self.auto_orbit = false;
             }
@@ -406,26 +404,30 @@ impl Waterfall {
             ui.strong("Auto-orbit");
             ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
             ui.add_enabled_ui(self.auto_orbit, |ui| {
-                ui.add(egui::Slider::new(&mut self.orbit_speed, 1.0..=30.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
+                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 1.0..=30.0, 10.0).bounds(0.0..=360.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
             });
         });
         settings_panel(ui, "Geometry", |ui| {
             ui.strong("Dimensions");
-            ui.add(egui::Slider::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH).text("Length X"))
+            ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length X"))
                 .help_text("Stretch or compress the frequency axis visually. 1 is the default size; frequency range and audio are unchanged.");
-            ui.add(egui::Slider::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH).text("Length Y"))
+            ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length Y"))
                 .help_text("Stretch or compress the time axis visually. 1 is the default size; history duration and audio are unchanged.");
-            ui.add(egui::Slider::new(&mut self.height, 0.0..=MAX_HEIGHT).text("Height"))
-                .help_text("Scale signal peaks vertically above the fixed floor grid.");
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.height, 0.0..=MAX_HEIGHT, 0.85)
+                    .bounds(0.0..=10.0)
+                    .text("Height"),
+            )
+            .help_text("Scale signal peaks vertically above the fixed floor grid.");
             ui.separator();
             ui.strong("Time & detail");
             ui.add(
-                egui::Slider::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS)
+                crate::parameter::Parameter::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS, DEFAULT_HISTORY_SECONDS)
                     .logarithmic(true)
                     .text("History s"),
             ).help_text("How many seconds of recent audio are displayed. Does not change the waterfall's physical length.");
-            ui.add(egui::Slider::new(&mut self.detail, 24..=128).text("Time slices"))
+            ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).bounds(8.0..=256.0).text("Time slices"))
                 .help_text("Number of displayed time slices. More slices add detail and rendering work; history duration is unchanged.");
         });
         settings_panel(ui, "Frequency Range", |ui| {
@@ -446,30 +448,30 @@ impl Waterfall {
                         ui.checkbox(&mut self.surface_walls, "Base walls").help_text("Close the terrain's perimeter down to the fixed floor. Turn off for a floating sheet.");
                     }
                     RenderMode::Lines => {
-                        width_control(ui, &mut self.line_width);
-                        spacing_control(ui, &mut self.line_spacing, "Trace spacing", "Display every Nth time slice. Does not change history duration or audio sampling.");
+                        width_control(ui, &mut self.line_width, 1.1);
+                        spacing_control(ui, &mut self.line_spacing, 1, "Trace spacing", "Display every Nth time slice. Does not change history duration or audio sampling.");
                     }
                     RenderMode::YLines => {
-                        width_control(ui, &mut self.y_line_width);
-                        spacing_control(ui, &mut self.y_line_spacing, "Band spacing", "Display every Nth frequency trace. Does not change FFT resolution.");
+                        width_control(ui, &mut self.y_line_width, 1.1);
+                        spacing_control(ui, &mut self.y_line_spacing, 1, "Band spacing", "Display every Nth frequency trace. Does not change FFT resolution.");
                     }
                     RenderMode::Wireframe => {
-                        width_control(ui, &mut self.wire_width);
-                        spacing_control(ui, &mut self.wire_spacing, "Mesh spacing", "Display every Nth frequency and time grid line; keeps the outer edges.");
+                        width_control(ui, &mut self.wire_width, 1.1);
+                        spacing_control(ui, &mut self.wire_spacing, 1, "Mesh spacing", "Display every Nth frequency and time grid line; keeps the outer edges.");
                     }
                     RenderMode::Dots => {
-                        ui.add(egui::Slider::new(&mut self.dot_size, 1.0..=12.0).text("Dot size px")).help_text("Screen-space diameter of each dot, independent of camera zoom.");
-                        spacing_control(ui, &mut self.dot_spacing, "Point spacing", "Display every Nth band and time slice for a more open point cloud.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=12.0, 3.2).bounds(0.1..=40.0).text("Dot size px")).help_text("Screen-space diameter of each dot, independent of camera zoom.");
+                        spacing_control(ui, &mut self.dot_spacing, 1, "Point spacing", "Display every Nth band and time slice for a more open point cloud.");
                     }
                     RenderMode::Stems => {
-                        width_control(ui, &mut self.stem_width);
-                        spacing_control(ui, &mut self.stem_spacing, "Stem spacing", "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.");
+                        width_control(ui, &mut self.stem_width, 1.2);
+                        spacing_control(ui, &mut self.stem_spacing, 4, "Stem spacing", "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.");
                     }
                     RenderMode::Bars => {
-                        ui.add(egui::Slider::new(&mut self.bar_width, 10.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
-                        ui.add(egui::Slider::new(&mut self.bar_depth, 10.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
-                        ui.add(egui::Slider::new(&mut self.bar_bands, 1..=12).text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
-                        spacing_control(ui, &mut self.bar_time_step, "Time spacing", "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.bar_width, 10.0..=100.0, 75.0).bounds(1.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.bar_depth, 10.0..=100.0, 65.0).bounds(1.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.bar_bands, 1..=12, 4).text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
+                        spacing_control(ui, &mut self.bar_time_step, 3, "Time spacing", "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.");
                     }
                 }
             });
@@ -991,13 +993,19 @@ fn surface_faces(valid: &[bool], cell_view: Vec2, grid: bool, walls: bool) -> Ve
     faces
 }
 
-fn width_control(ui: &mut egui::Ui, width: &mut f32) {
-    ui.add(egui::Slider::new(width, 0.5..=5.0).text("Thickness px"))
+fn width_control(ui: &mut egui::Ui, width: &mut f32, default: f32) {
+    ui.add(crate::parameter::Parameter::new(width, 0.5..=5.0, default).bounds(0.1..=20.0).text("Thickness px"))
         .help_text("Screen-space line thickness, independent of camera zoom. Remembered separately for each render style.");
 }
 
-fn spacing_control(ui: &mut egui::Ui, spacing: &mut usize, name: &str, description: &str) {
-    ui.add(egui::Slider::new(spacing, 1..=8).text(name))
+fn spacing_control(
+    ui: &mut egui::Ui,
+    spacing: &mut usize,
+    default: usize,
+    name: &str,
+    description: &str,
+) {
+    ui.add(crate::parameter::Parameter::new(spacing, 1..=8, default).text(name))
         .help_text(description);
 }
 

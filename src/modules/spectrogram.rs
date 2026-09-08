@@ -78,7 +78,7 @@ impl Spectrogram {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Time & History", |ui| {
-            ui.add(egui::Slider::new(&mut self.seconds, 0.1..=30.0).logarithmic(true).text("History s"))
+            ui.add(crate::parameter::Parameter::new(&mut self.seconds, 0.1..=30.0, 8.0).logarithmic(true).text("History s"))
                 .help_text("Visible history duration. Retains up to 30 seconds so changing the view does not discard recent audio.");
         });
         settings_panel(ui, "Frequency Range", |ui| {
@@ -97,9 +97,9 @@ impl Spectrogram {
                 }).response.help_text("Change scrolling orientation without clearing captured history.");
             ui.checkbox(&mut self.smooth, "Smooth pixels")
                 .help_text("Interpolate between display cells. Turn off for sharp, pixelated cells. Does not change FFT or frequency smoothing.");
-            ui.add(egui::Slider::new(&mut self.time_pixels, 64..=1024).text("Time cells"))
+            ui.add(crate::parameter::Parameter::new(&mut self.time_pixels, 64..=1024, 240).text("Time cells"))
                 .help_text("Display resolution along time. More cells produce a finer raster, not a higher capture rate; history is sampled up to 30 times per second.");
-            ui.add(egui::Slider::new(&mut self.frequency_pixels, 24..=BANDS).text("Freq. cells"))
+            ui.add(crate::parameter::Parameter::new(&mut self.frequency_pixels, 24..=BANDS, BANDS).text("Freq. cells"))
                 .help_text("Displayed frequency rows or columns. Fewer cells group bands using their loudest level to preserve peaks. FFT resolution is unchanged.");
             ui.separator();
             ui.strong("Color & level");

@@ -56,7 +56,7 @@ impl Waveform {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Time Window", |ui| {
-            ui.add(egui::Slider::new(&mut self.time_ms, 1.0..=250.0).logarithmic(true).text("Window ms"))
+            ui.add(crate::parameter::Parameter::new(&mut self.time_ms, 1.0..=250.0, 40.0).logarithmic(true).text("Window ms"))
                 .help_text("Visible time window, independent of the shared FFT size. Long views preserve peaks when reduced to screen pixels.");
             ui.separator();
             ui.strong("Trigger");
@@ -67,7 +67,7 @@ impl Waveform {
                     ui.selectable_value(&mut self.rising, true, "Rising").help_text("Trigger when the signal crosses the threshold upward.");
                     ui.selectable_value(&mut self.rising, false, "Falling").help_text("Trigger when the signal crosses the threshold downward.");
                 });
-                ui.add(egui::Slider::new(&mut self.trigger_level, -1.0..=1.0).text("Threshold"))
+                ui.add(crate::parameter::Parameter::new(&mut self.trigger_level, -1.0..=1.0, 0.0).text("Threshold"))
                     .help_text("Trigger threshold in original sample amplitude, before display scaling; zero is the centerline.");
             });
         });
@@ -76,7 +76,8 @@ impl Waveform {
                 .help_text("Fit the visible signal to the lane height. Both stereo lanes share one gain so their relative levels remain accurate. Does not change audio volume.");
             ui.add_enabled_ui(!self.auto_scale, |ui| {
                 ui.add(
-                    egui::Slider::new(&mut self.amplitude, 0.1..=10.0)
+                    crate::parameter::Parameter::new(&mut self.amplitude, 0.1..=10.0, 1.0)
+                        .bounds(0.01..=100.0)
                         .logarithmic(true)
                         .text("Amplitude"),
                 )
@@ -85,11 +86,19 @@ impl Waveform {
         });
         settings_panel(ui, "Appearance", |ui| {
             self.style.controls(ui, false);
-            ui.add(egui::Slider::new(&mut self.thickness, 0.5..=4.0).text("Line px"))
-                .help_text("Outline thickness in screen pixels.");
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.2)
+                    .bounds(0.1..=20.0)
+                    .text("Line px"),
+            )
+            .help_text("Outline thickness in screen pixels.");
             if self.style == TraceStyle::Filled {
-                ui.add(egui::Slider::new(&mut self.fill_opacity, 0.05..=1.0).text("Fill opacity"))
-                    .help_text("Opacity of the area between the signal and centerline.");
+                ui.add(
+                    crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                        .bounds(0.0..=1.0)
+                        .text("Fill opacity"),
+                )
+                .help_text("Opacity of the area between the signal and centerline.");
             }
             ui.separator();
             ui.strong("Guides");

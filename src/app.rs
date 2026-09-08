@@ -24,6 +24,7 @@ pub struct SymphosApp {
     last_theme_check: Instant,
     fullscreen: bool,
     show_inspector: bool,
+    show_issues: bool,
     display_fps: f32,
     last_frame: Instant,
     panes: [ModulePane; 4],
@@ -52,6 +53,7 @@ impl SymphosApp {
             last_theme_check: Instant::now(),
             fullscreen: false,
             show_inspector: false,
+            show_issues: false,
             display_fps: 0.0,
             last_frame: Instant::now(),
             panes: [
@@ -177,6 +179,17 @@ impl SymphosApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.push_id(self.selected_pane, |ui| {
+                    ui.data_mut(|d| {
+                        d.insert_temp(
+                            egui::Id::new("parameter-context"),
+                            format!(
+                                "Pane {} · {} · {}",
+                                self.selected_pane + 1,
+                                self.panes[self.selected_pane].kind.label(),
+                                self.panes[self.selected_pane].active_section().title()
+                            ),
+                        )
+                    });
                     self.panes[self.selected_pane].controls(ui, frame)
                 });
             });
@@ -387,6 +400,10 @@ impl eframe::App for SymphosApp {
                 let source = self.source_selector(ui);
                 let options = icons::sized_button(ui, Icon::Gear, false, source.rect.height(), "View settings: dashboard layout, fullscreen, and detailed diagnostics.");
                 egui::Popup::menu(&options).show(|ui| {
+                    if ui.button(format!("Issue log ({})", crate::issues::count())).clicked() {
+                        self.show_issues = true;
+                        ui.close();
+                    }
                     if ui.button("Reset pane sizes").help_text("Restore the default dashboard proportions and leave expanded-pane mode.").clicked() {
                         self.top_fraction = 0.62;
                         self.bottom_splits = [1.0 / 3.0, 2.0 / 3.0];
@@ -480,6 +497,7 @@ impl eframe::App for SymphosApp {
             ui.painter().rect_filled(help_rect, 7.0, self.theme.panel);
             help::draw(ui, help_rect, &mut self.help_open);
         }
+        crate::issues::show(ui.ctx(), &mut self.show_issues);
         let target_rate = self
             .engine
             .analysis

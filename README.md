@@ -14,6 +14,14 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
+- Numeric module controls: Shift-drag for fine adjustment, double-click the slider
+  to reset, or click its number to type an exact value (including scientific notation).
+  Slider ranges are comfortable working ranges; selected geometry/appearance fields
+  accept larger custom values within documented safe limits. Buffer sizes, history,
+  percentages, and algorithm limits remain bounded. Rejected values retain the last
+  valid setting and appear in **Settings → Issue log**, with a copyable report.
+  Diagnostics also append to `$XDG_STATE_HOME/symphos/issues.log` (fallback
+  `~/.local/state/symphos/issues.log`, capped at roughly 1 MiB); no automatic uploads.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
 - Four resizable panes with interchangeable waterfall, spectrum, waveform,
   and spectrogram modules

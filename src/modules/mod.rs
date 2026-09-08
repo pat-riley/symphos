@@ -691,7 +691,7 @@ enum Palette {
 impl Palette {
     fn contrast_controls(self, ui: &mut egui::Ui, contrast: &mut f32) {
         if self == Self::Heatmap {
-            ui.add(egui::Slider::new(contrast, 0.25..=3.0).text("Contrast"))
+            ui.add(crate::parameter::Parameter::new(contrast, 0.25..=3.0, 1.0).text("Contrast"))
                 .help_text("1 is neutral. Higher contrast separates quiet blues from loud reds; lower contrast brings colors toward the middle. Changes color only, not height, levels, or retained audio.");
         }
     }
