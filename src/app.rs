@@ -25,6 +25,7 @@ pub struct SymphosApp {
     fullscreen: bool,
     show_inspector: bool,
     show_issues: bool,
+    show_shortcuts: bool,
     display_fps: f32,
     last_frame: Instant,
     panes: [ModulePane; 4],
@@ -54,6 +55,7 @@ impl SymphosApp {
             fullscreen: false,
             show_inspector: false,
             show_issues: false,
+            show_shortcuts: false,
             display_fps: 0.0,
             last_frame: Instant::now(),
             panes: [
@@ -198,6 +200,48 @@ impl SymphosApp {
     fn toggle_fullscreen(&mut self, context: &egui::Context) {
         self.fullscreen = !self.fullscreen;
         context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+    }
+
+    fn handle_shortcut(&mut self, ctx: &egui::Context, frame: &AnalysisFrame, now: Instant) {
+        use crate::shortcuts::Action;
+        let live = matches!(self.status, AudioStatus::Streaming)
+            && self.selected_node.is_some()
+            && frame.sequence > 0;
+        match crate::shortcuts::take_action(
+            ctx,
+            self.show_shortcuts || self.show_issues || self.show_inspector,
+        ) {
+            Some(Action::Pause) if live || self.panes[self.selected_pane].is_frozen() => {
+                self.panes[self.selected_pane].toggle_freeze(frame, now)
+            }
+            Some(Action::PauseAll) => {
+                let pause = self.panes.iter().any(|pane| !pane.is_frozen());
+                for pane in &mut self.panes {
+                    if pane.is_frozen() != pause && (live || pane.is_frozen()) {
+                        pane.toggle_freeze(frame, now);
+                    }
+                }
+            }
+            Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
+            Some(Action::Expand) => {
+                self.focused_pane = if self.focused_pane == Some(self.selected_pane) {
+                    None
+                } else {
+                    Some(self.selected_pane)
+                }
+            }
+            Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
+            Some(Action::Restore) => self.focused_pane = None,
+            Some(Action::Help) => self.help_open = !self.help_open,
+            Some(Action::Bindings) => self.show_shortcuts = true,
+            Some(Action::Pane(index)) => {
+                self.selected_pane = index;
+                if self.focused_pane.is_some() {
+                    self.focused_pane = Some(index);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
@@ -371,12 +415,6 @@ impl eframe::App for SymphosApp {
         self.refresh_theme(ui.ctx());
         help::begin_frame(ui);
         self.process_audio_events();
-        if ui.input(|input| input.key_pressed(egui::Key::F11)) {
-            self.toggle_fullscreen(ui.ctx());
-        }
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.focused_pane = None;
-        }
         let now = Instant::now();
         let elapsed = now
             .duration_since(self.last_frame)
@@ -385,6 +423,7 @@ impl eframe::App for SymphosApp {
         self.last_frame = now;
         self.display_fps += (elapsed.recip() - self.display_fps) * 0.08;
         let snapshot = self.engine.analysis.snapshot.load_full();
+        self.handle_shortcut(ui.ctx(), &snapshot, now);
         let rect = ui.available_rect_before_wrap();
         ui.painter().rect_filled(rect, 0.0, self.theme.background);
         let header = Rect::from_min_max(
@@ -400,6 +439,10 @@ impl eframe::App for SymphosApp {
                 let source = self.source_selector(ui);
                 let options = icons::sized_button(ui, Icon::Gear, false, source.rect.height(), "View settings: dashboard layout, fullscreen, and detailed diagnostics.");
                 egui::Popup::menu(&options).show(|ui| {
+                    if ui.button("Keyboard shortcuts · Ctrl+K").clicked() {
+                        self.show_shortcuts = true;
+                        ui.close();
+                    }
                     if ui.button(format!("Issue log ({})", crate::issues::count())).clicked() {
                         self.show_issues = true;
                         ui.close();
@@ -498,6 +541,7 @@ impl eframe::App for SymphosApp {
             help::draw(ui, help_rect, &mut self.help_open);
         }
         crate::issues::show(ui.ctx(), &mut self.show_issues);
+        crate::shortcuts::show(ui.ctx(), &mut self.show_shortcuts);
         let target_rate = self
             .engine
             .analysis

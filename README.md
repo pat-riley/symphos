@@ -14,6 +14,11 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
+- **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
+  Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
+  the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;
+  F11 toggles fullscreen; Escape restores the dashboard or dismisses a modal/menu.
+  Typing, key-repeat events, and open menus/modals do not trigger application actions.
 - Numeric module controls: Shift-drag for fine adjustment, double-click the slider
   to reset, or click its number to type an exact value (including scientific notation).
   Slider ranges are comfortable working ranges; selected geometry/appearance fields

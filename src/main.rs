@@ -7,6 +7,7 @@ mod icons;
 mod issues;
 mod modules;
 mod parameter;
+mod shortcuts;
 mod theme;
 
 use eframe::egui;
