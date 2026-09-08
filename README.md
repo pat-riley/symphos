@@ -17,17 +17,19 @@ and visual parameter mapping are still on the roadmap.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
 - Four resizable panes with interchangeable waterfall, spectrum, waveform,
   and spectrogram modules
-- A live 3D waterfall with surface, frequency-line, time-line, wireframe, or dot rendering, independent surface
-  and floor grids, rotation, zoom, and 0.1–30 second history (2 seconds by default)
+- A live 3D waterfall with Surface, Lines, Y Lines, Wireframe, Dots, and Stems render styles,
+  fully hideable guides, rotation, zoom, and 0.1–30 second history (2 seconds by default)
 - Independent waterfall X/Y lengths (0.25×–10×, default 1× each) without changing frequency range or history duration
-- Independent frequency range, linear/log scale, smoothing, gain, decay, and
+- Independent frequency range, linear/log scale, time/frequency smoothing, gain, decay, and
   intensity controls for each frequency module
+- Optional musical-note axis labels and adjustable A4 tuning reference
+- Mode-specific appearance controls, heatmap contrast, eight isometric views, and camera auto-orbit
 - Spectrum peak hold, stereo waveform time/amplitude controls, and color palettes
-- Settings sidebar with collapsible categories that follows the selected pane
+- Module-only settings sidebar with icon tabs that follows the selected pane
 - Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Toggleable bottom-left Info View with hover descriptions instead of popup tooltips
 - Shared FFT size, window function, analysis channel, and frame-rate controls
-- Bottom status strip with capture status, FPS, sample rate, and peak level
+- Bottom navigation with FFT/rate controls, a stereo/mix icon, live levels, FPS, and sample rate
 - Raw FFT-bin inspection, detailed diagnostics, and fullscreen mode
 - GPU rendering with `wgpu` on native Wayland
 - Colors derived from the active Omarchy theme
@@ -51,42 +53,80 @@ Camera) and double-click to reset the
 camera, including pan. **Center view** under Camera resets only the pan.
 The Camera panel has an XYZ orientation gizmo, with a compact version in the
 waterfall's upper-right corner. Drag either gizmo to orbit, click an axis to
-align, and click it again to flip to the opposite side. Front, Side, and Top
-buttons provide the same view shortcuts. X represents frequency, Y time, and
-Z level; angle fields use degrees.
+align, and click it again to flip to the opposite side. Explicit Front, Back,
+Left, Right, Top, and Bottom buttons always snap to the named orthographic view.
+**Snap isometric…** offers four corner views from above and four from below,
+with equal foreshortening along all three axes. View presets preserve pan and zoom.
+**Auto-orbit** rotates around the level axis at 1–30 degrees/second (default 10),
+with an optional reverse direction. Manual camera adjustments, presets, and reset
+stop auto-orbit. Its speed is independent of history duration and analysis rate.
+X represents frequency, Y time, and Z level; angle fields use degrees.
 The gizmos use colored lines and plain axis labels without endpoint circles;
 axis clicking and dragging still work.
 History is live only; there is no recording or playback.
 Waterfall frequency, gain, smoothing, and decay controls reprocess the retained
-history immediately. Height stretches the surface above its fixed floor.
-The menu button at the upper left collapses or opens the settings sidebar.
+history immediately. Under **Signal Response**, **Time smooth** softens changes
+between frames, while **Freq. smooth** blends neighboring display bands (0 is off,
+1–8 progressively softens jagged peaks). It does not change the FFT or audio.
+Under **Frequency Range**, **Note labels** replaces Hz ticks with the nearest
+equal-tempered note. **A4 Hz** changes the tuning reference (440 Hz by default).
+These are axis references, not detected notes or key detection. Both controls also
+work independently in the spectrum and spectrogram.
+Height stretches the surface above its fixed floor.
+The chevron at the top of the sidebar's icon rail collapses or opens settings.
+The rail stays visible when collapsed; clicking a tab opens its section.
 Under **Time & History**, **History s** sets the displayed time window.
 Under **Geometry**, **Length X** stretches the frequency axis and **Length Y**
 stretches the time axis independently. Both default to 1× with a 0.25×–10× range.
 The floor grid and labels follow both lengths, and framing accommodates the geometry.
-**Geometry** offers Surface, Lines, Y Lines, Wireframe, and Dots. Lines draws traces
+Under **Appearance**, the icon-labelled **Render style** dropdown offers Surface,
+Lines, Y Lines, Wireframe, Dots, and Stems. Lines draws traces
 across frequency; Y Lines draws traces along time, one per frequency band.
 Wireframe connects both directions without filling the faces. Dots shows separate
-colored points for each frequency/time sample with no connecting edges.
-Neither length nor mode changes
-clear the audio history.
+colored points for each frequency/time sample with no connecting edges. Stems
+draws a forest of colored pins from the floor to each signal level.
+Only the selected style's parameters are shown directly below the dropdown:
+surface mesh/base walls; line thickness and time-trace spacing; Y-line thickness
+and band spacing; wireframe thickness and mesh spacing; dot size and point spacing;
+or stem thickness and spacing. Spacing means every Nth trace/sample, not audio
+sampling rate. Each style remembers its own settings during the session.
+Geometry retains Length X, Length Y, Height, and Time slices.
+Neither length nor mode changes clear the audio history.
+**Viewport guides → Show guides** hides every reference overlay, including the
+surface mesh, floor grid, axes, labels, navigation text, and viewport gizmo.
+Individual switches control the floor grid, axes/labels, and navigation gizmo;
+turning guides back on restores those preferences. Sidebar camera controls
+remain available even with all guides hidden.
 Under **Appearance**, choose **Heatmap** for a full blue → cyan → green →
 yellow → orange → red gradient. Cooler colors represent quieter levels and
 warmer colors louder peaks, using the same signal level as waterfall height.
-**Floor dB** and **Ceiling dB** set the mapped range. Heatmap works in every
+**Floor dB** and **Ceiling dB** set the mapped range. Heatmap's **Contrast** control
+is color-only: 1 is neutral, higher values separate cool and warm levels more,
+and lower values bring colors toward the middle without changing height.
+Heatmap works in every
 waterfall geometry mode and is also available in the spectrogram.
-Click **? Help** at the bottom right to show or hide **Info View** at the bottom
+Click **? Help** at the far bottom left to show or hide **Info View** at the bottom
 left. Hover over a control or visualization for a short description. Popup
 tooltips are disabled even when Info View is hidden; existing descriptions are
-retained in the shared help system. Capture status remains next to Help in the
-footer. When settings are open, Info View docks underneath them; otherwise it
+retained in the shared help system. A capture-status indicator sits beside the
+bottom-right meters; detailed status remains in Shared options. When settings
+are open, Info View docks underneath them; otherwise it
 reserves space below the dashboard. It never covers a visualization.
-Controls are grouped by purpose: **Camera**, **Time & History**, **Geometry**,
+Settings use icon tabs for **Camera**, **Time & History**, **Geometry**,
 **Frequency Range**, **Signal Response**, and **Appearance**, with only relevant
-sections shown for each module. Several sections can stay open together; their
-open/closed state is kept separately for each pane and module during the session.
-Shared audio settings are under **Audio Analysis · Shared**. Waveform
-time windows are limited to the current FFT capture window.
+tabs shown for each module. One section is visible at a time; the selected tab
+and scroll position are remembered separately for each pane/module/tab during the session. Waveform
+has Time Window and Amplitude tabs; channel display is now a global setting.
+
+The bottom bar keeps **FFT** and **Rate** visible. The overlapping-circles icon
+switches all waveform panes and meters between separate **L/R stereo** and a
+**single mixed view**, without changing frequency analysis or clearing history.
+The shared-options icon holds the FFT window, frequency-analysis channel,
+single-view channel (mix/left/right), diagnostics, capture details, and theme info.
+Level bars show RMS with peak markers and peak dBFS readouts. Mixed levels are
+measured from the summed signal, including phase cancellation. Waveform time
+windows remain limited to the current FFT capture window. The source selector
+and View menu remain at the top right; there is no top-left menu button.
 
 **View** includes pane-size reset, fullscreen (F11), and the FFT inspector with
 the detailed analyzer metrics and experimental tempo estimate. Pane assignments,

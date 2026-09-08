@@ -45,7 +45,7 @@ impl Axis {
         }
     }
 
-    fn angles(self, positive: bool) -> (f32, f32) {
+    pub fn angles(self, positive: bool) -> (f32, f32) {
         match (self, positive) {
             (Self::X, true) => (-FRAC_PI_2, 0.0),
             (Self::X, false) => (FRAC_PI_2, 0.0),

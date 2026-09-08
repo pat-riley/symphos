@@ -1,7 +1,9 @@
 mod analysis;
 mod app;
 mod audio;
+mod global_bar;
 mod help;
+mod icons;
 mod modules;
 mod theme;
 

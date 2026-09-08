@@ -32,13 +32,13 @@ impl Spectrum {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
-        settings_panel(ui, "Frequency Range", true, |ui| {
+        settings_panel(ui, "Frequency Range", |ui| {
             self.data.settings.range_controls(ui)
         });
-        settings_panel(ui, "Signal Response", false, |ui| {
+        settings_panel(ui, "Signal Response", |ui| {
             self.data.settings.response_controls(ui)
         });
-        settings_panel(ui, "Appearance", true, |ui| {
+        settings_panel(ui, "Appearance", |ui| {
             self.data.settings.level_controls(ui);
             ui.checkbox(&mut self.peak_hold, "Peak hold")
                 .help_text("Keep a marker at the highest observed level for each frequency band.");
@@ -120,7 +120,7 @@ impl Spectrum {
             label(
                 &painter,
                 Pos2::new(plot.left() + t * (plot.width() - 25.0), plot.bottom() + 7.0),
-                frequency_label(settings.frequency(t, frame.sample_rate)),
+                settings.axis_label(t, frame.sample_rate),
                 theme.muted,
             );
         }

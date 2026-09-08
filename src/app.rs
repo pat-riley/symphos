@@ -4,9 +4,11 @@ use eframe::egui::{
     self, Align, Color32, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2,
 };
 
-use crate::analysis::{AnalysisFrame, ChannelMode, FFT_SIZES, WindowFunction};
+use crate::analysis::AnalysisFrame;
 use crate::audio::{AudioEngine, AudioEvent, AudioSource, AudioStatus, SourceKind};
+use crate::global_bar::{BarInfo, GlobalBar};
 use crate::help::{self, HoverHelp};
+use crate::icons::{self, Icon};
 use crate::modules::{ModuleKind, ModulePane};
 use crate::theme::AppTheme;
 
@@ -28,6 +30,7 @@ pub struct SymphosApp {
     selected_pane: usize,
     sidebar_open: bool,
     help_open: bool,
+    global_bar: GlobalBar,
     focused_pane: Option<usize>,
     top_fraction: f32,
     bottom_splits: [f32; 2],
@@ -60,6 +63,7 @@ impl SymphosApp {
             selected_pane: 0,
             sidebar_open: true,
             help_open: false,
+            global_bar: GlobalBar::default(),
             focused_pane: None,
             top_fraction: 0.62,
             bottom_splits: [1.0 / 3.0, 2.0 / 3.0],
@@ -158,81 +162,6 @@ impl SymphosApp {
         }
     }
 
-    fn analysis_controls(&mut self, ui: &mut egui::Ui) {
-        let mut settings = self
-            .engine
-            .analysis
-            .settings
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let before = (settings.fft_size, settings.window, settings.channel_mode);
-        ui.small("Shared by all panes");
-        egui::Grid::new("shared-audio-settings")
-            .num_columns(2)
-            .show(ui, |ui| {
-                ui.label("FFT");
-                egui::ComboBox::from_id_salt("fft-size")
-                    .width(115.0)
-                    .selected_text(format!("{} samples", settings.fft_size))
-                    .show_ui(ui, |ui| {
-                        for size in FFT_SIZES {
-                            ui.selectable_value(&mut settings.fft_size, size, size.to_string()).help_text("Larger FFT sizes give finer frequency detail but a longer analysis window. Changing this clears histories in all panes.");
-                        }
-                    }).response.help_text("FFT sample count, shared by all panes. Larger sizes give finer frequency detail and a longer capture window.");
-                ui.end_row();
-                ui.label("Window");
-                egui::ComboBox::from_id_salt("window")
-                    .width(115.0)
-                    .selected_text(settings.window.label())
-                    .show_ui(ui, |ui| {
-                        for window in WindowFunction::ALL {
-                            ui.selectable_value(&mut settings.window, window, window.label());
-                        }
-                    }).response.help_text("Window function used before the FFT. Controls the tradeoff between frequency separation and spectral leakage. Changing this clears all histories.");
-                ui.end_row();
-                ui.label("Channel");
-                egui::ComboBox::from_id_salt("channel")
-                    .width(115.0)
-                    .selected_text(settings.channel_mode.label())
-                    .show_ui(ui, |ui| {
-                        for channel in ChannelMode::ALL {
-                            ui.selectable_value(
-                                &mut settings.channel_mode,
-                                channel,
-                                channel.label(),
-                            );
-                        }
-                    }).response.help_text("Channel or stereo combination used for shared frequency analysis. Changing this clears all histories.");
-                ui.end_row();
-                ui.label("Rate");
-                egui::ComboBox::from_id_salt("analysis-fps")
-                    .width(115.0)
-                    .selected_text(format!("{} Hz", settings.analysis_fps))
-                    .show_ui(ui, |ui| {
-                        for rate in [30, 60, 90, 120] {
-                            ui.selectable_value(
-                                &mut settings.analysis_fps,
-                                rate,
-                                format!("{rate} Hz"),
-                            );
-                        }
-                    }).response.help_text("Target analysis and display update rate. Higher rates use more CPU/GPU resources.");
-                ui.end_row();
-            });
-        if before != (settings.fft_size, settings.window, settings.channel_mode) {
-            self.reset_modules();
-        }
-        *self
-            .engine
-            .analysis
-            .settings
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = settings;
-        ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics")
-            .help_text("Open raw frequency bins and detailed audio-analysis statistics.");
-    }
-
     fn sidebar(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
         ui.spacing_mut().slider_width = 90.0;
@@ -244,22 +173,11 @@ impl SymphosApp {
             .insert(egui::TextStyle::Button, FontId::proportional(13.0));
         ui.spacing_mut().button_padding = Vec2::new(7.0, 4.0);
         ui.spacing_mut().interact_size.y = 24.0;
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("MODULE SETTINGS")
-                    .small()
-                    .color(self.theme.muted),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .small_button("‹")
-                    .help_text("Collapse settings")
-                    .clicked()
-                {
-                    self.sidebar_open = false;
-                }
-            });
-        });
+        ui.label(
+            RichText::new("MODULE SETTINGS")
+                .small()
+                .color(self.theme.muted),
+        );
         ui.label(RichText::new(self.panes[self.selected_pane].kind.label()).strong());
         ui.label(
             RichText::new(format!(
@@ -271,26 +189,17 @@ impl SymphosApp {
         );
         ui.separator();
         egui::ScrollArea::vertical()
-            .id_salt(("module-settings", self.selected_pane))
+            .id_salt((
+                "module-settings",
+                self.selected_pane,
+                self.panes[self.selected_pane].kind.label(),
+                self.panes[self.selected_pane].active_section().title(),
+            ))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.push_id(self.selected_pane, |ui| {
                     self.panes[self.selected_pane].controls(ui, frame)
                 });
-                ui.add_space(8.0);
-                ui.separator();
-                crate::modules::settings_panel(ui, "Audio Analysis · Shared", false, |ui| {
-                    self.analysis_controls(ui)
-                });
-                crate::modules::settings_panel(ui, "Stereo Levels", false, |ui| {
-                    stereo_meters(ui, frame, &self.theme)
-                });
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!("Theme · {}", self.theme.name))
-                        .small()
-                        .color(self.theme.muted),
-                );
             });
     }
 
@@ -493,13 +402,6 @@ impl eframe::App for SymphosApp {
         );
         let mut nav = ui.new_child(egui::UiBuilder::new().id_salt("navbar").max_rect(header));
         nav.horizontal_centered(|ui| {
-            if ui
-                .selectable_label(self.sidebar_open, "☰")
-                .help_text("Toggle module settings")
-                .clicked()
-            {
-                self.sidebar_open = !self.sidebar_open;
-            }
             ui.label(
                 RichText::new("SYMPHOS")
                     .size(20.0)
@@ -533,56 +435,52 @@ impl eframe::App for SymphosApp {
             });
         });
         let footer = Rect::from_min_max(
-            Pos2::new(rect.left() + 12.0, rect.bottom() - 32.0),
+            Pos2::new(rect.left() + 12.0, rect.bottom() - 42.0),
             rect.max - Vec2::new(12.0, 2.0),
         );
         let mut footer_ui = ui.new_child(egui::UiBuilder::new().id_salt("footer").max_rect(footer));
-        footer_ui.spacing_mut().interact_size.y = 22.0;
-        footer_ui.horizontal_centered(|ui| {
-            ui.label(
-                RichText::new(format!("{:.0} FPS", self.display_fps))
-                    .monospace()
-                    .small()
-                    .color(self.theme.muted),
-            );
-            ui.separator();
-            ui.label(
-                RichText::new(format!("{:.1} kHz", snapshot.sample_rate as f32 / 1000.0))
-                    .monospace()
-                    .small()
-                    .color(self.theme.muted),
-            );
-            let peak = snapshot.peak[0].max(snapshot.peak[1]);
-            let level = if matches!(self.status, AudioStatus::Streaming) {
-                format!("Peak {:.1} dBFS", amplitude_db(peak))
-            } else {
-                "Peak —".into()
-            };
-            ui.label(
-                RichText::new(level)
-                    .monospace()
-                    .small()
-                    .color(if peak >= 1.0 {
-                        self.theme.warning
-                    } else {
-                        self.theme.muted
-                    }),
-            );
-            if snapshot.dropped_samples > 0 {
-                ui.label(
-                    RichText::new(format!("{} dropped", snapshot.dropped_samples))
-                        .small()
-                        .color(self.theme.warning),
-                );
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                help::toggle(ui, &mut self.help_open);
-                status_badge(ui, &self.status, &self.theme);
-            });
-        });
+        let mut settings = self
+            .engine
+            .analysis
+            .settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let reset = self.global_bar.show(
+            &mut footer_ui,
+            &mut settings,
+            &mut self.help_open,
+            &mut self.show_inspector,
+            BarInfo {
+                frame: &snapshot,
+                status: &self.status,
+                theme: &self.theme,
+                fps: self.display_fps,
+            },
+        );
+        *self
+            .engine
+            .analysis
+            .settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = settings;
+        if reset {
+            self.reset_modules();
+        }
+        for pane in &mut self.panes {
+            pane.set_channel_view(self.global_bar.stereo, self.global_bar.channel);
+        }
         let content = Rect::from_min_max(
             Pos2::new(rect.left() + 12.0, rect.top() + 56.0),
-            Pos2::new(rect.right() - 12.0, rect.bottom() - 40.0),
+            Pos2::new(rect.right() - 12.0, rect.bottom() - 50.0),
+        );
+        let initial_layout = workspace_layout(content, self.sidebar_open, self.help_open);
+        settings_rail(
+            ui,
+            initial_layout.rail,
+            &self.theme,
+            &mut self.panes[self.selected_pane],
+            &mut self.sidebar_open,
         );
         let layout = workspace_layout(content, self.sidebar_open, self.help_open);
         if let Some(sidebar_rect) = layout.sidebar {
@@ -622,10 +520,66 @@ impl eframe::App for SymphosApp {
     }
 }
 
+fn settings_rail(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    theme: &AppTheme,
+    pane: &mut ModulePane,
+    open: &mut bool,
+) {
+    ui.painter().rect_filled(rect, 6.0, theme.panel);
+    let mut rail = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("settings-rail")
+            .max_rect(rect.shrink2(Vec2::new(3.0, 4.0))),
+    );
+    rail.set_clip_rect(rect.intersect(ui.clip_rect()));
+    rail.spacing_mut().item_spacing.y = 5.0;
+    rail.spacing_mut().button_padding = Vec2::ZERO;
+    rail.spacing_mut().interact_size = Vec2::splat(30.0);
+    rail.vertical(|ui| {
+        if icons::button(
+            ui,
+            if *open { Icon::Collapse } else { Icon::Expand },
+            false,
+            if *open {
+                "Collapse module settings. The tab icons remain available."
+            } else {
+                "Expand module settings for the selected tab."
+            },
+        )
+        .clicked()
+        {
+            *open = !*open;
+        }
+        ui.separator();
+        for &section in pane.sections() {
+            ui.push_id(section.title(), |ui| {
+                if icons::button(
+                    ui,
+                    section.icon(),
+                    pane.active_section() == section,
+                    &format!(
+                        "{} · {} settings. Click to open this tab.",
+                        section.title(),
+                        pane.kind.label()
+                    ),
+                )
+                .clicked()
+                {
+                    pane.select_section(section);
+                    *open = true;
+                }
+            });
+        }
+    });
+}
+
 struct WorkspaceLayout {
     dashboard: Rect,
     sidebar: Option<Rect>,
     help: Option<Rect>,
+    rail: Rect,
 }
 
 fn default_output_source<'a>(
@@ -648,32 +602,45 @@ fn default_output_source<'a>(
 }
 
 fn workspace_layout(content: Rect, sidebar_open: bool, help_open: bool) -> WorkspaceLayout {
+    const RAIL_WIDTH: f32 = 36.0;
+    const SETTINGS_WIDTH: f32 = 236.0;
     let help = help_open.then(|| {
         Rect::from_min_max(
             Pos2::new(content.left(), content.bottom() - 160.0),
-            Pos2::new(content.left() + 236.0, content.bottom()),
-        )
-    });
-    let sidebar = sidebar_open.then(|| {
-        Rect::from_min_max(
-            content.min,
             Pos2::new(
-                content.left() + 236.0,
-                help.map_or(content.bottom(), |rect| rect.top() - 10.0),
+                content.left()
+                    + if sidebar_open {
+                        RAIL_WIDTH + 6.0 + SETTINGS_WIDTH
+                    } else {
+                        SETTINGS_WIDTH
+                    },
+                content.bottom(),
             ),
         )
     });
+    let rail = Rect::from_min_max(
+        content.min,
+        Pos2::new(
+            content.left() + RAIL_WIDTH,
+            help.map_or(content.bottom(), |rect| rect.top() - 10.0),
+        ),
+    );
+    let sidebar = sidebar_open.then(|| {
+        Rect::from_min_max(
+            Pos2::new(rail.right() + 6.0, content.top()),
+            Pos2::new(rail.right() + 6.0 + SETTINGS_WIDTH, rail.bottom()),
+        )
+    });
     let mut dashboard = content;
-    if let Some(sidebar) = sidebar {
-        dashboard.min.x = sidebar.right() + 10.0;
-    } else if let Some(help) = help {
-        // Reserve a bottom strip when settings are hidden; never cover a pane.
+    dashboard.min.x = sidebar.map_or(rail.right(), |rect| rect.right()) + 10.0;
+    if !sidebar_open && let Some(help) = help {
         dashboard.max.y = help.top() - 10.0;
     }
     WorkspaceLayout {
         dashboard,
         sidebar,
         help,
+        rail,
     }
 }
 
@@ -791,40 +758,6 @@ fn panel(
         });
 }
 
-fn stereo_meters(ui: &mut egui::Ui, frame: &AnalysisFrame, theme: &AppTheme) {
-    ui.label(RichText::new("STEREO LEVEL").small().color(theme.muted));
-    for (label, rms, peak, color) in [
-        ("L", frame.rms[0], frame.peak[0], theme.accent),
-        ("R", frame.rms[1], frame.peak[1], theme.accent_alt),
-    ] {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(label).monospace().small().color(color));
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 7.0), Sense::hover());
-            let painter = ui.painter_at(rect);
-            painter.rect_filled(rect, 3.5, theme.background);
-            let rms_fraction = ((amplitude_db(rms) + 60.0) / 60.0).clamp(0.0, 1.0);
-            painter.rect_filled(
-                Rect::from_min_max(
-                    rect.min,
-                    Pos2::new(rect.left() + rect.width() * rms_fraction, rect.bottom()),
-                ),
-                3.5,
-                color,
-            );
-            let peak_fraction = ((amplitude_db(peak) + 60.0) / 60.0).clamp(0.0, 1.0);
-            let peak_x = rect.left() + rect.width() * peak_fraction;
-            painter.line_segment(
-                [
-                    Pos2::new(peak_x, rect.top() - 1.0),
-                    Pos2::new(peak_x, rect.bottom() + 1.0),
-                ],
-                Stroke::new(1.0, theme.foreground),
-            );
-        });
-    }
-}
-
 fn raw_inspector(ui: &mut egui::Ui, frame: &AnalysisFrame, theme: &AppTheme) {
     panel(
         ui,
@@ -857,26 +790,6 @@ fn raw_inspector(ui: &mut egui::Ui, frame: &AnalysisFrame, theme: &AppTheme) {
     );
 }
 
-fn status_badge(ui: &mut egui::Ui, status: &AudioStatus, theme: &AppTheme) {
-    let color = match status {
-        AudioStatus::Streaming => theme.accent,
-        AudioStatus::Connecting | AudioStatus::Paused => theme.warning,
-        AudioStatus::Error(_) => theme.error,
-        AudioStatus::Idle => theme.muted,
-    };
-    egui::Frame::new()
-        .fill(mix(theme.background, color, 0.16))
-        .corner_radius(12)
-        .inner_margin(egui::Margin::symmetric(9, 4))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(format!("●  {}", status.label()))
-                    .small()
-                    .color(color),
-            );
-        });
-}
-
 fn diagnostics(ui: &mut egui::Ui, frame: &AnalysisFrame) {
     ui.label(format!(
         "{} Hz · {} ch · FFT {} · {:.1} ms window",
@@ -907,10 +820,6 @@ fn diagnostics(ui: &mut egui::Ui, frame: &AnalysisFrame) {
     }
 }
 
-fn amplitude_db(amplitude: f32) -> f32 {
-    20.0 * amplitude.max(1.0e-7).log10()
-}
-
 fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
     let channel = |left: u8, right: u8| {
         (left as f32 + (right as f32 - left as f32) * amount.clamp(0.0, 1.0)) as u8
@@ -925,6 +834,89 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn sidebar_chevron_collapses_and_icon_tab_reopens_the_requested_section() {
+        let context = egui::Context::default();
+        let mut pane = ModulePane::new(ModuleKind::Waterfall);
+        let mut open = true;
+        let render = |pane: &mut ModulePane, open: &mut bool, events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    settings_rail(
+                        ui,
+                        Rect::from_min_size(Pos2::new(12.0, 56.0), Vec2::new(36.0, 580.0)),
+                        &AppTheme::default(),
+                        pane,
+                        open,
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let output = render(&mut pane, &mut open, vec![]);
+        let chevron = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if path.points.len() == 3 => Some(path.points[1]),
+                _ => None,
+            })
+            .expect("collapse chevron");
+        for pressed in [true, false] {
+            render(
+                &mut pane,
+                &mut open,
+                vec![
+                    egui::Event::PointerMoved(chevron),
+                    egui::Event::PointerButton {
+                        pos: chevron,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(!open);
+        let output = render(&mut pane, &mut open, vec![]);
+        let geometry = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if path.points.len() == 7 => {
+                    Some(path.points[0] + Vec2::new(0.0, 8.0))
+                }
+                _ => None,
+            })
+            .expect("geometry cube icon");
+        for pressed in [true, false] {
+            render(
+                &mut pane,
+                &mut open,
+                vec![
+                    egui::Event::PointerMoved(geometry),
+                    egui::Event::PointerButton {
+                        pos: geometry,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(open);
+        assert_eq!(
+            pane.active_section(),
+            crate::modules::SettingsSection::Geometry
+        );
+    }
 
     #[test]
     fn defaults_to_speakers_without_overriding_manual_choices() {
@@ -997,8 +989,16 @@ mod layout_tests {
                             assert!(sidebar.height() >= 400.0);
                         }
                     }
+                    assert!(!layout.rail.intersects(layout.dashboard));
+                    if let Some(sidebar) = layout.sidebar {
+                        assert!(!layout.rail.intersects(sidebar));
+                    }
+                    if let Some(help) = layout.help {
+                        assert!(!layout.rail.intersects(help));
+                    }
                     if !sidebar_open && !help_open {
-                        assert_eq!(layout.dashboard, content);
+                        assert_eq!(layout.dashboard.left(), layout.rail.right() + 10.0);
+                        assert_eq!(layout.dashboard.right_bottom(), content.right_bottom());
                     }
                 }
             }
