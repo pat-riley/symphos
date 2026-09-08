@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::f32::consts::PI;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -109,6 +110,7 @@ pub struct SpectrumBand {
 
 #[derive(Clone, Debug)]
 pub struct AnalysisFrame {
+    pub capture_epoch: u64,
     pub sequence: u64,
     pub sample_rate: u32,
     pub channels: u32,
@@ -137,6 +139,7 @@ pub struct AnalysisFrame {
 impl Default for AnalysisFrame {
     fn default() -> Self {
         Self {
+            capture_epoch: 0,
             sequence: 0,
             sample_rate: 48_000,
             channels: 2,
@@ -167,6 +170,8 @@ impl Default for AnalysisFrame {
 pub struct AnalysisRuntime {
     pub snapshot: Arc<ArcSwap<AnalysisFrame>>,
     pub settings: Arc<Mutex<AnalysisSettings>>,
+    pub capture_history: Arc<Mutex<crate::capture_history::CaptureHistory>>,
+    capture_epoch: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -181,10 +186,15 @@ impl AnalysisRuntime {
         let snapshot = Arc::new(ArcSwap::from_pointee(AnalysisFrame::default()));
         let settings = Arc::new(Mutex::new(AnalysisSettings::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let capture_history =
+            Arc::new(Mutex::new(crate::capture_history::CaptureHistory::default()));
+        let capture_epoch = Arc::new(AtomicU64::new(0));
         let worker = {
             let snapshot = snapshot.clone();
             let settings = settings.clone();
             let stop = stop.clone();
+            let capture_history = capture_history.clone();
+            let capture_epoch = capture_epoch.clone();
             thread::Builder::new()
                 .name("symphos-analysis".into())
                 .spawn(move || {
@@ -196,6 +206,8 @@ impl AnalysisRuntime {
                         channels,
                         dropped_samples,
                         stop,
+                        capture_history,
+                        capture_epoch,
                     );
                 })
                 .expect("failed to start analysis thread")
@@ -205,8 +217,22 @@ impl AnalysisRuntime {
             snapshot,
             settings,
             stop,
+            capture_history,
+            capture_epoch,
             worker: Some(worker),
         }
+    }
+
+    pub fn clear_history(&self) {
+        let epoch = self.capture_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        self.capture_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reset(epoch);
+    }
+
+    pub fn is_current(&self, frame: &AnalysisFrame) -> bool {
+        frame.capture_epoch == self.capture_epoch.load(Ordering::Acquire)
     }
 }
 
@@ -228,6 +254,9 @@ struct Analyzer {
     smoothed_db: Vec<f32>,
     previous_magnitudes: Vec<f32>,
     flux_history: VecDeque<f32>,
+    tempo_rate: u32,
+    tempo_countdown: u32,
+    cached_tempo: (f32, f32),
     last_window: WindowFunction,
 }
 
@@ -247,6 +276,9 @@ impl Analyzer {
             smoothed_db: vec![-120.0; bins],
             previous_magnitudes: vec![0.0; bins],
             flux_history: VecDeque::with_capacity(1024),
+            tempo_rate: 0,
+            tempo_countdown: 0,
+            cached_tempo: (0.0, 0.0),
             last_window: window,
         }
     }
@@ -381,12 +413,25 @@ impl Analyzer {
             .sum::<f32>()
             / magnitude_sum.max(1.0e-12);
         self.previous_magnitudes.copy_from_slice(&magnitudes);
+        if self.tempo_rate != settings.analysis_fps {
+            self.tempo_rate = settings.analysis_fps;
+            self.flux_history.clear();
+            self.cached_tempo = (0.0, 0.0);
+            self.tempo_countdown = 0;
+        }
         self.flux_history.push_back(flux);
         let max_flux_samples = (settings.analysis_fps * 10) as usize;
         while self.flux_history.len() > max_flux_samples {
             self.flux_history.pop_front();
         }
-        let (bpm, bpm_confidence) = estimate_bpm(&self.flux_history, settings.analysis_fps);
+        // Keep every onset sample, but run the diagnostic autocorrelation only
+        // twice a second rather than once per analysis frame.
+        if self.tempo_countdown == 0 {
+            self.cached_tempo = estimate_bpm(&self.flux_history, settings.analysis_fps);
+            self.tempo_countdown = (settings.analysis_fps / 2).max(1);
+        }
+        self.tempo_countdown -= 1;
+        let (bpm, bpm_confidence) = self.cached_tempo;
 
         let rms = [
             (squares[0] / self.size as f64).sqrt() as f32,
@@ -396,6 +441,7 @@ impl Analyzer {
         let mono_rms = ((rms[0] * rms[0] + rms[1] * rms[1]) * 0.5).sqrt();
 
         AnalysisFrame {
+            capture_epoch: 0,
             sequence,
             sample_rate,
             channels,
@@ -432,6 +478,8 @@ fn run_analysis(
     channels: Arc<std::sync::atomic::AtomicU32>,
     dropped_samples: Arc<std::sync::atomic::AtomicU64>,
     stop: Arc<AtomicBool>,
+    capture_history: Arc<Mutex<crate::capture_history::CaptureHistory>>,
+    requested_epoch: Arc<AtomicU64>,
 ) {
     let mut capture_rate = sample_rate.load(Ordering::Relaxed).max(1);
     let mut ring = vec![[0.0; 2]; capture_capacity(capture_rate)];
@@ -440,8 +488,20 @@ fn run_analysis(
     let mut since_analysis = 0_usize;
     let mut sequence = 0_u64;
     let mut analyzer = Analyzer::new(4096, WindowFunction::Hann);
+    let mut capture_epoch = requested_epoch.load(Ordering::Acquire);
 
     while !stop.load(Ordering::Acquire) {
+        let epoch = requested_epoch.load(Ordering::Acquire);
+        if epoch != capture_epoch {
+            capture_epoch = epoch;
+            ring.fill([0.0; 2]);
+            write_cursor = 0;
+            available = 0;
+            since_analysis = 0;
+            analyzer = Analyzer::new(analyzer.size, analyzer.last_window);
+            // Discard samples queued before the requested source/analysis reset.
+            while consumer.pop().is_ok() {}
+        }
         let rate = sample_rate.load(Ordering::Relaxed).max(1);
         if rate != capture_rate {
             capture_rate = rate;
@@ -449,6 +509,7 @@ fn run_analysis(
             write_cursor = 0;
             available = 0;
             since_analysis = 0;
+            analyzer = Analyzer::new(analyzer.size, analyzer.last_window);
         }
         let mut received = 0_usize;
         while let Ok(sample) = consumer.pop() {
@@ -464,13 +525,12 @@ fn run_analysis(
             analyzer = Analyzer::new(current.fft_size, current.window);
             since_analysis = current.fft_size;
         }
-        let hop = ((rate / current.analysis_fps.max(1)) as usize)
-            .clamp((current.fft_size / 16).max(1), current.fft_size / 2);
+        let hop = analysis_hop(rate, current.analysis_fps);
 
         if available >= current.fft_size && since_analysis >= hop {
             since_analysis %= hop;
             sequence += 1;
-            let frame = analyzer.analyze(
+            let mut frame = analyzer.analyze(
                 &ring,
                 write_cursor,
                 rate,
@@ -479,6 +539,14 @@ fn run_analysis(
                 sequence,
                 dropped_samples.load(Ordering::Relaxed),
             );
+            frame.capture_epoch = capture_epoch;
+            if requested_epoch.load(Ordering::Acquire) != capture_epoch {
+                continue;
+            }
+            capture_history
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(&frame, std::time::Instant::now());
             snapshot.store(Arc::new(frame));
         }
 
@@ -494,6 +562,12 @@ fn selected_sample(sample: StereoSample, mode: ChannelMode) -> f32 {
         ChannelMode::Left => sample[0],
         ChannelMode::Right => sample[1],
     }
+}
+
+fn analysis_hop(sample_rate: u32, target_fps: u32) -> usize {
+    // A small FFT must not force extra transforms above the requested rate.
+    // The capture ring still receives every sample, even when hop > FFT size.
+    (sample_rate / target_fps.max(1)).max(1) as usize
 }
 
 fn build_window(size: usize, kind: WindowFunction) -> Vec<f32> {
@@ -520,19 +594,24 @@ fn make_log_bands(
     max_frequency: f32,
     count: usize,
 ) -> Vec<SpectrumBand> {
-    if bins.len() < 2 || min_frequency >= max_frequency {
+    if bins.len() < 2 || min_frequency >= max_frequency || count == 0 {
         return Vec::new();
     }
     let ratio = (max_frequency / min_frequency.max(1.0)).powf(1.0 / count as f32);
+    let mut cursor = 0;
     (0..count)
         .map(|band| {
             let low = min_frequency * ratio.powf(band as f32);
             let high = min_frequency * ratio.powf((band + 1) as f32);
             let mut db = -120.0_f32;
-            for bin in bins {
-                if bin.frequency_hz >= low && bin.frequency_hz < high {
-                    db = db.max(bin.dbfs);
-                }
+            // FFT bins are ordered by frequency. Visit each bin once instead
+            // of scanning the whole spectrum for every summary band.
+            while cursor < bins.len() && bins[cursor].frequency_hz < low {
+                cursor += 1;
+            }
+            while cursor < bins.len() && bins[cursor].frequency_hz < high {
+                db = db.max(bins[cursor].dbfs);
+                cursor += 1;
             }
             SpectrumBand {
                 center_hz: (low * high).sqrt(),
@@ -603,6 +682,171 @@ fn estimate_bpm(flux: &VecDeque<f32>, fps: u32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_worker_captures_without_a_renderer_and_rejects_reset_epochs() {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(65_536);
+        let runtime = AnalysisRuntime::start(
+            consumer,
+            Arc::new(std::sync::atomic::AtomicU32::new(48_000)),
+            Arc::new(std::sync::atomic::AtomicU32::new(2)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        runtime.settings.lock().unwrap().fft_size = 512;
+        let first_epoch = runtime.capture_epoch.load(Ordering::Acquire);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while runtime.capture_history.lock().unwrap().since(0).len() < 3 {
+            for i in 0..512 {
+                let _ = producer.push([(i as f32 * 0.1).sin() * 0.5; 2]);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "analysis worker did not capture independently"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let before = runtime.snapshot.load_full();
+        assert!(runtime.is_current(&before));
+        runtime.clear_history();
+        assert!(!runtime.is_current(&before));
+        assert!(runtime.capture_history.lock().unwrap().since(0).is_empty());
+        while !runtime.is_current(&runtime.snapshot.load_full())
+            || runtime.capture_history.lock().unwrap().since(0).is_empty()
+        {
+            for _ in 0..512 {
+                let _ = producer.push([0.0; 2]);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "analysis worker did not resume after reset"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let after = runtime.snapshot.load_full();
+        assert!(runtime.is_current(&after));
+        assert_eq!(after.capture_epoch, first_epoch + 1);
+        assert!(after.sequence > before.sequence);
+    }
+
+    fn legacy_log_bands(
+        bins: &[FrequencyBin],
+        min_frequency: f32,
+        max_frequency: f32,
+        count: usize,
+    ) -> Vec<SpectrumBand> {
+        if bins.len() < 2 || min_frequency >= max_frequency {
+            return Vec::new();
+        }
+        let ratio = (max_frequency / min_frequency.max(1.0)).powf(1.0 / count as f32);
+        (0..count)
+            .map(|band| {
+                let low = min_frequency * ratio.powf(band as f32);
+                let high = min_frequency * ratio.powf((band + 1) as f32);
+                let mut db = -120.0_f32;
+                for bin in bins {
+                    if bin.frequency_hz >= low && bin.frequency_hz < high {
+                        db = db.max(bin.dbfs);
+                    }
+                }
+                SpectrumBand {
+                    center_hz: (low * high).sqrt(),
+                    dbfs: db,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn linear_summary_pass_matches_the_original_band_boundaries_and_levels() {
+        for rate in [44100.0, 48000.0, 96000.0] {
+            for size in [512, 4096, 16384] {
+                let bins: Vec<_> = (0..=size / 2)
+                    .map(|i| FrequencyBin {
+                        frequency_hz: i as f32 * rate / size as f32,
+                        magnitude: 0.0,
+                        dbfs: -70.0 + (i as f32 * 0.03).sin() * 50.0,
+                    })
+                    .collect();
+                for (low, high) in [(20.0, 20000.0), (500.0, 900.0), (1.0, rate * 0.5)] {
+                    let before = legacy_log_bands(&bins, low, high, 96);
+                    let after = make_log_bands(&bins, low, high, 96);
+                    assert_eq!(before.len(), after.len());
+                    for (a, b) in before.iter().zip(after) {
+                        assert_eq!(a.center_hz, b.center_hz);
+                        assert_eq!(a.dbfs, b.dbfs);
+                    }
+                }
+            }
+        }
+        assert!(make_log_bands(&[], 20.0, 20000.0, 0).is_empty());
+    }
+
+    #[test]
+    fn tempo_is_throttled_without_dropping_flux_and_resets_when_rate_changes() {
+        let mut analyzer = Analyzer::new(512, WindowFunction::Hann);
+        let mut settings = AnalysisSettings {
+            fft_size: 512,
+            ..Default::default()
+        };
+        let ring = vec![[0.1; 2]; 512];
+        analyzer.analyze(&ring, 0, 48000, 2, &settings, 1, 0);
+        assert_eq!(analyzer.tempo_countdown, 29);
+        analyzer.cached_tempo = (123.0, 0.7);
+        for sequence in 2..=30 {
+            let frame = analyzer.analyze(&ring, 0, 48000, 2, &settings, sequence, 0);
+            assert_eq!(frame.bpm, 123.0);
+        }
+        assert_eq!(analyzer.flux_history.len(), 30);
+        let frame = analyzer.analyze(&ring, 0, 48000, 2, &settings, 31, 0);
+        assert_eq!(frame.bpm, 0.0); // Recomputed, still insufficient audio.
+        settings.analysis_fps = 120;
+        analyzer.analyze(&ring, 0, 48000, 2, &settings, 32, 0);
+        assert_eq!(analyzer.flux_history.len(), 1);
+        assert_eq!(analyzer.tempo_countdown, 59);
+    }
+
+    #[test]
+    fn analysis_hop_obeys_requested_rate_instead_of_small_fft_overlap_limits() {
+        assert_eq!(analysis_hop(48000, 60), 800);
+        assert_eq!(analysis_hop(48000, 120), 400);
+        assert_eq!(analysis_hop(192000, 30), 6400);
+        assert_eq!(analysis_hop(0, 0), 1);
+    }
+
+    #[test]
+    #[ignore = "manual performance measurement; run with --ignored --nocapture"]
+    fn benchmark_summary_band_scan() {
+        let bins: Vec<_> = (0..=8192)
+            .map(|i| FrequencyBin {
+                frequency_hz: i as f32 * 48000.0 / 16384.0,
+                magnitude: 0.1,
+                dbfs: -50.0 + (i as f32 * 0.1).sin() * 30.0,
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        for _ in 0..200 {
+            std::hint::black_box(legacy_log_bands(
+                std::hint::black_box(&bins),
+                20.0,
+                20000.0,
+                96,
+            ));
+        }
+        let legacy = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..200 {
+            std::hint::black_box(make_log_bands(
+                std::hint::black_box(&bins),
+                20.0,
+                20000.0,
+                96,
+            ));
+        }
+        eprintln!(
+            "200 summary-band builds (FFT 16384): legacy={legacy:?}, linear={:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn waveform_capture_is_full_rate_chronological_and_independent_of_fft() {

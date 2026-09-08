@@ -9,7 +9,7 @@ use crate::audio::{AudioEngine, AudioEvent, AudioSource, AudioStatus, SourceKind
 use crate::global_bar::{BarInfo, GlobalBar};
 use crate::help::{self, HoverHelp};
 use crate::icons::{self, Icon};
-use crate::modules::{ModuleKind, ModulePane};
+use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::AppTheme;
 
 const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
@@ -24,6 +24,9 @@ pub struct SymphosApp {
     last_theme_check: Instant,
     fullscreen: bool,
     show_inspector: bool,
+    show_issues: bool,
+    show_shortcuts: bool,
+    settings_clipboard: Option<ModuleSettings>,
     display_fps: f32,
     last_frame: Instant,
     panes: [ModulePane; 4],
@@ -52,6 +55,9 @@ impl SymphosApp {
             last_theme_check: Instant::now(),
             fullscreen: false,
             show_inspector: false,
+            show_issues: false,
+            show_shortcuts: false,
+            settings_clipboard: None,
             display_fps: 0.0,
             last_frame: Instant::now(),
             panes: [
@@ -71,6 +77,7 @@ impl SymphosApp {
     }
 
     fn reset_modules(&mut self) {
+        self.engine.analysis.clear_history();
         for pane in &mut self.panes {
             pane.reset();
         }
@@ -86,7 +93,13 @@ impl SymphosApp {
                     sources_changed = true;
                 }
                 AudioEvent::Status(status) => {
-                    if !matches!(status, AudioStatus::Streaming) {
+                    if let AudioStatus::Error(message) = &status {
+                        crate::issues::record("Audio capture", message);
+                    }
+                    if matches!(
+                        status,
+                        AudioStatus::Connecting | AudioStatus::Idle | AudioStatus::Error(_)
+                    ) {
                         self.reset_modules();
                     }
                     self.status = status;
@@ -176,7 +189,30 @@ impl SymphosApp {
             ))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
+                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
+                    }
+                    let compatible = self.settings_clipboard.as_ref().is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
+                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
+                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.").clicked() {
+                        self.paste_module_settings();
+                    }
+                });
+                if let Some(settings) = &self.settings_clipboard { ui.small(format!("Clipboard: {}", settings.kind().label())); }
+                ui.separator();
                 ui.push_id(self.selected_pane, |ui| {
+                    ui.data_mut(|d| {
+                        d.insert_temp(
+                            egui::Id::new("parameter-context"),
+                            format!(
+                                "Pane {} · {} · {}",
+                                self.selected_pane + 1,
+                                self.panes[self.selected_pane].kind.label(),
+                                self.panes[self.selected_pane].active_section().title()
+                            ),
+                        )
+                    });
                     self.panes[self.selected_pane].controls(ui, frame)
                 });
             });
@@ -187,10 +223,74 @@ impl SymphosApp {
         context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
     }
 
+    fn handle_shortcut(&mut self, ctx: &egui::Context, frame: &AnalysisFrame, now: Instant) {
+        use crate::shortcuts::Action;
+        let live = matches!(self.status, AudioStatus::Streaming)
+            && self.selected_node.is_some()
+            && frame.sequence > 0
+            && self.engine.analysis.is_current(frame);
+        match crate::shortcuts::take_action(
+            ctx,
+            self.show_shortcuts || self.show_issues || self.show_inspector,
+        ) {
+            Some(Action::Pause) if live || self.panes[self.selected_pane].is_frozen() => {
+                self.panes[self.selected_pane].toggle_freeze(frame, now)
+            }
+            Some(Action::PauseAll) => {
+                let pause = self.panes.iter().any(|pane| !pane.is_frozen());
+                for pane in &mut self.panes {
+                    if pane.is_frozen() != pause && (live || pane.is_frozen()) {
+                        pane.toggle_freeze(frame, now);
+                    }
+                }
+            }
+            Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
+            Some(Action::Expand) => {
+                self.focused_pane = if self.focused_pane == Some(self.selected_pane) {
+                    None
+                } else {
+                    Some(self.selected_pane)
+                }
+            }
+            Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
+            Some(Action::Restore) => self.focused_pane = None,
+            Some(Action::Help) => self.help_open = !self.help_open,
+            Some(Action::Bindings) => self.show_shortcuts = true,
+            Some(Action::CopySettings) => {
+                self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings())
+            }
+            Some(Action::PasteSettings) => self.paste_module_settings(),
+            Some(Action::Pane(index)) => {
+                self.selected_pane = index;
+                if self.focused_pane.is_some() {
+                    self.focused_pane = Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn paste_module_settings(&mut self) {
+        if let Some(settings) = &self.settings_clipboard {
+            if !self.panes[self.selected_pane].paste_settings(settings) {
+                crate::issues::record(
+                    "Paste settings",
+                    &format!(
+                        "Clipboard contains {} settings; select a matching module before pasting.",
+                        settings.kind().label()
+                    ),
+                );
+            }
+        } else {
+            crate::issues::record("Paste settings", "No module settings have been copied yet.");
+        }
+    }
+
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
         let live = matches!(self.status, AudioStatus::Streaming)
             && self.selected_node.is_some()
-            && frame.sequence > 0;
+            && frame.sequence > 0
+            && self.engine.analysis.is_current(frame);
         let selected = self.selected_pane == index;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 7.0, self.theme.panel);
@@ -358,12 +458,6 @@ impl eframe::App for SymphosApp {
         self.refresh_theme(ui.ctx());
         help::begin_frame(ui);
         self.process_audio_events();
-        if ui.input(|input| input.key_pressed(egui::Key::F11)) {
-            self.toggle_fullscreen(ui.ctx());
-        }
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.focused_pane = None;
-        }
         let now = Instant::now();
         let elapsed = now
             .duration_since(self.last_frame)
@@ -372,6 +466,7 @@ impl eframe::App for SymphosApp {
         self.last_frame = now;
         self.display_fps += (elapsed.recip() - self.display_fps) * 0.08;
         let snapshot = self.engine.analysis.snapshot.load_full();
+        self.handle_shortcut(ui.ctx(), &snapshot, now);
         let rect = ui.available_rect_before_wrap();
         ui.painter().rect_filled(rect, 0.0, self.theme.background);
         let header = Rect::from_min_max(
@@ -387,6 +482,14 @@ impl eframe::App for SymphosApp {
                 let source = self.source_selector(ui);
                 let options = icons::sized_button(ui, Icon::Gear, false, source.rect.height(), "View settings: dashboard layout, fullscreen, and detailed diagnostics.");
                 egui::Popup::menu(&options).show(|ui| {
+                    if ui.button("Keyboard shortcuts · Ctrl+K").clicked() {
+                        self.show_shortcuts = true;
+                        ui.close();
+                    }
+                    if ui.button(format!("Issue log ({})", crate::issues::count())).clicked() {
+                        self.show_issues = true;
+                        ui.close();
+                    }
                     if ui.button("Reset pane sizes").help_text("Restore the default dashboard proportions and leave expanded-pane mode.").clicked() {
                         self.top_fraction = 0.62;
                         self.bottom_splits = [1.0 / 3.0, 2.0 / 3.0];
@@ -434,6 +537,24 @@ impl eframe::App for SymphosApp {
         if reset {
             self.reset_modules();
         }
+        // Consume capture for every assigned pane, even when another pane is
+        // expanded. The analysis-side archive catches up after window occlusion.
+        let after = self
+            .panes
+            .iter()
+            .map(|pane| pane.last_capture)
+            .min()
+            .unwrap_or(0);
+        let captures = self
+            .engine
+            .analysis
+            .capture_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .since(after);
+        for pane in &mut self.panes {
+            pane.ingest(&captures);
+        }
         for pane in &mut self.panes {
             pane.set_channel_view(self.global_bar.stereo, self.global_bar.channel);
         }
@@ -480,6 +601,23 @@ impl eframe::App for SymphosApp {
             ui.painter().rect_filled(help_rect, 7.0, self.theme.panel);
             help::draw(ui, help_rect, &mut self.help_open);
         }
+        if self.show_issues {
+            let details = format!(
+                "Source: {}\nState: {}\nSample rate: {} Hz · channels: {} · FFT: {}\nDropped samples: {} · capture epoch: {}\nPane {} · paused: {}\n{:#?}",
+                self.selected_node.as_deref().unwrap_or("None"),
+                self.status.label(),
+                snapshot.sample_rate,
+                snapshot.channels,
+                snapshot.fft_size,
+                snapshot.dropped_samples,
+                snapshot.capture_epoch,
+                self.selected_pane + 1,
+                self.panes[self.selected_pane].is_frozen(),
+                self.panes[self.selected_pane].copy_settings()
+            );
+            crate::issues::show(ui.ctx(), &mut self.show_issues, &details);
+        }
+        crate::shortcuts::show(ui.ctx(), &mut self.show_shortcuts);
         let target_rate = self
             .engine
             .analysis

@@ -57,13 +57,15 @@ impl FrequencySettings {
             ui.selectable_value(&mut self.logarithmic, false, "Linear").help_text("Space frequencies evenly in Hz. Retained history is redrawn, not cleared.");
         });
         ui.add(
-            egui::Slider::new(&mut self.min_hz, 10.0..=2000.0)
+            crate::parameter::Parameter::new(&mut self.min_hz, 10.0..=2000.0, 20.0)
+                .bounds(1.0..=(self.max_hz - 1.0) as f64)
                 .logarithmic(true)
                 .text("Low Hz"),
         )
         .help_text("Lowest displayed frequency in Hz. Changes only this module's view.");
         ui.add(
-            egui::Slider::new(&mut self.max_hz, 2000.0..=24_000.0)
+            crate::parameter::Parameter::new(&mut self.max_hz, 2000.0..=24_000.0, 20_000.0)
+                .bounds((self.min_hz + 1.0) as f64..=192_000.0)
                 .logarithmic(true)
                 .text("High Hz"),
         )
@@ -72,35 +74,50 @@ impl FrequencySettings {
         ui.separator();
         ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
         if self.note_labels {
-            ui.add(egui::Slider::new(&mut self.tuning_hz, 400.0..=480.0).text("A4 Hz"))
+            ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).bounds(200.0..=1000.0).text("A4 Hz"))
                 .help_text("Tuning reference for note labels. Standard concert tuning is A4 = 440 Hz; this does not change the audio.");
         }
     }
 
     pub fn response_controls(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().slider_width = ui.spacing().slider_width.min(78.0);
-        ui.add(egui::Slider::new(&mut self.gain, -24.0..=36.0).text("Gain dB"))
-            .help_text(
-                "Boost or reduce displayed levels in this module. Does not change audio volume.",
-            );
-        ui.add(egui::Slider::new(&mut self.smoothing, 0.0..=0.98).text("Time smooth"))
-            .help_text("Higher values smooth rapid level changes; lower values respond faster.");
-        ui.add(egui::Slider::new(&mut self.decay, 6.0..=96.0).text("Decay dB/s"))
-            .help_text(
-                "How quickly displayed levels fall after a peak. Higher values fall faster.",
-            );
+        ui.add(
+            crate::parameter::Parameter::new(&mut self.gain, -24.0..=36.0, 0.0)
+                .bounds(-96.0..=96.0)
+                .text("Gain dB"),
+        )
+        .help_text(
+            "Boost or reduce displayed levels in this module. Does not change audio volume.",
+        );
+        ui.add(
+            crate::parameter::Parameter::new(&mut self.smoothing, 0.0..=0.98, 0.72)
+                .text("Time smooth"),
+        )
+        .help_text("Higher values smooth rapid level changes; lower values respond faster.");
+        ui.add(
+            crate::parameter::Parameter::new(&mut self.decay, 6.0..=96.0, 36.0)
+                .bounds(0.0..=240.0)
+                .text("Decay dB/s"),
+        )
+        .help_text("How quickly displayed levels fall after a peak. Higher values fall faster.");
         ui.separator();
-        ui.add(egui::Slider::new(&mut self.frequency_smoothing, 0..=8).text("Freq. smooth"))
+        ui.add(crate::parameter::Parameter::new(&mut self.frequency_smoothing, 0..=8, 0).text("Freq. smooth"))
             .help_text("Blend neighboring displayed frequency bands. 0 is off; higher values soften jagged peaks across frequency, independently of time smoothing. Retained history is reprocessed without clearing it; audio and FFT resolution are unchanged.");
     }
 
     pub fn level_controls(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.floor, -120.0..=-24.0).text("Floor dB"))
-            .help_text("Quietest visible signal level. Lower this to reveal quieter detail.");
-        ui.add(egui::Slider::new(&mut self.ceiling, -18.0..=12.0).text("Ceiling dB"))
-            .help_text(
-                "Signal level mapped to maximum intensity or height. Does not limit the audio.",
-            );
+        ui.add(
+            crate::parameter::Parameter::new(&mut self.floor, -120.0..=-24.0, -90.0)
+                .bounds(-140.0..=(self.ceiling - 1.0) as f64)
+                .text("Floor dB"),
+        )
+        .help_text("Quietest visible signal level. Lower this to reveal quieter detail.");
+        ui.add(
+            crate::parameter::Parameter::new(&mut self.ceiling, -18.0..=12.0, 0.0)
+                .bounds((self.floor + 1.0) as f64..=48.0)
+                .text("Ceiling dB"),
+        )
+        .help_text("Signal level mapped to maximum intensity or height. Does not limit the audio.");
     }
 
     pub fn frequency(&self, fraction: f32, sample_rate: u32) -> f32 {
@@ -271,7 +288,7 @@ impl FrequencyData {
 pub struct HistoryRow {
     pub time: Instant,
     pub levels: [f32; BANDS],
-    pub magnitudes: Vec<f32>,
+    pub magnitudes: std::sync::Arc<[f32]>,
     pub sequence: u64,
 }
 
@@ -293,7 +310,7 @@ impl History {
         self.last_sequence = 0;
     }
 
-    pub fn update(&mut self, frame: &AnalysisFrame, now: Instant, live: bool) {
+    fn prepare(&mut self, now: Instant, format: Option<(u32, usize)>) {
         while self
             .rows
             .front()
@@ -301,12 +318,9 @@ impl History {
         {
             self.rows.pop_front();
         }
-        if live
-            && !frame.bins.is_empty()
-            && self.format != Some((frame.sample_rate, frame.fft_size))
-        {
+        if format.is_some() && self.format != format {
             self.clear();
-            self.format = Some((frame.sample_rate, frame.fft_size));
+            self.format = format;
         }
         // Replay retained raw magnitudes when display processing changes. Merely
         // relabeling old bands would incorrectly move their frequencies.
@@ -331,6 +345,40 @@ impl History {
             }
             self.applied_settings = Some(self.data.settings.clone());
         }
+    }
+
+    pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
+        self.prepare(now, Some((frame.sample_rate, frame.fft_size)));
+        if frame.sequence <= self.last_sequence {
+            return;
+        }
+        let (changed, _) = self.data.update_magnitudes(
+            frame.magnitudes.len(),
+            |i| frame.magnitudes[i],
+            frame.sample_rate,
+            frame.fft_size,
+            frame.sequence,
+            now,
+        );
+        if changed {
+            self.last_sequence = frame.sequence;
+            self.rows.push_back(HistoryRow {
+                time: now,
+                levels: self.data.levels,
+                magnitudes: frame.magnitudes.clone(),
+                sequence: frame.sequence,
+            });
+        }
+        while self.rows.len() > 901 {
+            self.rows.pop_front();
+        }
+    }
+
+    pub fn update(&mut self, frame: &AnalysisFrame, now: Instant, live: bool) {
+        self.prepare(
+            now,
+            (live && !frame.bins.is_empty()).then_some((frame.sample_rate, frame.fft_size)),
+        );
         if live
             && frame.sequence != self.last_sequence
             && self
@@ -355,6 +403,10 @@ impl History {
     }
 
     pub fn sample(&self, now: Instant, age: f32) -> Option<&[f32; BANDS]> {
+        self.sample_row(now, age).map(|row| &row.levels)
+    }
+
+    pub fn sample_row(&self, now: Instant, age: f32) -> Option<&HistoryRow> {
         let target = now.checked_sub(std::time::Duration::from_secs_f32(age.max(0.0)))?;
         let index = self.rows.partition_point(|row| row.time <= target);
         let row = self.rows.get(index.saturating_sub(1))?;
@@ -364,7 +416,7 @@ impl History {
         } else {
             row.time.duration_since(target)
         };
-        (distance.as_secs_f32() < 0.12).then_some(&row.levels)
+        (distance.as_secs_f32() < 0.12).then_some(row)
     }
 }
 

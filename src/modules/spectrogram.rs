@@ -41,6 +41,19 @@ struct RasterKey {
     theme: AppTheme,
 }
 
+module_settings!(Spectrogram, SpectrogramSettings, {
+frequency: super::frequency::FrequencySettings => history.data.settings,
+seconds: f32 => seconds,
+palette: Palette => palette,
+contrast: f32 => contrast,
+vertical: bool => vertical,
+smooth: bool => smooth,
+time_pixels: usize => time_pixels,
+frequency_pixels: usize => frequency_pixels,
+grid: bool => grid,
+labels: bool => labels,
+});
+
 impl Default for Spectrogram {
     fn default() -> Self {
         Self {
@@ -61,6 +74,13 @@ impl Default for Spectrogram {
 }
 
 impl Spectrogram {
+    pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
+        self.history.ingest(frame, now);
+    }
+    #[cfg(test)]
+    pub fn history_len(&self) -> usize {
+        self.history.rows.len()
+    }
     pub fn clear(&mut self) {
         self.history.clear();
         self.texture = None;
@@ -78,7 +98,7 @@ impl Spectrogram {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Time & History", |ui| {
-            ui.add(egui::Slider::new(&mut self.seconds, 0.1..=30.0).logarithmic(true).text("History s"))
+            ui.add(crate::parameter::Parameter::new(&mut self.seconds, 0.1..=30.0, 8.0).logarithmic(true).text("History s"))
                 .help_text("Visible history duration. Retains up to 30 seconds so changing the view does not discard recent audio.");
         });
         settings_panel(ui, "Frequency Range", |ui| {
@@ -97,9 +117,9 @@ impl Spectrogram {
                 }).response.help_text("Change scrolling orientation without clearing captured history.");
             ui.checkbox(&mut self.smooth, "Smooth pixels")
                 .help_text("Interpolate between display cells. Turn off for sharp, pixelated cells. Does not change FFT or frequency smoothing.");
-            ui.add(egui::Slider::new(&mut self.time_pixels, 64..=1024).text("Time cells"))
+            ui.add(crate::parameter::Parameter::new(&mut self.time_pixels, 64..=1024, 240).text("Time cells"))
                 .help_text("Display resolution along time. More cells produce a finer raster, not a higher capture rate; history is sampled up to 30 times per second.");
-            ui.add(egui::Slider::new(&mut self.frequency_pixels, 24..=BANDS).text("Freq. cells"))
+            ui.add(crate::parameter::Parameter::new(&mut self.frequency_pixels, 24..=BANDS, BANDS).text("Freq. cells"))
                 .help_text("Displayed frequency rows or columns. Fewer cells group bands using their loudest level to preserve peaks. FFT resolution is unchanged.");
             ui.separator();
             ui.strong("Color & level");
@@ -296,6 +316,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn copying_appearance_leaves_destination_history_intact() {
+        let source = Spectrogram {
+            seconds: 2.0,
+            vertical: true,
+            palette: Palette::Heatmap,
+            ..Spectrogram::default()
+        };
+        let mut target = Spectrogram::default();
+        target.history.rows.push_back(HistoryRow {
+            time: Instant::now(),
+            levels: [-25.0; BANDS],
+            magnitudes: vec![0.1].into(),
+            sequence: 9,
+        });
+        target.apply_settings(&source.settings_snapshot());
+        assert_eq!(target.seconds, 2.0);
+        assert!(target.vertical);
+        assert_eq!(target.history.rows.len(), 1);
+        assert_eq!(target.history.rows[0].sequence, 9);
+    }
+
+    #[test]
     fn paused_raster_is_cached_but_style_changes_upload_without_clearing_history() {
         let context = egui::Context::default();
         let mut spectrogram = Spectrogram::default();
@@ -303,7 +345,7 @@ mod tests {
         spectrogram.history.rows.push_back(HistoryRow {
             time: now,
             levels: [-30.0; BANDS],
-            magnitudes: vec![],
+            magnitudes: vec![].into(),
             sequence: 1,
         });
         let render = |spectrogram: &mut Spectrogram| {
@@ -351,7 +393,7 @@ mod tests {
         spectrogram.history.rows.push_back(HistoryRow {
             time: now,
             levels,
-            magnitudes: vec![],
+            magnitudes: vec![].into(),
             sequence: 1,
         });
         let horizontal = spectrogram.image(now, &theme);

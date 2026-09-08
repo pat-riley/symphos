@@ -22,6 +22,12 @@ Live progress is tracked in the
 - Automatically detect the musical key of a song from accumulated pitch-class
   evidence, with major/minor estimates, confidence, and an insufficient-audio state.
 - Define named low, mid, and high bands alongside arbitrary frequency bands.
+- Potential improvement: capture a reference spectrum as a faint overlay while
+  live analysis continues, for comparing sounds or EQ changes. Evaluate range
+  alignment and clearly distinguish the reference from peak hold.
+- Potential improvement: an optional measurement cursor with pinned frequency/
+  note, level, and time readouts, especially for frozen spectrogram inspection.
+  Keep it distinct from Info View and avoid obscuring the visualization.
 
 Exit condition: analysis signals remain stable during a 30-minute session and
 the app reports enough timing data to diagnose a missed frame or audio sample;

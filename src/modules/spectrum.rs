@@ -30,6 +30,22 @@ pub struct Spectrum {
     labels: bool,
 }
 
+module_settings!(Spectrum, SpectrumSettings, {
+frequency: super::frequency::FrequencySettings => data.settings,
+peak_hold: bool => peak_hold,
+hold_seconds: f32 => hold_seconds,
+peak_falloff: f32 => peak_falloff,
+infinite_hold: bool => infinite_hold,
+style: TraceStyle => style,
+bar_gap: f32 => bar_gap,
+thickness: f32 => thickness,
+fill_opacity: f32 => fill_opacity,
+palette: Palette => palette,
+contrast: f32 => contrast,
+grid: bool => grid,
+labels: bool => labels,
+});
+
 impl Default for Spectrum {
     fn default() -> Self {
         Self {
@@ -92,9 +108,9 @@ impl Spectrum {
                 ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
                     .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
                 ui.add_enabled_ui(!self.infinite_hold, |ui| {
-                    ui.add(egui::Slider::new(&mut self.hold_seconds, 0.0..=10.0).text("Hold s"))
+                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).bounds(0.0..=60.0).text("Hold s"))
                         .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
-                    ui.add(egui::Slider::new(&mut self.peak_falloff, 1.0..=96.0).text("Fall dB/s"))
+                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).bounds(0.0..=240.0).text("Fall dB/s"))
                         .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
                 });
                 if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
@@ -106,17 +122,26 @@ impl Spectrum {
             ui.strong("Trace");
             self.style.controls(ui, true);
             if self.style == TraceStyle::Bars {
-                ui.add(egui::Slider::new(&mut self.bar_gap, 0.0..=90.0).text("Gap %"))
-                    .help_text(
-                        "Space between bars as a percentage of each frequency band's width.",
-                    );
+                ui.add(
+                    crate::parameter::Parameter::new(&mut self.bar_gap, 0.0..=90.0, 15.0)
+                        .text("Gap %"),
+                )
+                .help_text("Space between bars as a percentage of each frequency band's width.");
             } else {
-                ui.add(egui::Slider::new(&mut self.thickness, 0.5..=4.0).text("Line px"))
-                    .help_text("Trace outline thickness in screen pixels.");
+                ui.add(
+                    crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.5)
+                        .bounds(0.1..=20.0)
+                        .text("Line px"),
+                )
+                .help_text("Trace outline thickness in screen pixels.");
             }
             if self.style == TraceStyle::Filled {
-                ui.add(egui::Slider::new(&mut self.fill_opacity, 0.05..=1.0).text("Fill opacity"))
-                    .help_text("Opacity of the filled area beneath the spectrum.");
+                ui.add(
+                    crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                        .bounds(0.0..=1.0)
+                        .text("Fill opacity"),
+                )
+                .help_text("Opacity of the filled area beneath the spectrum.");
             }
             ui.separator();
             ui.strong("Color & level");
