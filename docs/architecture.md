@@ -142,6 +142,14 @@ about 29 MiB of magnitude storage per history. Stale snapshots leave gaps;
 capture format changes clear incompatible history.
 Changing sources or shared FFT/window/channel settings clears pane histories.
 
+Waterfall meshes are cached behind a shared immutable handle; unchanged paused
+views reuse geometry rather than re-projecting/sorting/copying it. The key
+includes sampled capture sequences, settings, camera, viewport rectangle, and
+theme. Navigation, new data, style edits, expiry, and resizing invalidate it.
+Cheap guides and interactive gizmos still draw normally. An ignored benchmark
+compares cached requests with the identical uncached mesh builder, not total
+GPU frame time.
+
 The waterfall projects a bounded frequency/time surface on the UI lane and
 submits one mesh to egui's existing GPU renderer. Surface cells are ordered
 far-to-near by their ground-plane footprints rather than average 3D face depth,

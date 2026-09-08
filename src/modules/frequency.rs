@@ -403,6 +403,10 @@ impl History {
     }
 
     pub fn sample(&self, now: Instant, age: f32) -> Option<&[f32; BANDS]> {
+        self.sample_row(now, age).map(|row| &row.levels)
+    }
+
+    pub fn sample_row(&self, now: Instant, age: f32) -> Option<&HistoryRow> {
         let target = now.checked_sub(std::time::Duration::from_secs_f32(age.max(0.0)))?;
         let index = self.rows.partition_point(|row| row.time <= target);
         let row = self.rows.get(index.saturating_sub(1))?;
@@ -412,7 +416,7 @@ impl History {
         } else {
             row.time.duration_since(target)
         };
-        (distance.as_secs_f32() < 0.12).then_some(&row.levels)
+        (distance.as_secs_f32() < 0.12).then_some(row)
     }
 }
 

@@ -120,6 +120,15 @@ pub struct Waterfall {
     last_draw: Option<Instant>,
     mode: RenderMode,
     palette: Palette,
+    mesh_cache: Option<(MeshKey, std::sync::Arc<egui::Mesh>)>,
+}
+
+#[derive(PartialEq)]
+struct MeshKey {
+    settings: WaterfallSettings,
+    plot: Rect,
+    samples: Vec<Option<u64>>,
+    theme: AppTheme,
 }
 
 module_settings!(Waterfall, WaterfallSettings, {
@@ -201,6 +210,7 @@ impl Default for Waterfall {
             last_draw: None,
             mode: RenderMode::Surface,
             palette: Palette::default(),
+            mesh_cache: None,
         }
     }
 }
@@ -224,6 +234,7 @@ impl Waterfall {
 
     pub fn clear(&mut self) {
         self.history.clear();
+        self.mesh_cache = None;
     }
 
     fn reset_camera(&mut self) {
@@ -541,67 +552,37 @@ impl Waterfall {
         });
     }
 
-    pub fn draw(
+    fn cached_mesh(
         &mut self,
-        ui: &mut egui::Ui,
-        rect: Rect,
-        frame: &AnalysisFrame,
-        theme: &AppTheme,
+        camera: &Camera,
+        plot: Rect,
         now: Instant,
-        live: bool,
-    ) {
-        self.history.update(frame, now, live);
-        self.advance_camera(now);
-        let plot = rect.shrink2(Vec2::new(44.0, 32.0));
-        let response = ui.interact(
-            rect,
-            ui.id().with("waterfall-camera"),
-            Sense::click_and_drag(),
-        );
-        let shift = ui.input(|input| input.modifiers.shift);
-        let panning = response.dragged_by(egui::PointerButton::Secondary)
-            || response.dragged_by(egui::PointerButton::Middle)
-            || (shift && response.dragged_by(egui::PointerButton::Primary));
-        if panning {
-            self.auto_orbit = false;
-            self.pan += response.drag_delta() / plot.size().max(Vec2::splat(1.0));
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        } else if response.dragged_by(egui::PointerButton::Primary) {
-            self.orbit(response.drag_delta());
+        theme: &AppTheme,
+    ) -> std::sync::Arc<egui::Mesh> {
+        let key = MeshKey {
+            settings: self.settings_snapshot(),
+            plot,
+            theme: theme.clone(),
+            samples: (0..self.detail)
+                .map(|row| {
+                    self.history
+                        .sample_row(now, row as f32 / (self.detail - 1) as f32 * self.seconds)
+                        .map(|sample| sample.sequence)
+                })
+                .collect(),
+        };
+        if let Some((previous, mesh)) = &self.mesh_cache
+            && *previous == key
+        {
+            return mesh.clone();
         }
-        if response.hovered() && shift && !response.dragged() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        }
-        if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            self.zoom_by_scroll(scroll);
-        }
-        if response.double_clicked_by(egui::PointerButton::Primary) && !shift {
-            self.reset_camera();
-        }
-        response.help_text("Drag to rotate. Right-drag, middle-drag, or Shift + left-drag to pan. Scroll to zoom. Double-click to reset the camera.");
-        let painter = ui.painter_at(rect);
-        let camera = self.camera(plot);
-        let project = |x, y, z| camera.project(self.geometry_point([x, y, z])).0;
-        let base_stroke = Stroke::new(0.6, mix(theme.background, theme.muted, 0.35));
-        for step in 0..if self.guides && self.floor_grid { 9 } else { 0 } {
-            let t = step as f32 / 8.0;
-            painter.line_segment(
-                [
-                    project(-1.4 + t * 2.8, 0.0, -1.0),
-                    project(-1.4 + t * 2.8, 0.0, 1.0),
-                ],
-                base_stroke,
-            );
-            painter.line_segment(
-                [
-                    project(-1.4, 0.0, -1.0 + t * 2.0),
-                    project(1.4, 0.0, -1.0 + t * 2.0),
-                ],
-                base_stroke,
-            );
-        }
+        let mesh = std::sync::Arc::new(self.build_mesh(camera, now, theme));
+        self.mesh_cache = Some((key, mesh.clone()));
+        mesh
+    }
 
+    fn build_mesh(&self, camera: &Camera, now: Instant, theme: &AppTheme) -> egui::Mesh {
+        let project = |x, y, z| camera.project(self.geometry_point([x, y, z])).0;
         // CPU projection feeds a single GPU mesh. Surface cells use a ground-plane
         // visibility order; steep heights must not change which cell is in front.
         let settings = &self.history.data.settings;
@@ -780,7 +761,73 @@ impl Waterfall {
                 }
             }
         }
-        painter.add(egui::Shape::mesh(mesh));
+        mesh
+    }
+
+    pub fn draw(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        frame: &AnalysisFrame,
+        theme: &AppTheme,
+        now: Instant,
+        live: bool,
+    ) {
+        self.history.update(frame, now, live);
+        self.advance_camera(now);
+        let plot = rect.shrink2(Vec2::new(44.0, 32.0));
+        let response = ui.interact(
+            rect,
+            ui.id().with("waterfall-camera"),
+            Sense::click_and_drag(),
+        );
+        let shift = ui.input(|input| input.modifiers.shift);
+        let panning = response.dragged_by(egui::PointerButton::Secondary)
+            || response.dragged_by(egui::PointerButton::Middle)
+            || (shift && response.dragged_by(egui::PointerButton::Primary));
+        if panning {
+            self.auto_orbit = false;
+            self.pan += response.drag_delta() / plot.size().max(Vec2::splat(1.0));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if response.dragged_by(egui::PointerButton::Primary) {
+            self.orbit(response.drag_delta());
+        }
+        if response.hovered() && shift && !response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        if response.hovered() {
+            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            self.zoom_by_scroll(scroll);
+        }
+        if response.double_clicked_by(egui::PointerButton::Primary) && !shift {
+            self.reset_camera();
+        }
+        response.help_text("Drag to rotate. Right-drag, middle-drag, or Shift + left-drag to pan. Scroll to zoom. Double-click to reset the camera.");
+        let painter = ui.painter_at(rect);
+        let camera = self.camera(plot);
+        let mesh = self.cached_mesh(&camera, plot, now, theme);
+        let project = |x, y, z| camera.project(self.geometry_point([x, y, z])).0;
+        let base_stroke = Stroke::new(0.6, mix(theme.background, theme.muted, 0.35));
+        for step in 0..if self.guides && self.floor_grid { 9 } else { 0 } {
+            let t = step as f32 / 8.0;
+            painter.line_segment(
+                [
+                    project(-1.4 + t * 2.8, 0.0, -1.0),
+                    project(-1.4 + t * 2.8, 0.0, 1.0),
+                ],
+                base_stroke,
+            );
+            painter.line_segment(
+                [
+                    project(-1.4, 0.0, -1.0 + t * 2.0),
+                    project(1.4, 0.0, -1.0 + t * 2.0),
+                ],
+                base_stroke,
+            );
+        }
+
+        painter.add(egui::Shape::Mesh(mesh));
+        let settings = &self.history.data.settings;
         if self.guides && self.axes {
             let axis_stroke = Stroke::new(1.0, theme.muted);
             painter.line_segment(
@@ -1153,6 +1200,75 @@ fn mesh_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_mesh_reuses_unchanged_views_and_invalidates_data_camera_style_and_size() {
+        let now = Instant::now();
+        let mut waterfall = populated_waterfall(now);
+        let mut plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let first = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+        let repeated = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+        assert!(std::sync::Arc::ptr_eq(&first, &repeated));
+        let mut previous = repeated;
+        for edit in 0..5 {
+            match edit {
+                0 => waterfall.yaw += 0.5,
+                1 => waterfall.mode = RenderMode::Bars,
+                2 => waterfall.palette = Palette::Heatmap,
+                3 => plot = plot.translate(Vec2::new(10.0, 0.0)),
+                _ => waterfall.history.rows[0].sequence = 2,
+            }
+            let next = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+            assert!(!std::sync::Arc::ptr_eq(&previous, &next));
+            previous = next;
+        }
+        let expired = waterfall.cached_mesh(
+            &waterfall.camera(plot),
+            plot,
+            now + std::time::Duration::from_secs(31),
+            &theme,
+        );
+        assert!(!std::sync::Arc::ptr_eq(&previous, &expired));
+        assert!(expired.vertices.is_empty());
+    }
+
+    #[test]
+    #[ignore = "manual performance measurement; run with --ignored --nocapture"]
+    fn benchmark_paused_waterfall_mesh_cache() {
+        let now = Instant::now();
+        let mut waterfall = Waterfall::default();
+        for i in (0..90).rev() {
+            waterfall
+                .history
+                .rows
+                .push_back(super::super::frequency::HistoryRow {
+                    time: now - std::time::Duration::from_millis(i * 34),
+                    sequence: 90 - i,
+                    levels: std::array::from_fn(|band| {
+                        -60.0 + (band as f32 * 0.2 + i as f32 * 0.1).sin() * 25.0
+                    }),
+                    magnitudes: vec![].into(),
+                });
+        }
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let camera = waterfall.camera(plot);
+        let theme = AppTheme::default();
+        let start = Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(waterfall.build_mesh(&camera, now, &theme));
+        }
+        let uncached = start.elapsed();
+        waterfall.cached_mesh(&camera, plot, now, &theme);
+        let start = Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(waterfall.cached_mesh(&camera, plot, now, &theme));
+        }
+        eprintln!(
+            "100 paused waterfall mesh requests: uncached={uncached:?}, cached={:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn bars_preserve_group_peaks_and_respect_size_spacing_floor_and_history_gaps() {
