@@ -17,7 +17,7 @@ and visual parameter mapping are still on the roadmap.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
 - Four resizable panes with interchangeable waterfall, spectrum, waveform,
   and spectrogram modules
-- A live 3D waterfall with Surface, Lines, Y Lines, Wireframe, Dots, and Stems render styles,
+- A live 3D waterfall with Surface, Lines, Y Lines, Wireframe, Dots, Stems, and Bars render styles,
   fully hideable guides, rotation, zoom, and 0.1–30 second history (2 seconds by default)
 - Independent waterfall X/Y lengths (0.25×–10×, default 1× each) without changing frequency range or history duration
 - Independent frequency range, linear/log scale, time/frequency smoothing, gain, decay, and
@@ -39,12 +39,16 @@ and visual parameter mapping are still on the roadmap.
 Symphos automatically selects system-output speakers on startup (or another
 system output if speakers are unavailable; it never automatically selects a
 microphone). The compact selector at the top right lets you choose any source;
-the dropdown retains full names and source types. Manual choices are kept for
+the picker stays a fixed width, while full names wrap inside a bounded, scrollable
+dropdown. Choosing the current source does not restart capture. The list retains
+source types and updates automatically as
+devices are added or removed, without a refresh button. Manual choices are kept for
 the session and are not replaced when other devices appear.
 Click a pane to edit its settings.
 Use the dropdown in any pane header to choose its module. Drag the divider below
-the main pane or between the lower panes to resize them. **Expand** fills the
-workspace with one pane; **Restore** or Escape returns to the dashboard.
+the main pane or between the lower panes to resize them. The small fullscreen
+icon in each pane header fills the workspace with that pane; the inward-corners
+restore icon or Escape returns to the dashboard.
 
 Drag the waterfall to orbit fully around either axis, including over and under
 the grid. Right-drag, middle-drag, or Shift + left-drag pans the view. Rotation
@@ -73,24 +77,34 @@ equal-tempered note. **A4 Hz** changes the tuning reference (440 Hz by default).
 These are axis references, not detected notes or key detection. Both controls also
 work independently in the spectrum and spectrogram.
 Height stretches the surface above its fixed floor.
-The chevron at the top of the sidebar's icon rail collapses or opens settings.
+The icon rail and settings share one continuous sidebar surface, without a gap
+or separate rounded panels. The chevron collapses or opens settings.
 The rail stays visible when collapsed; clicking a tab opens its section.
-Under **Time & History**, **History s** sets the displayed time window.
+Under **Geometry → Time & detail**, **History s** sets the waterfall's displayed time window.
 Under **Geometry**, **Length X** stretches the frequency axis and **Length Y**
 stretches the time axis independently. Both default to 1× with a 0.25×–10× range.
 The floor grid and labels follow both lengths, and framing accommodates the geometry.
-Under **Appearance**, the icon-labelled **Render style** dropdown offers Surface,
-Lines, Y Lines, Wireframe, Dots, and Stems. Lines draws traces
+Under **Appearance** (the paintbrush tab), the compact icon-labelled **Render style**
+dropdown offers Surface, Lines, Y Lines, Wireframe, Dots, Stems, and Bars. All seven
+options fit without scrolling whenever screen space allows; scrolling remains
+available when the viewport is too short. Lines draws traces
 across frequency; Y Lines draws traces along time, one per frequency band.
 Wireframe connects both directions without filling the faces. Dots shows separate
 colored points for each frequency/time sample with no connecting edges. Stems
-draws a forest of colored pins from the floor to each signal level.
+draws a forest of colored pins from the floor to each signal level. Bars draws
+solid 3D columns, with shaded sides to make their volume readable from any angle.
 Only the selected style's parameters are shown directly below the dropdown:
 surface mesh/base walls; line thickness and time-trace spacing; Y-line thickness
 and band spacing; wireframe thickness and mesh spacing; dot size and point spacing;
-or stem thickness and spacing. Spacing means every Nth trace/sample, not audio
+stem thickness and spacing; or bar width/depth, bands per bar, and time spacing.
+Bars defaults to 75% width, 65% depth, four display bands per bar, and every third
+time slice. Width/depth adjust the gaps between columns, while **Bands/bar**
+uses the peak within each frequency group so narrow peaks are retained.
+Bar height still uses Geometry's Height and the module's dB range. Spacing
+means every Nth trace/sample, not audio
 sampling rate. Each style remembers its own settings during the session.
-Geometry retains Length X, Length Y, Height, and Time slices.
+Geometry groups Length X, Length Y, and Height under Dimensions, and History s
+and Time slices under Time & detail.
 Neither length nor mode changes clear the audio history.
 **Viewport guides → Show guides** hides every reference overlay, including the
 surface mesh, floor grid, axes, labels, navigation text, and viewport gizmo.
@@ -112,9 +126,11 @@ retained in the shared help system. A capture-status indicator sits beside the
 bottom-right meters; detailed status remains in Shared options. When settings
 are open, Info View docks underneath them; otherwise it
 reserves space below the dashboard. It never covers a visualization.
-Settings use icon tabs for **Camera**, **Time & History**, **Geometry**,
-**Frequency Range**, **Signal Response**, and **Appearance**, with only relevant
-tabs shown for each module. One section is visible at a time; the selected tab
+The waterfall's icon tabs are ordered **Geometry**, **Frequency Range**,
+**Signal Response**, **Appearance**, then **Camera** at the bottom. Geometry is
+the default tab and includes history duration, so the waterfall no longer needs
+a separate Time & History tab. Other modules show only relevant tabs; the
+spectrogram retains its Time & History tab. One section is visible at a time; the selected tab
 and scroll position are remembered separately for each pane/module/tab during the session. Waveform
 has Time Window and Amplitude tabs; channel display is now a global setting.
 
@@ -126,9 +142,10 @@ single-view channel (mix/left/right), diagnostics, capture details, and theme in
 Level bars show RMS with peak markers and peak dBFS readouts. Mixed levels are
 measured from the summed signal, including phase cancellation. Waveform time
 windows remain limited to the current FFT capture window. The source selector
-and View menu remain at the top right; there is no top-left menu button.
+and a compact settings icon remain at the top right; there is no top-left menu button.
 
-**View** includes pane-size reset, fullscreen (F11), and the FFT inspector with
+The top-right **settings icon**, matched to the source picker's height, opens
+pane-size reset, fullscreen (F11), and the FFT inspector with
 the detailed analyzer metrics and experimental tempo estimate. Pane assignments,
 sizes, module settings, and Info View visibility currently last for the session.
 

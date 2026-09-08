@@ -29,16 +29,18 @@ enum RenderMode {
     Dots,
     Wireframe,
     Stems,
+    Bars,
 }
 
 impl RenderMode {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Surface,
         Self::Lines,
         Self::YLines,
         Self::Wireframe,
         Self::Dots,
         Self::Stems,
+        Self::Bars,
     ];
 
     fn label(self) -> &'static str {
@@ -49,6 +51,7 @@ impl RenderMode {
             Self::Wireframe => "Wireframe",
             Self::Dots => "Dots",
             Self::Stems => "Stems",
+            Self::Bars => "Bars",
         }
     }
 
@@ -60,6 +63,7 @@ impl RenderMode {
             Self::Wireframe => Icon::Wireframe,
             Self::Dots => Icon::Dots,
             Self::Stems => Icon::Stems,
+            Self::Bars => Icon::Bars,
         }
     }
 
@@ -71,6 +75,9 @@ impl RenderMode {
             Self::Wireframe => "An open mesh of frequency and time traces.",
             Self::Dots => "A point cloud of individual frequency/time samples.",
             Self::Stems => "A forest of colored pins rising from the floor to each signal level.",
+            Self::Bars => {
+                "3D bars rising from the floor. Height shows the peak level within each frequency group at a time sample."
+            }
         }
     }
 }
@@ -102,6 +109,10 @@ pub struct Waterfall {
     dot_spacing: usize,
     stem_width: f32,
     stem_spacing: usize,
+    bar_width: f32,
+    bar_depth: f32,
+    bar_bands: usize,
+    bar_time_step: usize,
     contrast: f32,
     auto_orbit: bool,
     orbit_speed: f32,
@@ -140,6 +151,10 @@ impl Default for Waterfall {
             dot_spacing: 1,
             stem_width: 1.2,
             stem_spacing: 4,
+            bar_width: 75.0,
+            bar_depth: 65.0,
+            bar_bands: 4,
+            bar_time_step: 3,
             contrast: 1.0,
             auto_orbit: false,
             orbit_speed: 10.0,
@@ -192,6 +207,70 @@ impl Waterfall {
     fn geometry_point(&self, [x, y, z]: [f32; 3]) -> [f32; 3] {
         // The user-facing Y (time) axis is Z in the renderer's Y-up coordinates.
         [x * self.length_x, y, z * self.length_y]
+    }
+
+    fn bars(&self, slices: &[Option<&[f32; BANDS]>], theme: &AppTheme) -> Vec<Bar> {
+        let mut bars = Vec::new();
+        let view = self.view_direction();
+        let half_depth =
+            self.bar_time_step as f32 / (self.detail - 1) as f32 * self.bar_depth / 100.0;
+        for row in (0..slices.len()).step_by(self.bar_time_step) {
+            let Some(levels) = slices[row] else {
+                continue;
+            };
+            let z = 1.0 - row as f32 / (self.detail - 1) as f32 * 2.0;
+            for band in (0..BANDS).step_by(self.bar_bands) {
+                let end = (band + self.bar_bands).min(BANDS);
+                let peak = levels[band..end]
+                    .iter()
+                    .copied()
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let intensity = self.history.data.settings.intensity(peak);
+                let height = intensity * self.height;
+                if height <= 0.0 {
+                    continue;
+                }
+                let x0 = -1.4 + band as f32 / BANDS as f32 * 2.8;
+                let x1 = -1.4 + end as f32 / BANDS as f32 * 2.8;
+                let inset = (x1 - x0) * (1.0 - self.bar_width / 100.0) * 0.5;
+                bars.push(Bar {
+                    min: Vec2::new(
+                        (x0 + inset) * self.length_x,
+                        (z - half_depth).max(-1.0) * self.length_y,
+                    ),
+                    max: Vec2::new(
+                        (x1 - inset) * self.length_x,
+                        (z + half_depth).min(1.0) * self.length_y,
+                    ),
+                    height,
+                    color: self
+                        .palette
+                        .color_with_contrast(intensity, self.contrast, theme),
+                    order: [
+                        if view[2] >= 0.0 {
+                            slices.len() - 1 - row
+                        } else {
+                            row
+                        },
+                        if view[0] >= 0.0 {
+                            band
+                        } else {
+                            BANDS - 1 - band
+                        },
+                    ],
+                });
+            }
+        }
+        bars.sort_by_key(|bar| bar.order);
+        bars
+    }
+
+    fn view_direction(&self) -> [f32; 3] {
+        [
+            -self.yaw.sin() * self.elevation.cos(),
+            self.elevation.sin(),
+            self.yaw.cos() * self.elevation.cos(),
+        ]
     }
 
     fn snap_view(&mut self, angles: (f32, f32)) {
@@ -322,20 +401,21 @@ impl Waterfall {
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
             });
         });
-        settings_panel(ui, "Time & History", |ui| {
-            ui.add(
-                egui::Slider::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS)
-                    .logarithmic(true)
-                    .text("History s"),
-            ).help_text("How many seconds of recent audio are displayed. Does not change the waterfall's physical length.");
-        });
         settings_panel(ui, "Geometry", |ui| {
+            ui.strong("Dimensions");
             ui.add(egui::Slider::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH).text("Length X"))
                 .help_text("Stretch or compress the frequency axis visually. 1 is the default size; frequency range and audio are unchanged.");
             ui.add(egui::Slider::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH).text("Length Y"))
                 .help_text("Stretch or compress the time axis visually. 1 is the default size; history duration and audio are unchanged.");
             ui.add(egui::Slider::new(&mut self.height, 0.0..=MAX_HEIGHT).text("Height"))
                 .help_text("Scale signal peaks vertically above the fixed floor grid.");
+            ui.separator();
+            ui.strong("Time & detail");
+            ui.add(
+                egui::Slider::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS)
+                    .logarithmic(true)
+                    .text("History s"),
+            ).help_text("How many seconds of recent audio are displayed. Does not change the waterfall's physical length.");
             ui.add(egui::Slider::new(&mut self.detail, 24..=128).text("Time slices"))
                 .help_text("Number of displayed time slices. More slices add detail and rendering work; history duration is unchanged.");
         });
@@ -349,23 +429,7 @@ impl Waterfall {
             ui.spacing_mut().slider_width = 60.0;
             ui.group(|ui| {
                 ui.strong("Render style");
-                let combo = egui::ComboBox::from_id_salt("render-mode")
-                    .selected_text(format!("      {}", self.mode.label())).width(186.0)
-                    .show_ui(ui, |ui| {
-                        for mode in RenderMode::ALL {
-                            let response = ui.add_sized([186.0, 28.0],
-                                egui::Button::selectable(self.mode == mode, format!("      {}", mode.label())));
-                            let icon_rect = Rect::from_center_size(response.rect.left_center() + Vec2::new(14.0, 0.0), Vec2::splat(22.0));
-                            icons::paint(ui, icon_rect, mode.icon(), ui.style().interact(&response).fg_stroke.color);
-                            if response.help_text(mode.description()).clicked() {
-                                self.mode = mode;
-                                ui.close();
-                            }
-                        }
-                    });
-                let icon_rect = Rect::from_center_size(combo.response.rect.left_center() + Vec2::new(14.0, 0.0), Vec2::splat(22.0));
-                icons::paint(ui, icon_rect, self.mode.icon(), ui.visuals().text_color());
-                combo.response.help_text(self.mode.description());
+                render_style_picker(ui, &mut self.mode);
                 ui.add_space(4.0);
                 match self.mode {
                     RenderMode::Surface => {
@@ -391,6 +455,12 @@ impl Waterfall {
                     RenderMode::Stems => {
                         width_control(ui, &mut self.stem_width);
                         spacing_control(ui, &mut self.stem_spacing, "Stem spacing", "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.");
+                    }
+                    RenderMode::Bars => {
+                        ui.add(egui::Slider::new(&mut self.bar_width, 10.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
+                        ui.add(egui::Slider::new(&mut self.bar_depth, 10.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
+                        ui.add(egui::Slider::new(&mut self.bar_bands, 1..=12).text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
+                        spacing_control(ui, &mut self.bar_time_step, "Time spacing", "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.");
                     }
                 }
             });
@@ -475,8 +545,8 @@ impl Waterfall {
             );
         }
 
-        // CPU projection feeds a single GPU mesh. Cells and their subtle grid edges
-        // are emitted back-to-front so rotating the surface preserves occlusion.
+        // CPU projection feeds a single GPU mesh. Surface cells use a ground-plane
+        // visibility order; steep heights must not change which cell is in front.
         let settings = &self.history.data.settings;
         let slices: Vec<_> = (0..self.detail)
             .map(|row| {
@@ -504,6 +574,20 @@ impl Waterfall {
         }
         let mut mesh = egui::Mesh::default();
         match self.mode {
+            RenderMode::Bars => {
+                let view = self.view_direction();
+                for bar in self.bars(&slices, theme) {
+                    for (face, shade) in bar.faces(view).into_iter().zip([0.72, 0.52, 1.0]) {
+                        let offset = mesh.vertices.len() as u32;
+                        let color = mix(theme.background, bar.color, shade);
+                        for point in face {
+                            mesh.colored_vertex(camera.project(point).0, color);
+                        }
+                        mesh.add_triangle(offset, offset + 1, offset + 2);
+                        mesh.add_triangle(offset, offset + 2, offset + 3);
+                    }
+                }
+            }
             RenderMode::Dots | RenderMode::Stems => {
                 let spacing = if self.mode == RenderMode::Dots {
                     self.dot_spacing
@@ -599,7 +683,6 @@ impl Waterfall {
                 }
             }
             RenderMode::Surface => {
-                let floor_offset = vertices.len();
                 for row in 0..self.detail {
                     let z = 1.0 - row as f32 / (self.detail - 1) as f32 * 2.0;
                     for band in 0..BANDS {
@@ -612,81 +695,30 @@ impl Waterfall {
                         vertices.push((position, depth, color));
                     }
                 }
-                let mut faces = Vec::with_capacity((self.detail - 1) * (BANDS - 1));
-                let mut add_face = |indices: [usize; 4], grid_edges: [bool; 2]| {
-                    let depth = indices.iter().map(|i| vertices[*i].1).sum::<f32>() / 4.0;
-                    faces.push((depth, indices, grid_edges));
-                };
-                for row in 0..self.detail - 1 {
-                    if slices[row].is_none() || slices[row + 1].is_none() {
-                        continue;
-                    }
-                    for band in 0..BANDS - 1 {
-                        let a = row * BANDS + band;
-                        add_face(
-                            [a, a + 1, a + BANDS + 1, a + BANDS],
-                            [
-                                self.guides && self.grid && row % 3 == 0,
-                                self.guides && self.grid && band % 4 == 0,
-                            ],
-                        );
-                        // Perimeter walls share the same y=0 plane as the floor.
-                        // Height stretches the terrain from that fixed foundation.
-                        if self.surface_walls && (row == 0 || slices[row - 1].is_none()) {
-                            add_face(
-                                [a, a + 1, floor_offset + a + 1, floor_offset + a],
-                                [false; 2],
-                            );
+                let cell_view = Vec2::new(
+                    -self.yaw.sin() * self.elevation.cos() * (BANDS - 1) as f32
+                        / (2.8 * self.length_x),
+                    self.yaw.cos() * self.elevation.cos() * (self.detail - 1) as f32
+                        / (2.0 * self.length_y),
+                );
+                let valid: Vec<_> = slices.iter().map(Option::is_some).collect();
+                for face in surface_faces(
+                    &valid,
+                    cell_view,
+                    self.guides && self.grid,
+                    self.surface_walls,
+                ) {
+                    let grid_color = mix(theme.background, theme.foreground, 0.22);
+                    for (triangle, edge) in face.triangles() {
+                        let offset = mesh.vertices.len() as u32;
+                        for index in triangle {
+                            let (pos, _, color) = vertices[index];
+                            mesh.colored_vertex(pos, color);
                         }
-                        if self.surface_walls
-                            && (row + 2 == self.detail || slices[row + 2].is_none())
-                        {
-                            let b = a + BANDS;
-                            add_face(
-                                [b, b + 1, floor_offset + b + 1, floor_offset + b],
-                                [false; 2],
-                            );
+                        mesh.add_triangle(offset, offset + 1, offset + 2);
+                        if let Some([a, b]) = edge {
+                            mesh_line(&mut mesh, vertices[a].0, vertices[b].0, grid_color);
                         }
-                    }
-                    if !self.surface_walls {
-                        continue;
-                    }
-                    let a = row * BANDS;
-                    add_face(
-                        [a, a + BANDS, floor_offset + a + BANDS, floor_offset + a],
-                        [false; 2],
-                    );
-                    let b = a + BANDS - 1;
-                    add_face(
-                        [b, b + BANDS, floor_offset + b + BANDS, floor_offset + b],
-                        [false; 2],
-                    );
-                }
-                faces.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
-                for (_, indices, grid_edges) in faces {
-                    let offset = mesh.vertices.len() as u32;
-                    for index in indices {
-                        let (pos, _, color) = vertices[index];
-                        mesh.colored_vertex(pos, color);
-                    }
-                    mesh.add_triangle(offset, offset + 1, offset + 2);
-                    mesh.add_triangle(offset, offset + 2, offset + 3);
-                    let color = mix(theme.background, theme.foreground, 0.22);
-                    if grid_edges[0] {
-                        mesh_line(
-                            &mut mesh,
-                            vertices[indices[0]].0,
-                            vertices[indices[1]].0,
-                            color,
-                        );
-                    }
-                    if grid_edges[1] {
-                        mesh_line(
-                            &mut mesh,
-                            vertices[indices[0]].0,
-                            vertices[indices[3]].0,
-                            color,
-                        );
                     }
                 }
             }
@@ -754,6 +786,200 @@ impl Waterfall {
             self.orientation_gizmo(ui, gizmo_rect, true);
         }
     }
+}
+
+fn render_style_picker(ui: &mut egui::Ui, mode: &mut RenderMode) {
+    const WIDTH: f32 = 176.0;
+    const ROW_HEIGHT: f32 = 24.0;
+    const ROW_GAP: f32 = 2.0;
+    // Size the scroll area for the complete list; egui can still constrain it
+    // when the viewport cannot accommodate the menu above or below the trigger.
+    let menu_height = RenderMode::ALL.len() as f32 * (ROW_HEIGHT + ROW_GAP);
+    let combo = ui
+        .scope(|ui| {
+            ui.set_width(WIDTH);
+            egui::ComboBox::from_id_salt("render-mode")
+                .selected_text(format!("      {}", mode.label()))
+                .width(WIDTH)
+                .height(menu_height)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = ROW_GAP;
+                    ui.spacing_mut().interact_size.y = ROW_HEIGHT;
+                    ui.spacing_mut().button_padding = Vec2::new(5.0, 2.0);
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+                    for value in RenderMode::ALL {
+                        let response = ui.add_sized(
+                            [WIDTH, ROW_HEIGHT],
+                            egui::Button::selectable(
+                                *mode == value,
+                                format!("      {}", value.label()),
+                            ),
+                        );
+                        let icon_rect = Rect::from_center_size(
+                            response.rect.left_center() + Vec2::new(13.0, 0.0),
+                            Vec2::splat(20.0),
+                        );
+                        icons::paint(
+                            ui,
+                            icon_rect,
+                            value.icon(),
+                            ui.style().interact(&response).fg_stroke.color,
+                        );
+                        if response.help_text(value.description()).clicked() {
+                            *mode = value;
+                            ui.close();
+                        }
+                    }
+                })
+        })
+        .inner;
+    let icon_rect = Rect::from_center_size(
+        combo.response.rect.left_center() + Vec2::new(13.0, 0.0),
+        Vec2::splat(20.0),
+    );
+    icons::paint(ui, icon_rect, mode.icon(), ui.visuals().text_color());
+    combo.response.help_text(mode.description());
+}
+
+struct Bar {
+    min: Vec2,
+    max: Vec2,
+    height: f32,
+    color: egui::Color32,
+    order: [usize; 2],
+}
+
+impl Bar {
+    // Only the three camera-facing faces of this solid cuboid are needed.
+    // Bars have disjoint footprints, so the ground-plane order stays correct
+    // even when a far bar is much taller than its neighbor.
+    fn faces(&self, view: [f32; 3]) -> [[[f32; 3]; 4]; 3] {
+        let Vec2 { x: x0, y: z0 } = self.min;
+        let Vec2 { x: x1, y: z1 } = self.max;
+        let h = self.height;
+        let x = if view[0] >= 0.0 { x1 } else { x0 };
+        let z = if view[2] >= 0.0 { z1 } else { z0 };
+        let cap = if view[1] >= 0.0 { h } else { 0.0 };
+        [
+            [[x, 0.0, z0], [x, h, z0], [x, h, z1], [x, 0.0, z1]],
+            [[x0, 0.0, z], [x1, 0.0, z], [x1, h, z], [x0, h, z]],
+            [[x0, cap, z0], [x1, cap, z0], [x1, cap, z1], [x0, cap, z1]],
+        ]
+    }
+}
+
+struct SurfaceFace {
+    indices: [usize; 4],
+    grid_edges: [bool; 2],
+    reverse_triangles: bool,
+    order: [usize; 3],
+}
+
+impl SurfaceFace {
+    fn triangles(&self) -> [([usize; 3], Option<[usize; 2]>); 2] {
+        let [a, b, c, d] = self.indices;
+        let mut triangles = [
+            ([a, b, c], self.grid_edges[0].then_some([a, b])),
+            ([a, c, d], self.grid_edges[1].then_some([a, d])),
+        ];
+        if self.reverse_triangles {
+            triangles.reverse();
+        }
+        triangles
+    }
+}
+
+/// A heightfield's cells occupy disjoint vertical prisms. Along a viewing ray,
+/// ground coordinates advance monotonically, so draw those cells far-to-near
+/// on the ground plane, independent of peak height. Average 3D face depth is
+/// not a valid ordering: a tall far peak can paint over a nearer low valley.
+/// Within a non-planar cell, also order the two triangles by the ray's crossing
+/// direction through their shared diagonal. Grid edges travel with their own
+/// triangle, and each cell's facing walls come after its top, away walls before.
+fn surface_faces(valid: &[bool], cell_view: Vec2, grid: bool, walls: bool) -> Vec<SurfaceFace> {
+    let detail = valid.len();
+    if detail < 2 {
+        return Vec::new();
+    }
+    let floor = detail * BANDS;
+    let mut faces = Vec::with_capacity((detail - 1) * (BANDS - 1));
+    let order = |row: usize, band: usize, phase| {
+        [
+            if cell_view.y >= 0.0 {
+                detail - 2 - row
+            } else {
+                row
+            },
+            if cell_view.x >= 0.0 {
+                band
+            } else {
+                BANDS - 2 - band
+            },
+            phase,
+        ]
+    };
+    let wall = |faces: &mut Vec<SurfaceFace>, indices, row, band, facing| {
+        faces.push(SurfaceFace {
+            indices,
+            grid_edges: [false; 2],
+            reverse_triangles: false,
+            order: order(row, band, if facing { 2 } else { 0 }),
+        });
+    };
+    for row in 0..detail - 1 {
+        if !valid[row] || !valid[row + 1] {
+            continue;
+        }
+        for band in 0..BANDS - 1 {
+            let a = row * BANDS + band;
+            faces.push(SurfaceFace {
+                indices: [a, a + 1, a + BANDS + 1, a + BANDS],
+                grid_edges: [grid && row % 3 == 0, grid && band % 4 == 0],
+                reverse_triangles: cell_view.x + cell_view.y > 0.0,
+                order: order(row, band, 1),
+            });
+            if walls && (row == 0 || !valid[row - 1]) {
+                wall(
+                    &mut faces,
+                    [a, a + 1, floor + a + 1, floor + a],
+                    row,
+                    band,
+                    cell_view.y >= 0.0,
+                );
+            }
+            if walls && (row + 2 == detail || !valid[row + 2]) {
+                let b = a + BANDS;
+                wall(
+                    &mut faces,
+                    [b, b + 1, floor + b + 1, floor + b],
+                    row,
+                    band,
+                    cell_view.y < 0.0,
+                );
+            }
+        }
+        if walls {
+            let a = row * BANDS;
+            wall(
+                &mut faces,
+                [a, a + BANDS, floor + a + BANDS, floor + a],
+                row,
+                0,
+                cell_view.x < 0.0,
+            );
+            let b = a + BANDS - 1;
+            wall(
+                &mut faces,
+                [b, b + BANDS, floor + b + BANDS, floor + b],
+                row,
+                BANDS - 2,
+                cell_view.x >= 0.0,
+            );
+        }
+    }
+    faces.sort_by_key(|face| face.order);
+    faces
 }
 
 fn width_control(ui: &mut egui::Ui, width: &mut f32) {
@@ -864,6 +1090,335 @@ fn mesh_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bars_preserve_group_peaks_and_respect_size_spacing_floor_and_history_gaps() {
+        let mut waterfall = Waterfall {
+            detail: 24,
+            ..Waterfall::default()
+        };
+        let mut levels = [-120.0; BANDS];
+        levels[2] = 0.0;
+        let mut slices = vec![None; waterfall.detail];
+        slices[0] = Some(&levels);
+        slices[3] = Some(&levels);
+        slices[6] = Some(&levels);
+        let theme = AppTheme::default();
+        let bars = waterfall.bars(&slices, &theme);
+        assert_eq!(
+            bars.len(),
+            3,
+            "one non-silent frequency group per valid sampled row"
+        );
+        assert!(
+            bars.iter().all(|bar| bar.height == waterfall.height),
+            "peak inside the group is not skipped"
+        );
+        let width = bars[0].max.x - bars[0].min.x;
+        assert!((width - 2.8 / BANDS as f32 * 4.0 * 0.75).abs() < 1.0e-5);
+        waterfall.bar_width = 25.0;
+        let narrower = waterfall.bars(&slices, &theme);
+        assert!((narrower[0].max.x - narrower[0].min.x - width / 3.0).abs() < 1.0e-5);
+        waterfall.bar_depth = 20.0;
+        let shallow = waterfall.bars(&slices, &theme);
+        assert!(
+            shallow
+                .iter()
+                .zip(&narrower)
+                .all(|(a, b)| a.max.y - a.min.y < b.max.y - b.min.y)
+        );
+        waterfall.bar_time_step = 6;
+        assert_eq!(waterfall.bars(&slices, &theme).len(), 2);
+        waterfall.bar_bands = 1;
+        let ungrouped = waterfall.bars(&slices, &theme);
+        assert_eq!(ungrouped.len(), 2);
+        assert!(ungrouped.iter().all(|bar| bar.height == waterfall.height));
+        for bar in ungrouped {
+            assert!(bar.min.x >= -1.4 && bar.max.x <= 1.4);
+            assert!(bar.min.y >= -1.0 && bar.max.y <= 1.0);
+            assert!(
+                bar.faces(waterfall.view_direction())
+                    .iter()
+                    .flatten()
+                    .all(|point| point[1] >= 0.0 && point[1] <= waterfall.height)
+            );
+        }
+        waterfall.height = 0.0;
+        assert!(waterfall.bars(&slices, &theme).is_empty());
+        assert!(waterfall.bars(&[None; 24], &theme).is_empty());
+    }
+
+    #[test]
+    fn bars_occlude_by_ground_position_at_every_isometric_corner() {
+        let mut waterfall = Waterfall {
+            detail: 24,
+            bar_bands: 8,
+            bar_time_step: 3,
+            bar_width: 100.0,
+            bar_depth: 100.0,
+            ..Waterfall::default()
+        };
+        let levels: Vec<[f32; BANDS]> = (0..24)
+            .map(|row| {
+                std::array::from_fn(|band| -90.0 + ((row * 17 + band / 8 * 13) % 11) as f32 * 9.0)
+            })
+            .collect();
+        let slices: Vec<_> = levels.iter().map(Some).collect();
+        for above in [true, false] {
+            for corner in 0..4 {
+                waterfall.snap_view(Waterfall::isometric_angles(corner, above));
+                let camera = Camera {
+                    yaw: waterfall.yaw,
+                    elevation: waterfall.elevation,
+                    scale: 1.0,
+                    center: Pos2::ZERO,
+                };
+                let mut vertices = Vec::new();
+                let mut faces = Vec::new();
+                for bar in waterfall.bars(&slices, &AppTheme::default()) {
+                    for points in bar.faces(waterfall.view_direction()) {
+                        let start = vertices.len();
+                        vertices.extend(points.map(|point| camera.project(point)));
+                        faces.push(SurfaceFace {
+                            indices: [start, start + 1, start + 2, start + 3],
+                            grid_edges: [false; 2],
+                            reverse_triangles: false,
+                            order: [0; 3],
+                        });
+                    }
+                }
+                assert_eq!(
+                    depth_order_errors(&faces, &vertices),
+                    0,
+                    "corner {corner}, above {above}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_style_menu_shows_all_seven_items_above_or_below_the_trigger() {
+        for (screen_height, trigger_y, all_fit) in [
+            (700.0, 12.0, true),
+            (700.0, 630.0, true),
+            (150.0, 12.0, false),
+        ] {
+            let context = egui::Context::default();
+            let mut mode = RenderMode::Surface;
+            let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, screen_height));
+            let mut render = |events| {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(
+                            Rect::from_min_size(Pos2::new(12.0, trigger_y), Vec2::new(190.0, 26.0)),
+                        ));
+                        child.spacing_mut().interact_size.y = 24.0;
+                        child.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+                        render_style_picker(&mut child, &mut mode);
+                        assert!(child.min_rect().width() <= 176.1);
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            render(vec![]);
+            let output = render(vec![]);
+            let pos = text_position(&output, "Surface");
+            for pressed in [true, false] {
+                render(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+            }
+            let menu = render(vec![]);
+            let visible = |output: &egui::FullOutput, value: RenderMode| {
+                output
+                    .shapes
+                    .iter()
+                    .rev()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text.trim() == value.label() => {
+                            Some(
+                                shape.clip_rect.intersect(screen).contains_rect(
+                                    Rect::from_min_size(text.pos, text.galley.size()),
+                                ),
+                            )
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            };
+            let visible_count = RenderMode::ALL
+                .iter()
+                .filter(|&&value| visible(&menu, value))
+                .count();
+            if all_fit {
+                assert_eq!(
+                    visible_count,
+                    RenderMode::ALL.len(),
+                    "every style visible without scrolling at trigger y={trigger_y}"
+                );
+            } else {
+                assert!(
+                    visible_count < RenderMode::ALL.len(),
+                    "small viewport legitimately needs scrolling"
+                );
+                let pointer = text_position(&menu, "Lines");
+                render(vec![
+                    egui::Event::PointerMoved(pointer),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(0.0, -300.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+                let mut scrolled = render(vec![]);
+                for _ in 0..12 {
+                    scrolled = render(vec![]);
+                }
+                assert!(
+                    visible(&scrolled, RenderMode::Bars),
+                    "last style remains reachable by scrolling"
+                );
+            }
+        }
+    }
+
+    fn depth_at(triangle: [usize; 3], vertices: &[(Pos2, f32)], point: Pos2) -> Option<f32> {
+        let [(a, da), (b, db), (c, dc)] = triangle.map(|i| vertices[i]);
+        let denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if denominator.abs() < 1.0e-8 {
+            return None;
+        }
+        let u = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
+        let v = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
+        let w = 1.0 - u - v;
+        (u.min(v).min(w) > 1.0e-5).then_some(u * da + v * db + w * dc)
+    }
+
+    fn depth_order_errors(faces: &[SurfaceFace], vertices: &[(Pos2, f32)]) -> usize {
+        let bounds = Rect::from_points(&vertices.iter().map(|v| v.0).collect::<Vec<_>>());
+        let triangles: Vec<_> = faces
+            .iter()
+            .flat_map(|face| face.triangles().map(|t| t.0))
+            .collect();
+        let mut errors = 0;
+        for y in 0..39 {
+            for x in 0..43 {
+                let point = bounds.min
+                    + bounds.size() * Vec2::new((x as f32 + 0.37) / 43.0, (y as f32 + 0.61) / 39.0);
+                let mut nearest = f32::NEG_INFINITY;
+                let mut painted = f32::NEG_INFINITY;
+                for &triangle in &triangles {
+                    if let Some(depth) = depth_at(triangle, vertices, point) {
+                        nearest = nearest.max(depth);
+                        painted = depth;
+                    }
+                }
+                if nearest - painted > 0.0001 {
+                    errors += 1;
+                }
+            }
+        }
+        errors
+    }
+
+    #[test]
+    fn isometric_surface_painter_matches_nearest_depth_not_average_face_depth() {
+        let detail = 5;
+        let mut old_errors = 0;
+        for length in [
+            Vec2::splat(1.0),
+            Vec2::new(0.25, 10.0),
+            Vec2::new(10.0, 0.25),
+        ] {
+            for above in [true, false] {
+                for corner in 0..4 {
+                    let (yaw, elevation) = Waterfall::isometric_angles(corner, above);
+                    let camera = Camera {
+                        yaw,
+                        elevation,
+                        scale: 1.0,
+                        center: Pos2::ZERO,
+                    };
+                    let mut vertices = Vec::new();
+                    for floor in [false, true] {
+                        for row in 0..detail {
+                            for band in 0..BANDS {
+                                let height = if floor {
+                                    0.0
+                                } else {
+                                    ((row * 17 + (band / 8) * 13) % 11) as f32 * 0.2
+                                };
+                                vertices.push(camera.project([
+                                    (-1.4 + band as f32 / (BANDS - 1) as f32 * 2.8) * length.x,
+                                    height,
+                                    (1.0 - row as f32 / (detail - 1) as f32 * 2.0) * length.y,
+                                ]));
+                            }
+                        }
+                    }
+                    let view = Vec2::new(
+                        -yaw.sin() * elevation.cos() * (BANDS - 1) as f32 / (2.8 * length.x),
+                        yaw.cos() * elevation.cos() * (detail - 1) as f32 / (2.0 * length.y),
+                    );
+                    for walls in [false, true] {
+                        let faces = surface_faces(&vec![true; detail], view, false, walls);
+                        assert_eq!(
+                            depth_order_errors(&faces, &vertices),
+                            0,
+                            "corner {corner}, above {above}, length {length:?}, walls {walls}"
+                        );
+                        if length == Vec2::splat(1.0) && above && corner == 0 && !walls {
+                            let mut old = faces;
+                            for face in &mut old {
+                                face.reverse_triangles = false;
+                            }
+                            old.sort_by(|a, b| {
+                                let depth = |face: &SurfaceFace| {
+                                    face.indices.iter().map(|i| vertices[*i].1).sum::<f32>() / 4.0
+                                };
+                                depth(a).total_cmp(&depth(b))
+                            });
+                            old_errors = depth_order_errors(&old, &vertices);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            old_errors > 0,
+            "fixture must reproduce the former missing/overpainted terrain"
+        );
+    }
+
+    #[test]
+    fn surface_order_retains_gaps_and_attaches_grid_edges_to_their_triangles() {
+        let valid = [true, true, false, true, true];
+        for view in [Vec2::new(1.0, 1.0), Vec2::new(-1.0, -1.0)] {
+            let faces = surface_faces(&valid, view, true, false);
+            assert_eq!(faces.len(), 2 * (BANDS - 1));
+            for face in faces {
+                for (triangle, edge) in face.triangles() {
+                    assert!(triangle.iter().all(|i| valid[i / BANDS]));
+                    if let Some(edge) = edge {
+                        assert!(edge.iter().all(|i| triangle.contains(i)));
+                    }
+                }
+            }
+        }
+    }
 
     fn draw_frame(waterfall: &mut Waterfall, now: Instant) -> egui::FullOutput {
         let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
@@ -995,6 +1550,7 @@ mod tests {
         for target in [
             RenderMode::Dots,
             RenderMode::Stems,
+            RenderMode::Bars,
             RenderMode::Lines,
             RenderMode::YLines,
             RenderMode::Wireframe,
@@ -1037,6 +1593,7 @@ mod tests {
                 labels.contains(&"Stem spacing"),
                 target == RenderMode::Stems
             );
+            assert_eq!(labels.contains(&"Bands/bar"), target == RenderMode::Bars);
             assert!(labels.contains(&"Contrast"));
         }
         assert_eq!(waterfall.line_width, 3.5);
@@ -1233,6 +1790,10 @@ mod tests {
                 RenderMode::Wireframe => waterfall.wire_spacing = 4,
                 RenderMode::Dots => waterfall.dot_spacing = 4,
                 RenderMode::Stems => waterfall.stem_spacing = 8,
+                RenderMode::Bars => {
+                    waterfall.bar_bands = 12;
+                    waterfall.bar_time_step = 8;
+                }
             }
             assert!(count(&mut waterfall) < dense, "{mode:?}");
         }

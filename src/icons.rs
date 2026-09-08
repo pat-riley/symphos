@@ -15,18 +15,32 @@ pub enum Icon {
     Stereo,
     Mix,
     Settings,
+    Gear,
     Surface,
     Lines,
     YLines,
     Wireframe,
     Dots,
     Stems,
+    Bars,
+    Fullscreen,
+    Restore,
 }
 
 pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool, description: &str) -> Response {
+    sized_button(ui, icon, selected, 30.0, description)
+}
+
+pub fn sized_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    selected: bool,
+    size: f32,
+    description: &str,
+) -> Response {
     let response = ui.add(
         egui::Button::new("")
-            .min_size(Vec2::splat(30.0))
+            .min_size(Vec2::splat(size))
             .selected(selected),
     );
     let color = ui.style().interact(&response).fg_stroke.color;
@@ -54,6 +68,34 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         );
     };
     match icon {
+        Icon::Fullscreen | Icon::Restore => {
+            for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                let outer = if matches!(icon, Icon::Fullscreen) {
+                    7.0
+                } else {
+                    3.0
+                };
+                let inner = if matches!(icon, Icon::Fullscreen) {
+                    3.0
+                } else {
+                    7.0
+                };
+                line(&[
+                    (10.0 + x * inner, 10.0 + y * outer),
+                    (10.0 + x * outer, 10.0 + y * outer),
+                    (10.0 + x * outer, 10.0 + y * inner),
+                ]);
+            }
+        }
+        Icon::Bars => {
+            for (x, height) in [(2.0, 7.0), (8.0, 15.0), (14.0, 11.0)] {
+                painter.rect_filled(
+                    Rect::from_min_max(p(x, 18.0 - height), p(x + 4.0, 18.0)),
+                    0.6,
+                    color,
+                );
+            }
+        }
         Icon::Surface => {
             painter.add(egui::Shape::convex_polygon(
                 vec![p(1.0, 16.0), p(7.0, 3.0), p(12.0, 9.0), p(19.0, 16.0)],
@@ -139,10 +181,27 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             ]);
         }
         Icon::Appearance => {
-            painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
-            for (x, y) in [(6.0, 6.0), (13.0, 5.0), (15.0, 11.0), (7.0, 13.0)] {
-                painter.circle_filled(p(x, y), 1.6, color);
-            }
+            // Diagonal paintbrush: outlined handle, solid bristles, and a small
+            // paint stroke. Recognizable at toolbar size without tiny dots.
+            line(&[
+                (7.0, 10.0),
+                (16.0, 1.0),
+                (19.0, 4.0),
+                (10.0, 13.0),
+                (7.0, 10.0),
+            ]);
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    p(2.0, 18.0),
+                    p(3.0, 13.0),
+                    p(7.0, 10.0),
+                    p(10.0, 13.0),
+                    p(7.0, 17.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+            line(&[(10.0, 18.0), (17.0, 18.0)]);
         }
         Icon::Waveform => line(&[
             (1.0, 10.0),
@@ -162,11 +221,173 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         Icon::Mix => {
             painter.circle_stroke(p(10.0, 10.0), 6.0, stroke);
         }
+        Icon::Gear => {
+            let mut teeth: Vec<_> = (0..32)
+                .map(|step| {
+                    let angle = step as f32 * std::f32::consts::TAU / 32.0;
+                    let radius = if matches!(step % 4, 1 | 2) { 8.0 } else { 6.0 };
+                    p(10.0, 10.0) + Vec2::angled(angle) * radius
+                })
+                .collect();
+            teeth.push(teeth[0]);
+            painter.add(egui::Shape::line(teeth, stroke));
+            painter.circle_stroke(p(10.0, 10.0), 2.8, stroke);
+        }
         Icon::Settings => {
             for (y, knob) in [(4.0, 6.0), (10.0, 14.0), (16.0, 8.0)] {
                 line(&[(2.0, y), (18.0, y)]);
                 painter.circle_filled(p(knob, y), 2.3, color);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_focus_icons_are_compact_distinct_and_clickable() {
+        let mut glyphs = Vec::new();
+        for icon in [Icon::Fullscreen, Icon::Restore] {
+            let context = egui::Context::default();
+            let render = |events| {
+                let mut clicked = false;
+                let mut rect = Rect::NOTHING;
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.spacing_mut().interact_size.y = 24.0;
+                        ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+                        let response = sized_button(ui, icon, false, 24.0, "Toggle expanded pane");
+                        rect = response.rect;
+                        clicked = response.clicked();
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(rect.size(), Vec2::splat(24.0));
+                (output, rect, clicked)
+            };
+            let (output, rect, _) = render(vec![]);
+            assert!(
+                !output
+                    .shapes
+                    .iter()
+                    .any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if !text.galley.job.text.is_empty()))
+            );
+            let paths: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Path(path) = &shape.shape {
+                        Some(path.points.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(paths.len(), 4);
+            assert!(
+                paths
+                    .iter()
+                    .flatten()
+                    .all(|point| rect.shrink(3.0).contains(*point))
+            );
+            glyphs.push(paths);
+            let pos = rect.center();
+            for pressed in [true, false] {
+                let (_, _, clicked) = render(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+                if !pressed {
+                    assert!(clicked);
+                }
+            }
+        }
+        assert_ne!(glyphs[0], glyphs[1]);
+    }
+
+    #[test]
+    fn settings_icon_matches_picker_height_and_opens_its_menu() {
+        for picker_height in [26.0, 32.0] {
+            let context = egui::Context::default();
+            let mut button_rect = Rect::NOTHING;
+            let mut render = |events| {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.spacing_mut().interact_size.y = picker_height;
+                        ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+                        ui.horizontal_centered(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let picker = egui::ComboBox::from_id_salt("source")
+                                        .width(260.0)
+                                        .selected_text("System output speakers")
+                                        .show_ui(ui, |_| {})
+                                        .response;
+                                    let options = sized_button(
+                                        ui,
+                                        Icon::Gear,
+                                        false,
+                                        picker.rect.height(),
+                                        "View settings",
+                                    );
+                                    button_rect = options.rect;
+                                    assert!(
+                                        (options.rect.height() - picker.rect.height()).abs() < 0.01
+                                    );
+                                    assert!(
+                                        (options.rect.width() - picker.rect.height()).abs() < 0.01
+                                    );
+                                    assert!(
+                                        (options.rect.center().y - picker.rect.center().y).abs()
+                                            < 0.01,
+                                        "picker {:?}, icon {:?}",
+                                        picker.rect,
+                                        options.rect
+                                    );
+                                    egui::Popup::menu(&options).show(|ui| {
+                                        ui.label("Reset pane sizes");
+                                    });
+                                },
+                            );
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+                (output, button_rect)
+            };
+            render(vec![]);
+            let (_, rect) = render(vec![]);
+            let position = rect.center();
+            for pressed in [true, false] {
+                render(vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+            }
+            let (output, _) = render(vec![]);
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Reset pane sizes")));
         }
     }
 }

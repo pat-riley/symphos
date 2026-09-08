@@ -47,11 +47,21 @@ Only the selected section renders. Tab selections belong to each pane/module,
 so changing modules or panes restores that module's previous tab. The rail has
 its own collapse chevron and stays available while details are hidden. No shared
 settings or meters remain in the sidebar.
+The rail and details touch edge-to-edge and share a single background spanning
+their union. The background is placed before the controls and sized after tab
+interaction, so expanding/collapsing does not briefly show separate panels.
+Waterfall tabs start with Geometry (including history duration/time detail),
+followed by Frequency, Response, Appearance, and Camera last.
 Each pane/module/tab also has an independent scroll-area identity, avoiding
 scroll offsets carrying across unrelated sections. Appearance uses grouped
-render-style, color/level, and viewport-guide controls; Geometry retains only
-dimensions and time-slice detail. Render styles have vector icons and retain
+render-style, color/level, and viewport-guide controls; Geometry groups
+dimensions, history duration, and time-slice detail. Render styles have vector icons and retain
 independent per-style settings when switching.
+The Appearance tab uses a vector paintbrush glyph. The render-style picker is
+176 points wide with 24-point rows and a 2-point gap. Its scroll-area height is
+sized for the full seven-item list, while viewport constraints permit scrolling
+only when the list cannot fit; both above/below placement and constrained-height
+scrolling have interaction coverage.
 
 `global_bar` owns the stereo/single-view display state, renders visible FFT/rate
 controls, an advanced shared-options menu, and compact meters. Help is at the
@@ -102,8 +112,15 @@ capture format changes clear incompatible history.
 Changing sources or shared FFT/window/channel settings clears pane histories.
 
 The waterfall projects a bounded frequency/time surface on the UI lane and
-submits one mesh to egui's existing GPU renderer. Cells and grid edges are
-sorted back-to-front for camera rotation. Surface mode closes its perimeter
+submits one mesh to egui's existing GPU renderer. Surface cells are ordered
+far-to-near by their ground-plane footprints rather than average 3D face depth,
+which can incorrectly let tall peaks cover nearer valleys at isometric angles.
+Each non-planar cell's triangles are ordered by the viewing ray's crossing of
+their shared diagonal. Mesh edges travel with their owning triangle; facing
+base walls follow the cell top and away-facing walls precede it. Regression
+tests compare painter ordering against per-sample nearest interpolated depth
+at all eight isometric corners, with walls on/off and stretched X/Y lengths.
+Surface mode closes its perimeter
 down to the fixed floor; line mode draws separate frequency traces. Camera
 framing reserves the entire height range so changing height does not shift the
 floor or clip peaks at default zoom. A fixed bounding sphere keeps scale and the
@@ -130,6 +147,14 @@ spacing decimates rendered traces/points only; it never changes stored bands
 or timestamps. Dot diameter and line thickness are screen-space controls.
 Exact end-on line projections render finite square caps. Base walls can be
 disabled separately from the surface; all modes leave missing history blank.
+Bars adds solid, floor-anchored cuboids. Frequency groups use their highest
+processed level, and time spacing selects every Nth retained slice without
+changing history. Width/depth percentages keep footprints within their slots
+and the overall X/Y extents. Cuboids are ordered by disjoint ground footprints,
+not height, and only their three camera-facing faces are emitted, including
+bottom caps for views from below. Shaded sides use the existing palette and
+contrast mapping. Tests verify grouping, spacing, dimensions, gaps, and
+nearest-depth visibility across all eight isometric corners.
 The shared Heatmap palette interpolates seven blue-to-red color stops using
 the same normalized level as waterfall height. It is independent of desktop
 theme colors and camera/geometry settings; the module's dB floor and ceiling
