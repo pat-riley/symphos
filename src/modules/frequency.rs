@@ -288,7 +288,7 @@ impl FrequencyData {
 pub struct HistoryRow {
     pub time: Instant,
     pub levels: [f32; BANDS],
-    pub magnitudes: Vec<f32>,
+    pub magnitudes: std::sync::Arc<[f32]>,
     pub sequence: u64,
 }
 
@@ -310,7 +310,7 @@ impl History {
         self.last_sequence = 0;
     }
 
-    pub fn update(&mut self, frame: &AnalysisFrame, now: Instant, live: bool) {
+    fn prepare(&mut self, now: Instant, format: Option<(u32, usize)>) {
         while self
             .rows
             .front()
@@ -318,12 +318,9 @@ impl History {
         {
             self.rows.pop_front();
         }
-        if live
-            && !frame.bins.is_empty()
-            && self.format != Some((frame.sample_rate, frame.fft_size))
-        {
+        if format.is_some() && self.format != format {
             self.clear();
-            self.format = Some((frame.sample_rate, frame.fft_size));
+            self.format = format;
         }
         // Replay retained raw magnitudes when display processing changes. Merely
         // relabeling old bands would incorrectly move their frequencies.
@@ -348,6 +345,40 @@ impl History {
             }
             self.applied_settings = Some(self.data.settings.clone());
         }
+    }
+
+    pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
+        self.prepare(now, Some((frame.sample_rate, frame.fft_size)));
+        if frame.sequence <= self.last_sequence {
+            return;
+        }
+        let (changed, _) = self.data.update_magnitudes(
+            frame.magnitudes.len(),
+            |i| frame.magnitudes[i],
+            frame.sample_rate,
+            frame.fft_size,
+            frame.sequence,
+            now,
+        );
+        if changed {
+            self.last_sequence = frame.sequence;
+            self.rows.push_back(HistoryRow {
+                time: now,
+                levels: self.data.levels,
+                magnitudes: frame.magnitudes.clone(),
+                sequence: frame.sequence,
+            });
+        }
+        while self.rows.len() > 901 {
+            self.rows.pop_front();
+        }
+    }
+
+    pub fn update(&mut self, frame: &AnalysisFrame, now: Instant, live: bool) {
+        self.prepare(
+            now,
+            (live && !frame.bins.is_empty()).then_some((frame.sample_rate, frame.fft_size)),
+        );
         if live
             && frame.sequence != self.last_sequence
             && self

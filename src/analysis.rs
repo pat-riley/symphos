@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::f32::consts::PI;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -109,6 +110,7 @@ pub struct SpectrumBand {
 
 #[derive(Clone, Debug)]
 pub struct AnalysisFrame {
+    pub capture_epoch: u64,
     pub sequence: u64,
     pub sample_rate: u32,
     pub channels: u32,
@@ -137,6 +139,7 @@ pub struct AnalysisFrame {
 impl Default for AnalysisFrame {
     fn default() -> Self {
         Self {
+            capture_epoch: 0,
             sequence: 0,
             sample_rate: 48_000,
             channels: 2,
@@ -167,6 +170,8 @@ impl Default for AnalysisFrame {
 pub struct AnalysisRuntime {
     pub snapshot: Arc<ArcSwap<AnalysisFrame>>,
     pub settings: Arc<Mutex<AnalysisSettings>>,
+    pub capture_history: Arc<Mutex<crate::capture_history::CaptureHistory>>,
+    capture_epoch: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -181,10 +186,15 @@ impl AnalysisRuntime {
         let snapshot = Arc::new(ArcSwap::from_pointee(AnalysisFrame::default()));
         let settings = Arc::new(Mutex::new(AnalysisSettings::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let capture_history =
+            Arc::new(Mutex::new(crate::capture_history::CaptureHistory::default()));
+        let capture_epoch = Arc::new(AtomicU64::new(0));
         let worker = {
             let snapshot = snapshot.clone();
             let settings = settings.clone();
             let stop = stop.clone();
+            let capture_history = capture_history.clone();
+            let capture_epoch = capture_epoch.clone();
             thread::Builder::new()
                 .name("symphos-analysis".into())
                 .spawn(move || {
@@ -196,6 +206,8 @@ impl AnalysisRuntime {
                         channels,
                         dropped_samples,
                         stop,
+                        capture_history,
+                        capture_epoch,
                     );
                 })
                 .expect("failed to start analysis thread")
@@ -205,8 +217,22 @@ impl AnalysisRuntime {
             snapshot,
             settings,
             stop,
+            capture_history,
+            capture_epoch,
             worker: Some(worker),
         }
+    }
+
+    pub fn clear_history(&self) {
+        let epoch = self.capture_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        self.capture_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reset(epoch);
+    }
+
+    pub fn is_current(&self, frame: &AnalysisFrame) -> bool {
+        frame.capture_epoch == self.capture_epoch.load(Ordering::Acquire)
     }
 }
 
@@ -396,6 +422,7 @@ impl Analyzer {
         let mono_rms = ((rms[0] * rms[0] + rms[1] * rms[1]) * 0.5).sqrt();
 
         AnalysisFrame {
+            capture_epoch: 0,
             sequence,
             sample_rate,
             channels,
@@ -432,6 +459,8 @@ fn run_analysis(
     channels: Arc<std::sync::atomic::AtomicU32>,
     dropped_samples: Arc<std::sync::atomic::AtomicU64>,
     stop: Arc<AtomicBool>,
+    capture_history: Arc<Mutex<crate::capture_history::CaptureHistory>>,
+    requested_epoch: Arc<AtomicU64>,
 ) {
     let mut capture_rate = sample_rate.load(Ordering::Relaxed).max(1);
     let mut ring = vec![[0.0; 2]; capture_capacity(capture_rate)];
@@ -440,8 +469,20 @@ fn run_analysis(
     let mut since_analysis = 0_usize;
     let mut sequence = 0_u64;
     let mut analyzer = Analyzer::new(4096, WindowFunction::Hann);
+    let mut capture_epoch = requested_epoch.load(Ordering::Acquire);
 
     while !stop.load(Ordering::Acquire) {
+        let epoch = requested_epoch.load(Ordering::Acquire);
+        if epoch != capture_epoch {
+            capture_epoch = epoch;
+            ring.fill([0.0; 2]);
+            write_cursor = 0;
+            available = 0;
+            since_analysis = 0;
+            analyzer = Analyzer::new(analyzer.size, analyzer.last_window);
+            // Discard samples queued before the requested source/analysis reset.
+            while consumer.pop().is_ok() {}
+        }
         let rate = sample_rate.load(Ordering::Relaxed).max(1);
         if rate != capture_rate {
             capture_rate = rate;
@@ -470,7 +511,7 @@ fn run_analysis(
         if available >= current.fft_size && since_analysis >= hop {
             since_analysis %= hop;
             sequence += 1;
-            let frame = analyzer.analyze(
+            let mut frame = analyzer.analyze(
                 &ring,
                 write_cursor,
                 rate,
@@ -479,6 +520,14 @@ fn run_analysis(
                 sequence,
                 dropped_samples.load(Ordering::Relaxed),
             );
+            frame.capture_epoch = capture_epoch;
+            if requested_epoch.load(Ordering::Acquire) != capture_epoch {
+                continue;
+            }
+            capture_history
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(&frame, std::time::Instant::now());
             snapshot.store(Arc::new(frame));
         }
 

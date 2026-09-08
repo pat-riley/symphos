@@ -88,6 +88,7 @@ pub struct ModulePane {
     active_sections: [usize; 4],
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
+    pub last_capture: u64,
 }
 
 #[derive(Clone, PartialEq)]
@@ -188,10 +189,12 @@ impl ModulePane {
             active_sections: [0; 4],
             frozen: None,
             paused_duration: Duration::ZERO,
+            last_capture: 0,
         }
     }
 
     pub fn reset(&mut self) {
+        self.last_capture = 0;
         self.frozen = None;
         self.paused_duration = Duration::ZERO;
         self.waterfall.clear();
@@ -206,6 +209,7 @@ impl ModulePane {
     pub fn toggle_freeze(&mut self, frame: &AnalysisFrame, now: Instant) {
         if let Some(frozen) = self.frozen.take() {
             self.paused_duration += now.saturating_duration_since(frozen.started);
+            self.last_capture = frame.sequence;
         } else {
             self.frozen = Some(FrozenFrame {
                 frame: frame.clone(),
@@ -273,6 +277,24 @@ impl ModulePane {
         self.waveform.set_channel_view(stereo, channel);
     }
 
+    pub fn ingest(&mut self, frames: &[std::sync::Arc<crate::capture_history::SpectralFrame>]) {
+        for frame in frames {
+            if frame.sequence <= self.last_capture {
+                continue;
+            }
+            self.last_capture = frame.sequence;
+            if self.is_frozen() {
+                continue;
+            }
+            let time = frame.time - self.paused_duration;
+            match self.kind {
+                ModuleKind::Waterfall => self.waterfall.ingest(frame, time),
+                ModuleKind::Spectrogram => self.spectrogram.ingest(frame, time),
+                _ => {}
+            }
+        }
+    }
+
     pub fn draw(
         &mut self,
         ui: &mut egui::Ui,
@@ -291,10 +313,10 @@ impl ModulePane {
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
-            ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, false),
             ModuleKind::Spectrum => self.spectrum.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Waveform => self.waveform.draw(ui, rect, frame, theme, live),
-            ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, false),
         }
         if self.frozen.is_some() {
             ui.painter().text(
@@ -466,6 +488,62 @@ fn frequency_label(hz: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_history_panes_catch_up_without_painting_and_manual_pause_still_skips_audio() {
+        use std::sync::Arc;
+        let mut panes = [
+            ModulePane::new(ModuleKind::Spectrogram),
+            ModulePane::new(ModuleKind::Waterfall),
+        ];
+        let start = Instant::now();
+        let frames: Vec<_> = (0..240)
+            .map(|i| {
+                Arc::new(crate::capture_history::SpectralFrame {
+                    sequence: i + 1,
+                    time: start + Duration::from_millis(i * 34),
+                    sample_rate: 48000,
+                    fft_size: 512,
+                    magnitudes: vec![0.1; 257].into(),
+                })
+            })
+            .collect();
+        // No UI frame or draw call occurs during these eight seconds of capture.
+        for pane in &mut panes {
+            pane.ingest(&frames);
+        }
+        assert_eq!(panes[0].spectrogram.history_len(), 240);
+        assert_eq!(panes[1].waterfall.history_len(), 240);
+        let paused_at = start + Duration::from_secs(9);
+        panes[0].toggle_freeze(
+            &AnalysisFrame {
+                sequence: 240,
+                ..Default::default()
+            },
+            paused_at,
+        );
+        let next = Arc::new(crate::capture_history::SpectralFrame {
+            sequence: 241,
+            time: paused_at + Duration::from_secs(1),
+            sample_rate: 48000,
+            fft_size: 512,
+            magnitudes: vec![0.2; 257].into(),
+        });
+        for pane in &mut panes {
+            pane.ingest(std::slice::from_ref(&next));
+        }
+        assert_eq!(panes[0].spectrogram.history_len(), 240);
+        assert_eq!(panes[1].waterfall.history_len(), 241);
+        panes[0].toggle_freeze(
+            &AnalysisFrame {
+                sequence: 241,
+                ..Default::default()
+            },
+            paused_at + Duration::from_secs(1),
+        );
+        panes[0].ingest(&frames);
+        assert_eq!(panes[0].spectrogram.history_len(), 240);
+    }
 
     #[test]
     fn settings_clipboard_is_typed_and_does_not_copy_capture_or_pause_state() {

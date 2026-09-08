@@ -77,6 +77,7 @@ impl SymphosApp {
     }
 
     fn reset_modules(&mut self) {
+        self.engine.analysis.clear_history();
         for pane in &mut self.panes {
             pane.reset();
         }
@@ -92,7 +93,10 @@ impl SymphosApp {
                     sources_changed = true;
                 }
                 AudioEvent::Status(status) => {
-                    if !matches!(status, AudioStatus::Streaming) {
+                    if matches!(
+                        status,
+                        AudioStatus::Connecting | AudioStatus::Idle | AudioStatus::Error(_)
+                    ) {
                         self.reset_modules();
                     }
                     self.status = status;
@@ -220,7 +224,8 @@ impl SymphosApp {
         use crate::shortcuts::Action;
         let live = matches!(self.status, AudioStatus::Streaming)
             && self.selected_node.is_some()
-            && frame.sequence > 0;
+            && frame.sequence > 0
+            && self.engine.analysis.is_current(frame);
         match crate::shortcuts::take_action(
             ctx,
             self.show_shortcuts || self.show_issues || self.show_inspector,
@@ -281,7 +286,8 @@ impl SymphosApp {
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
         let live = matches!(self.status, AudioStatus::Streaming)
             && self.selected_node.is_some()
-            && frame.sequence > 0;
+            && frame.sequence > 0
+            && self.engine.analysis.is_current(frame);
         let selected = self.selected_pane == index;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 7.0, self.theme.panel);
@@ -527,6 +533,24 @@ impl eframe::App for SymphosApp {
             .unwrap_or_else(|error| error.into_inner()) = settings;
         if reset {
             self.reset_modules();
+        }
+        // Consume capture for every assigned pane, even when another pane is
+        // expanded. The analysis-side archive catches up after window occlusion.
+        let after = self
+            .panes
+            .iter()
+            .map(|pane| pane.last_capture)
+            .min()
+            .unwrap_or(0);
+        let captures = self
+            .engine
+            .analysis
+            .capture_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .since(after);
+        for pane in &mut self.panes {
+            pane.ingest(&captures);
         }
         for pane in &mut self.panes {
             pane.set_channel_view(self.global_bar.stereo, self.global_bar.channel);

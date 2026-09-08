@@ -1,6 +1,7 @@
 mod analysis;
 mod app;
 mod audio;
+mod capture_history;
 mod global_bar;
 mod help;
 mod icons;

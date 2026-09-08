@@ -14,6 +14,10 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
+- Spectrogram/waterfall history continues while panes are hidden or the app window
+  is occluded. Returning views catch up from the latest 30 seconds of independently
+  captured frequency history. Only explicit pane Pause stops that pane's history;
+  this is a rolling analyzer buffer, not an audio recording feature.
 - Copy/Paste settings in the module sidebar (Ctrl+Shift+C / Ctrl+Shift+V) applies
   a settings-only snapshot to a matching module. Audio/history, pause state, and
   global channel choices stay with the destination pane. This is session-only;

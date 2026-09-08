@@ -7,7 +7,7 @@
    logs, or performs FFT work.
 2. **Analysis lane** drains the ring, maintains overlapping windows, computes
    reusable real FFT plans, derives metrics, and atomically publishes an
-immutable `AnalysisFrame`.
+   immutable `AnalysisFrame`.
 3. **UI/GPU lane** reads the newest snapshot and renders it. It never waits for
    the audio or analysis lane and may safely skip intermediate frames.
 
@@ -127,7 +127,15 @@ constitute pitch or key detection.
 
 Waterfall and spectrogram histories retain at most 30 seconds / 901 snapshots
 per active module, sampled at no more than 30 Hz. Monotonic timestamps set the
-time axis independently of UI refresh rate. Raw FFT magnitudes are retained
+time axis independently of UI refresh rate. A bounded analysis-lane archive
+collects these snapshots even when the window is occluded or another pane is
+expanded. Every assigned history module consumes newly captured snapshots,
+independently of painting; a returning window catches up from the latest 30 seconds.
+Raw magnitudes use shared immutable arrays, so the archive and independent
+module histories do not duplicate FFT buffers. Source/analysis resets advance a
+capture epoch, clear queued old-source samples, and reject obsolete packets.
+Manual pane pause skips archive ingestion and preserves its virtual clock.
+Raw FFT magnitudes are retained
 alongside display bands so frequency range, scale, gain, smoothing, and decay
 changes reprocess existing history without a reset. The maximum FFT size uses
 about 29 MiB of magnitude storage per history. Stale snapshots leave gaps;
@@ -189,8 +197,8 @@ independent per waterfall/spectrogram; other palettes and height are untouched.
 Slider and scroll zoom share a 0.5×–10× range; close-ups are clipped to the pane
 and existing pan gestures allow navigation without changing geometry or history.
 History length, height, time-slice detail, palette, and camera controls are local
-to the waterfall. Hidden panes
-do not render or accumulate new history. No audio callback work was added.
+to the waterfall. Hidden panes do not render, but continue accumulating history
+from the analysis-side archive. No audio callback work was added.
 
 ## Frequency analysis
 

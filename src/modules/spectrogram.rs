@@ -74,6 +74,13 @@ impl Default for Spectrogram {
 }
 
 impl Spectrogram {
+    pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
+        self.history.ingest(frame, now);
+    }
+    #[cfg(test)]
+    pub fn history_len(&self) -> usize {
+        self.history.rows.len()
+    }
     pub fn clear(&mut self) {
         self.history.clear();
         self.texture = None;
@@ -320,7 +327,7 @@ mod tests {
         target.history.rows.push_back(HistoryRow {
             time: Instant::now(),
             levels: [-25.0; BANDS],
-            magnitudes: vec![0.1],
+            magnitudes: vec![0.1].into(),
             sequence: 9,
         });
         target.apply_settings(&source.settings_snapshot());
@@ -338,7 +345,7 @@ mod tests {
         spectrogram.history.rows.push_back(HistoryRow {
             time: now,
             levels: [-30.0; BANDS],
-            magnitudes: vec![],
+            magnitudes: vec![].into(),
             sequence: 1,
         });
         let render = |spectrogram: &mut Spectrogram| {
@@ -386,7 +393,7 @@ mod tests {
         spectrogram.history.rows.push_back(HistoryRow {
             time: now,
             levels,
-            magnitudes: vec![],
+            magnitudes: vec![].into(),
             sequence: 1,
         });
         let horizontal = spectrogram.image(now, &theme);

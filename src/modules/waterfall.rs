@@ -206,6 +206,13 @@ impl Default for Waterfall {
 }
 
 impl Waterfall {
+    pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
+        self.history.ingest(frame, now);
+    }
+    #[cfg(test)]
+    pub fn history_len(&self) -> usize {
+        self.history.rows.len()
+    }
     pub fn reset_settings(&mut self) {
         let mut history = std::mem::take(&mut self.history);
         history.data.settings = Default::default();
@@ -1504,7 +1511,7 @@ mod tests {
                 time: now,
                 sequence: 1,
                 levels: [-45.0; BANDS],
-                magnitudes: vec![],
+                magnitudes: vec![].into(),
             });
         waterfall
     }
@@ -1953,7 +1960,7 @@ mod tests {
             time: now,
             sequence: 1,
             levels: [-45.0; BANDS],
-            magnitudes: Vec::new(),
+            magnitudes: Vec::new().into(),
         });
         let context = egui::Context::default();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
@@ -2003,7 +2010,7 @@ mod tests {
             time: now,
             sequence: 42,
             levels: [-45.0; BANDS],
-            magnitudes: vec![0.1],
+            magnitudes: vec![0.1].into(),
         });
         for seconds in [
             MIN_HISTORY_SECONDS,
@@ -2025,7 +2032,7 @@ mod tests {
             assert_eq!(waterfall.seconds, seconds);
             assert_eq!(waterfall.history.rows.len(), 1);
             assert_eq!(waterfall.history.rows[0].time, now);
-            assert_eq!(waterfall.history.rows[0].magnitudes, vec![0.1]);
+            assert_eq!(&*waterfall.history.rows[0].magnitudes, &[0.1]);
             assert_eq!(waterfall.zoom, 5.0);
             assert_eq!(waterfall.pan, Vec2::new(0.2, -0.1));
         }
@@ -2046,7 +2053,7 @@ mod tests {
             time: now,
             sequence: 1,
             levels: [-45.0; BANDS],
-            magnitudes: Vec::new(),
+            magnitudes: Vec::new().into(),
         });
         let context = egui::Context::default();
         for (seconds, connections) in [(0.1, 23), (1.0, 2)] {
@@ -2376,7 +2383,7 @@ mod tests {
             waterfall.history.rows.push_back(HistoryRow {
                 time: start + Duration::from_secs_f32(row as f32 / 30.0),
                 levels,
-                magnitudes: Vec::new(),
+                magnitudes: Vec::new().into(),
                 sequence: row + 1,
             });
         }
