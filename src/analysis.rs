@@ -114,6 +114,8 @@ pub struct AnalysisFrame {
     pub log_bands: Vec<SpectrumBand>,
     pub peak: [f32; 2],
     pub rms: [f32; 2],
+    pub mix_peak: f32,
+    pub mix_rms: f32,
     pub dominant_frequency_hz: f32,
     pub dominant_note: String,
     pub spectral_centroid_hz: f32,
@@ -140,6 +142,8 @@ impl Default for AnalysisFrame {
             log_bands: Vec::new(),
             peak: [0.0; 2],
             rms: [0.0; 2],
+            mix_peak: 0.0,
+            mix_rms: 0.0,
             dominant_frequency_hz: 0.0,
             dominant_note: "—".into(),
             spectral_centroid_hz: 0.0,
@@ -262,6 +266,8 @@ impl Analyzer {
         self.ensure_window(settings.window);
         let mut peak = [0.0_f32; 2];
         let mut squares = [0.0_f64; 2];
+        let mut mix_peak = 0.0_f32;
+        let mut mix_squares = 0.0_f64;
         let mut zero_crossings = 0_u32;
         let mut previous = 0.0_f32;
         let mut waveform_left = Vec::with_capacity(512);
@@ -282,6 +288,9 @@ impl Analyzer {
             peak[1] = peak[1].max(sample[1].abs());
             squares[0] += f64::from(sample[0] * sample[0]);
             squares[1] += f64::from(sample[1] * sample[1]);
+            let mix = (sample[0] + sample[1]) * 0.5;
+            mix_peak = mix_peak.max(mix.abs());
+            mix_squares += f64::from(mix) * f64::from(mix);
 
             let mono = selected_sample(sample, settings.channel_mode) - mean;
             if i > 0 && mono.signum() != previous.signum() {
@@ -392,6 +401,8 @@ impl Analyzer {
             log_bands,
             peak,
             rms,
+            mix_peak,
+            mix_rms: (mix_squares / self.size as f64).sqrt() as f32,
             dominant_frequency_hz: dominant.0,
             dominant_note: frequency_to_note(dominant.0),
             spectral_centroid_hz,
@@ -578,6 +589,23 @@ fn estimate_bpm(flux: &VecDeque<f32>, fps: u32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mix_meters_measure_summed_samples_including_phase_cancellation() {
+        let size = 1024;
+        let settings = AnalysisSettings {
+            fft_size: size,
+            ..Default::default()
+        };
+        let mut analyzer = Analyzer::new(size, settings.window);
+        for (sample, expected) in [([0.75, -0.75], 0.0), ([0.6, 0.6], 0.6), ([1.0, 0.0], 0.5)] {
+            let frame = analyzer.analyze(&vec![sample; size], 0, 48_000, 2, &settings, 1, 0);
+            assert!((frame.mix_rms - expected).abs() < 1.0e-6);
+            assert!((frame.mix_peak - expected).abs() < 1.0e-6);
+            assert!((frame.rms[0] - sample[0].abs()).abs() < 1.0e-6);
+            assert!((frame.rms[1] - sample[1].abs()).abs() < 1.0e-6);
+        }
+    }
 
     #[test]
     fn note_conversion_is_correct() {

@@ -14,6 +14,9 @@ pub struct FrequencySettings {
     pub max_hz: f32,
     pub gain: f32,
     pub smoothing: f32,
+    pub frequency_smoothing: usize,
+    pub note_labels: bool,
+    pub tuning_hz: f32,
     pub decay: f32,
     pub floor: f32,
     pub ceiling: f32,
@@ -27,6 +30,9 @@ impl Default for FrequencySettings {
             max_hz: 20_000.0,
             gain: 0.0,
             smoothing: 0.72,
+            frequency_smoothing: 0,
+            note_labels: false,
+            tuning_hz: 440.0,
             decay: 36.0,
             floor: -90.0,
             ceiling: 0.0,
@@ -53,19 +59,29 @@ impl FrequencySettings {
         )
         .help_text("Highest displayed frequency in Hz, limited by the source's sample rate.");
         self.max_hz = self.max_hz.max(self.min_hz + 1.0);
+        ui.separator();
+        ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
+        if self.note_labels {
+            ui.add(egui::Slider::new(&mut self.tuning_hz, 400.0..=480.0).text("A4 Hz"))
+                .help_text("Tuning reference for note labels. Standard concert tuning is A4 = 440 Hz; this does not change the audio.");
+        }
     }
 
     pub fn response_controls(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().slider_width = ui.spacing().slider_width.min(78.0);
         ui.add(egui::Slider::new(&mut self.gain, -24.0..=36.0).text("Gain dB"))
             .help_text(
                 "Boost or reduce displayed levels in this module. Does not change audio volume.",
             );
-        ui.add(egui::Slider::new(&mut self.smoothing, 0.0..=0.98).text("Smooth"))
+        ui.add(egui::Slider::new(&mut self.smoothing, 0.0..=0.98).text("Time smooth"))
             .help_text("Higher values smooth rapid level changes; lower values respond faster.");
         ui.add(egui::Slider::new(&mut self.decay, 6.0..=96.0).text("Decay dB/s"))
             .help_text(
                 "How quickly displayed levels fall after a peak. Higher values fall faster.",
             );
+        ui.separator();
+        ui.add(egui::Slider::new(&mut self.frequency_smoothing, 0..=8).text("Freq. smooth"))
+            .help_text("Blend neighboring displayed frequency bands. 0 is off; higher values soften jagged peaks across frequency, independently of time smoothing. Retained history is reprocessed without clearing it; audio and FFT resolution are unchanged.");
     }
 
     pub fn level_controls(&mut self, ui: &mut egui::Ui) {
@@ -90,6 +106,52 @@ impl FrequencySettings {
     pub fn intensity(&self, db: f32) -> f32 {
         ((db - self.floor) / (self.ceiling - self.floor)).clamp(0.0, 1.0)
     }
+
+    pub fn axis_label(&self, fraction: f32, sample_rate: u32) -> String {
+        let hz = self.frequency(fraction, sample_rate);
+        if self.note_labels {
+            note_label(hz, self.tuning_hz)
+        } else {
+            super::frequency_label(hz)
+        }
+    }
+}
+
+fn note_label(hz: f32, tuning_hz: f32) -> String {
+    const NOTES: [&str; 12] = [
+        "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
+    ];
+    let midi = (69.0 + 12.0 * (hz.max(0.01) / tuning_hz).log2()).round() as i32;
+    format!(
+        "{}{}",
+        NOTES[midi.rem_euclid(12) as usize],
+        midi.div_euclid(12) - 1
+    )
+}
+
+/// Triangular, edge-normalized smoothing of power, not dB values. A constant
+/// spectrum stays constant and silence cannot pull a neighboring peak to -∞.
+fn smooth_frequency(levels: &[f32; BANDS], radius: usize) -> [f32; BANDS] {
+    if radius == 0 {
+        return *levels;
+    }
+    let radius = radius.min(8);
+    let power = levels.map(|db| 10.0_f32.powf(db / 10.0));
+    std::array::from_fn(|i| {
+        let mut sum = 0.0;
+        let mut weight = 0.0;
+        for (j, value) in power
+            .iter()
+            .enumerate()
+            .take((i + radius + 1).min(BANDS))
+            .skip(i.saturating_sub(radius))
+        {
+            let w = (radius + 1 - i.abs_diff(j)) as f32;
+            sum += value * w;
+            weight += w;
+        }
+        (10.0 * (sum / weight).max(1.0e-12).log10()).clamp(-120.0, 48.0)
+    })
 }
 
 pub struct FrequencyData {
@@ -161,7 +223,8 @@ impl FrequencyData {
             .min(0.25);
         let attack = 1.0 - self.settings.smoothing.powf(dt * 60.0);
         let bins_per_hz = fft_size as f32 / sample_rate.max(1) as f32;
-        for i in 0..BANDS {
+        let mut targets = [-120.0; BANDS];
+        for (i, target) in targets.iter_mut().enumerate() {
             let low = self
                 .settings
                 .frequency(i as f32 / BANDS as f32, sample_rate);
@@ -176,8 +239,13 @@ impl FrequencyData {
                 let index = (((low + high) * 0.5 * bins_per_hz).round() as usize).min(count - 1);
                 magnitude_at(index)
             };
-            let db =
+            *target =
                 (20.0 * magnitude.max(1.0e-7).log10() + self.settings.gain).clamp(-120.0, 48.0);
+        }
+        for (i, db) in smooth_frequency(&targets, self.settings.frequency_smoothing)
+            .into_iter()
+            .enumerate()
+        {
             self.levels[i] = if db > self.levels[i] {
                 self.levels[i] + (db - self.levels[i]) * attack
             } else {
@@ -238,6 +306,7 @@ impl History {
                 || previous.max_hz != self.data.settings.max_hz
                 || previous.gain != self.data.settings.gain
                 || previous.smoothing != self.data.settings.smoothing
+                || previous.frequency_smoothing != self.data.settings.frequency_smoothing
                 || previous.decay != self.data.settings.decay
         });
         if processing_changed {
@@ -299,6 +368,79 @@ mod tests {
     use super::*;
     use crate::analysis::FrequencyBin;
     use std::time::Duration;
+
+    #[test]
+    fn frequency_smoothing_is_bounded_symmetric_and_preserves_flat_spectra() {
+        let mut spike = [-120.0; BANDS];
+        spike[48] = 0.0;
+        assert_eq!(smooth_frequency(&spike, 0), spike);
+        for radius in 1..=8 {
+            let smooth = smooth_frequency(&spike, radius);
+            assert!(smooth[48] < 0.0 && smooth[48] > -12.0);
+            assert!(smooth[47] > -120.0 && smooth[47] < smooth[48]);
+            for offset in 1..=radius {
+                assert_eq!(smooth[48 - offset], smooth[48 + offset]);
+            }
+            assert_eq!(smooth[48 + radius + 1], -120.0);
+            for db in [-120.0, -45.0, 0.0, 48.0] {
+                assert!(
+                    smooth_frequency(&[db; BANDS], radius)
+                        .iter()
+                        .all(|value| value.is_finite() && (*value - db).abs() < 0.001)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn note_labels_cover_octaves_accidentals_and_custom_tuning() {
+        for (hz, label) in [
+            (440.0, "A4"),
+            (880.0, "A5"),
+            (261.6256, "C4"),
+            (277.1826, "C♯4"),
+            (27.5, "A0"),
+        ] {
+            assert_eq!(note_label(hz, 440.0), label);
+        }
+        assert_eq!(note_label(432.0, 432.0), "A4");
+        let mut settings = FrequencySettings {
+            min_hz: 440.0,
+            ..FrequencySettings::default()
+        };
+        assert_eq!(settings.axis_label(0.0, 48000), "440");
+        settings.note_labels = true;
+        assert_eq!(settings.axis_label(0.0, 48000), "A4");
+    }
+
+    #[test]
+    fn spatial_smoothing_replays_retained_audio_but_labels_do_not_reprocess_it() {
+        let mut history = History::default();
+        history.data.settings.smoothing = 0.0;
+        let mut tone = frame(1);
+        for bin in &mut tone.bins {
+            bin.magnitude = 1.0e-7;
+        }
+        tone.bins[85].magnitude = 1.0;
+        let now = Instant::now();
+        history.update(&tone, now, true);
+        let original = history.rows[0].levels;
+        let magnitudes = history.rows[0].magnitudes.clone();
+        history.data.settings.frequency_smoothing = 4;
+        history.update(&tone, now, false);
+        assert_ne!(history.rows[0].levels, original);
+        assert_eq!(history.rows.len(), 1);
+        assert_eq!(history.rows[0].time, now);
+        assert_eq!(history.rows[0].magnitudes, magnitudes);
+        let smooth = history.rows[0].levels;
+        history.data.settings.note_labels = true;
+        history.data.settings.tuning_hz = 432.0;
+        history.update(&tone, now, false);
+        assert_eq!(history.rows[0].levels, smooth);
+        history.data.settings.frequency_smoothing = 0;
+        history.update(&tone, now, false);
+        assert_eq!(history.rows[0].levels, original);
+    }
 
     fn frame(sequence: u64) -> AnalysisFrame {
         AnalysisFrame {

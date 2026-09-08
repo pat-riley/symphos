@@ -81,7 +81,7 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, open: &mut bool) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .small_button("×")
-                .help_text("Hide Info View. Reopen it with Help at the bottom right.")
+                .help_text("Hide Info View. Reopen it with Help at the bottom left.")
                 .clicked()
             {
                 *open = false;

@@ -42,14 +42,35 @@ spectrogram state in `src/modules/`. Selecting a pane directs the compact
 sidebar to its active module. Pane assignment and sizing live in the UI;
 capture and analysis remain independent of layout and rendering.
 
-Sidebar controls use a shared collapsible-panel helper. Section IDs are scoped
-by pane and module, separating disclosure state while switching modules.
-Frequency bounds, signal response, and appearance controls are separate groups;
-shared audio analysis and meters remain outside the module-specific groups.
+Sidebar controls use a shared section filter and a persistent icon rail.
+Only the selected section renders. Tab selections belong to each pane/module,
+so changing modules or panes restores that module's previous tab. The rail has
+its own collapse chevron and stays available while details are hidden. No shared
+settings or meters remain in the sidebar.
+Each pane/module/tab also has an independent scroll-area identity, avoiding
+scroll offsets carrying across unrelated sections. Appearance uses grouped
+render-style, color/level, and viewport-guide controls; Geometry retains only
+dimensions and time-slice detail. Render styles have vector icons and retain
+independent per-style settings when switching.
+
+`global_bar` owns the stereo/single-view display state, renders visible FFT/rate
+controls, an advanced shared-options menu, and compact meters. Help is at the
+far left. The UI passes the global channel view to every waveform pane, including
+currently hidden ones, without resetting frequency histories. FFT/window/analysis
+channel edits retain their existing history-reset behavior; display mode and rate
+edits do not reset history. The analysis lane accumulates actual mixed-sample
+RMS/peak alongside stereo levels, so cancellation is represented correctly;
+the real-time capture callback is unchanged. Capture status remains available
+through a colored indicator and the shared menu instead of the Live badge.
 The waterfall's sidebar and viewport orientation gizmos operate on the same
 camera state and share its projection math. Their Z-up axes map frequency to X,
 time to Y, and level to Z. Axis clicks align or flip the view without changing
 pan, zoom, or history. Gizmo dragging retains unrestricted orbit.
+Named presets explicitly select all six orthographic sides without toggling.
+Eight isometric presets use ±35.264° elevation and 45° corner increments for
+equal axis foreshortening. Camera auto-orbit integrates elapsed visible-frame
+time, caps long resume gaps, and keeps pitch/framing unchanged. Manual camera
+actions and presets stop auto-orbit; capture timing and history are unaffected.
 Gizmos retain invisible endpoint hit targets with colored arms and plain labels,
 without endpoint discs. `help::HoverHelp` preserves descriptions at control call
 sites and sends hovered/dragged response text to the docked Info View instead of
@@ -63,6 +84,13 @@ magnitudes. Each applies its own gain, time-adjusted smoothing, decay, frequency
 range, and dB range; shared FFT/window/channel controls still select the signal
 and transform used by all panes. This avoids applying the analysis frame's
 pre-smoothed display bins a second time.
+Optional frequency smoothing applies an edge-normalized triangular kernel
+over linear power in neighboring display bands before the temporal response.
+Radius zero preserves existing behavior exactly; radii 1–8 soften spectral
+shape without altering the FFT. Retained histories replay this setting from
+raw magnitudes. Musical-note labels use nearest equal-tempered notes with a
+per-module A4 reference; label/tuning edits never reprocess history and do not
+constitute pitch or key detection.
 
 Waterfall and spectrogram histories retain at most 30 seconds / 901 snapshots
 per active module, sampled at no more than 30 Hz. Monotonic timestamps set the
@@ -84,6 +112,8 @@ views from below the grid. Panning offsets the projected camera center in pane
 coordinates, independently of zoom and rotation, and scales with pane resizing.
 The waterfall defaults to two seconds and
 supports 0.1–30 seconds, with independent surface-grid and floor-grid toggles.
+A master guide switch also suppresses all axis lines, labels, hints, and the
+viewport gizmo without overwriting the individual visibility preferences.
 Independent 0.25×–10× X (frequency) and Y (time) length multipliers under Geometry
 scale the surface, lines, wireframe, floor grid, and axis labels together.
 Both default to 1×. A shared geometry transform maps the user-facing Y axis to
@@ -95,11 +125,19 @@ Y Lines emits only time-axis connections within each frequency band, with no
 cross-frequency edges, and skips missing-history gaps just like Wireframe.
 Dots emits small screen-space discs for valid frequency/time samples only,
 sorted back-to-front in a single mesh, with no edges between samples.
+Stems adds floor-anchored, color-graded pins and point caps. Style-specific
+spacing decimates rendered traces/points only; it never changes stored bands
+or timestamps. Dot diameter and line thickness are screen-space controls.
+Exact end-on line projections render finite square caps. Base walls can be
+disabled separately from the surface; all modes leave missing history blank.
 The shared Heatmap palette interpolates seven blue-to-red color stops using
 the same normalized level as waterfall height. It is independent of desktop
 theme colors and camera/geometry settings; the module's dB floor and ceiling
 define its signal range. It also applies to the spectrogram without changing
 capture or retained history.
+Heatmap contrast applies a symmetric power curve to color coordinates only,
+preserving cool/warm endpoints and the midpoint. It defaults to 1 and is
+independent per waterfall/spectrogram; other palettes and height are untouched.
 Slider and scroll zoom share a 0.5×–10× range; close-ups are clipped to the pane
 and existing pan gestures allow navigation without changing geometry or history.
 History length, height, time-slice detail, palette, and camera controls are local

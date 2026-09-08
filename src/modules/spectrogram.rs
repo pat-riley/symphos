@@ -5,7 +5,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use super::{
     Palette,
     frequency::{BANDS, History},
-    frequency_label, label, settings_panel,
+    label, settings_panel,
 };
 use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
@@ -14,6 +14,7 @@ pub struct Spectrogram {
     history: History,
     seconds: f32,
     palette: Palette,
+    contrast: f32,
     texture: Option<egui::TextureHandle>,
 }
 
@@ -23,6 +24,7 @@ impl Default for Spectrogram {
             history: History::default(),
             seconds: 8.0,
             palette: Palette::default(),
+            contrast: 1.0,
             texture: None,
         }
     }
@@ -35,17 +37,18 @@ impl Spectrogram {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
-        settings_panel(ui, "Time & History", true, |ui| {
+        settings_panel(ui, "Time & History", |ui| {
             ui.add(egui::Slider::new(&mut self.seconds, 2.0..=30.0).text("History s")).help_text("Seconds of recent audio shown in the spectrogram. Color shows signal level across frequency and time.");
         });
-        settings_panel(ui, "Frequency Range", true, |ui| {
+        settings_panel(ui, "Frequency Range", |ui| {
             self.history.data.settings.range_controls(ui)
         });
-        settings_panel(ui, "Signal Response", false, |ui| {
+        settings_panel(ui, "Signal Response", |ui| {
             self.history.data.settings.response_controls(ui)
         });
-        settings_panel(ui, "Appearance", true, |ui| {
+        settings_panel(ui, "Appearance", |ui| {
             self.palette.controls(ui);
+            self.palette.contrast_controls(ui, &mut self.contrast);
             self.history.data.settings.level_controls(ui);
         });
     }
@@ -67,8 +70,11 @@ impl Spectrogram {
             let age = self.seconds * (1.0 - x as f32 / (width - 1) as f32);
             if let Some(levels) = self.history.sample(now, age) {
                 for (band, db) in levels.iter().enumerate() {
-                    pixels[(BANDS - band - 1) * width + x] =
-                        self.palette.color(settings.intensity(*db), theme);
+                    pixels[(BANDS - band - 1) * width + x] = self.palette.color_with_contrast(
+                        settings.intensity(*db),
+                        self.contrast,
+                        theme,
+                    );
                 }
             }
         }
@@ -101,7 +107,7 @@ impl Spectrogram {
             label(
                 &painter,
                 Pos2::new(rect.left() + 3.0, plot.bottom() - t * plot.height() - 5.0),
-                frequency_label(settings.frequency(t, frame.sample_rate)),
+                settings.axis_label(t, frame.sample_rate),
                 theme.muted,
             );
         }

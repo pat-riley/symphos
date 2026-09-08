@@ -10,6 +10,7 @@ use std::time::Instant;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 
 use crate::help::HoverHelp;
+use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 use spectrogram::Spectrogram;
 use spectrum::Spectrum;
@@ -50,7 +51,7 @@ impl ModuleKind {
                 "Current signal level by frequency. Hover over a band to inspect its frequency and level."
             }
             Self::Waveform => {
-                "Audio amplitude over a short time window. Choose separate stereo channels or a combined signal in settings."
+                "Audio amplitude over a short time window. Use the bottom-bar stereo/mix icon to switch between separate channels and a combined signal."
             }
             Self::Spectrogram => {
                 "Frequency over time, with color showing signal level. Newest audio appears on the right."
@@ -65,6 +66,45 @@ pub struct ModulePane {
     spectrum: Spectrum,
     waveform: Waveform,
     spectrogram: Spectrogram,
+    active_sections: [usize; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsSection {
+    Camera,
+    History,
+    Geometry,
+    Frequency,
+    Response,
+    Appearance,
+    TimeWindow,
+    Amplitude,
+}
+
+impl SettingsSection {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Camera => "Camera",
+            Self::History => "Time & History",
+            Self::Geometry => "Geometry",
+            Self::Frequency => "Frequency Range",
+            Self::Response => "Signal Response",
+            Self::Appearance => "Appearance",
+            Self::TimeWindow => "Time Window",
+            Self::Amplitude => "Amplitude",
+        }
+    }
+    pub fn icon(self) -> Icon {
+        match self {
+            Self::Camera => Icon::Camera,
+            Self::History | Self::TimeWindow => Icon::Time,
+            Self::Geometry => Icon::Geometry,
+            Self::Frequency => Icon::Frequency,
+            Self::Response => Icon::Response,
+            Self::Appearance => Icon::Appearance,
+            Self::Amplitude => Icon::Waveform,
+        }
+    }
 }
 
 impl ModulePane {
@@ -75,6 +115,7 @@ impl ModulePane {
             spectrum: Spectrum::default(),
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
+            active_sections: [0; 4],
         }
     }
 
@@ -85,12 +126,44 @@ impl ModulePane {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
-        ui.push_id(self.kind.label(), |ui| match self.kind {
-            ModuleKind::Waterfall => self.waterfall.controls(ui),
-            ModuleKind::Spectrum => self.spectrum.controls(ui),
-            ModuleKind::Waveform => self.waveform.controls(ui, frame),
-            ModuleKind::Spectrogram => self.spectrogram.controls(ui),
+        let section = self.active_section();
+        ui.push_id(self.kind.label(), |ui| {
+            ui.data_mut(|data| data.insert_temp(ui.id().with("active-module-section"), section));
+            match self.kind {
+                ModuleKind::Waterfall => self.waterfall.controls(ui),
+                ModuleKind::Spectrum => self.spectrum.controls(ui),
+                ModuleKind::Waveform => self.waveform.controls(ui, frame),
+                ModuleKind::Spectrogram => self.spectrogram.controls(ui),
+            }
         });
+    }
+
+    pub fn sections(&self) -> &'static [SettingsSection] {
+        use SettingsSection::*;
+        match self.kind {
+            ModuleKind::Waterfall => &[Camera, History, Geometry, Frequency, Response, Appearance],
+            ModuleKind::Spectrum => &[Frequency, Response, Appearance],
+            ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
+            ModuleKind::Waveform => &[TimeWindow, Amplitude],
+        }
+    }
+
+    pub fn active_section(&self) -> SettingsSection {
+        self.sections()[self.active_sections[self.kind as usize]]
+    }
+
+    pub fn select_section(&mut self, section: SettingsSection) {
+        if let Some(index) = self
+            .sections()
+            .iter()
+            .position(|candidate| *candidate == section)
+        {
+            self.active_sections[self.kind as usize] = index;
+        }
+    }
+
+    pub fn set_channel_view(&mut self, stereo: bool, channel: crate::analysis::ChannelMode) {
+        self.waveform.set_channel_view(stereo, channel);
     }
 
     pub fn draw(
@@ -123,27 +196,16 @@ impl ModulePane {
     }
 }
 
-pub(crate) fn settings_panel(
-    ui: &mut egui::Ui,
-    title: &str,
-    open: bool,
-    body: impl FnOnce(&mut egui::Ui),
-) {
+pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    let selected =
+        ui.data(|data| data.get_temp::<SettingsSection>(ui.id().with("active-module-section")));
+    if selected.is_some_and(|section| section.title() != title) {
+        return;
+    }
     ui.push_id(title, |ui| {
-        ui.visuals_mut().collapsing_header_frame = true;
-        egui::CollapsingHeader::new(egui::RichText::new(title).strong())
-            .id_salt(title)
-            .default_open(open)
-            .show_background(true)
-            .show(ui, |ui| {
-                ui.add_space(3.0);
-                body(ui);
-                ui.add_space(5.0);
-            })
-            .header_response
-            .help_text(format!(
-                "Show or hide {title} settings. Other panels can stay open."
-            ));
+        ui.strong(title);
+        ui.add_space(6.0);
+        body(ui);
     });
 }
 
@@ -181,75 +243,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn module_switching_preserves_independent_section_states() {
+    fn icon_tabs_show_one_section_and_preserve_per_module_and_pane_selection() {
         let context = egui::Context::default();
-        let time = std::cell::Cell::new(0.0);
-        let mut pane = ModulePane::new(ModuleKind::Spectrum);
-        let render = |pane: &mut ModulePane, index: usize, events| {
-            time.set(time.get() + 0.05);
-            let mut output = context.run_ui(
-                egui::RawInput {
-                    time: Some(time.get()),
-                    events,
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 1400.0))),
-                    ..Default::default()
-                },
-                |ui| {
-                    ui.push_id(index, |ui| pane.controls(ui, &AnalysisFrame::default()));
-                },
-            );
+        let mut pane = ModulePane::new(ModuleKind::Waterfall);
+        let render = |pane: &mut ModulePane| {
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                pane.controls(ui, &AnalysisFrame::default());
+            });
             output.textures_delta.clear();
             output
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some((text.galley.job.text.clone(), text.pos)),
+                    egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
         };
-        let toggle = |pane: &mut ModulePane| {
-            let labels = render(pane, 0, vec![]);
-            let position = labels
+        let labels = render(&mut pane);
+        assert!(labels.iter().any(|label| label == "Camera"));
+        assert!(!labels.iter().any(|label| label == "History s"));
+        pane.select_section(SettingsSection::Geometry);
+        let labels = render(&mut pane);
+        assert!(labels.iter().any(|label| label == "Length X"));
+        assert!(
+            !labels
                 .iter()
-                .find(|(text, _)| text == "Frequency Range")
-                .expect("frequency header")
-                .1
-                + egui::vec2(5.0, 5.0);
-            for pressed in [true, false] {
-                render(
-                    pane,
-                    0,
-                    vec![
-                        egui::Event::PointerMoved(position),
-                        egui::Event::PointerButton {
-                            pos: position,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ],
-                );
-            }
-        };
-        let range_visible = |pane: &mut ModulePane, index| {
-            time.set(time.get() + 1.0);
-            render(pane, index, vec![])
-                .iter()
-                .any(|(text, _)| text == "Low Hz")
-        };
-        assert!(range_visible(&mut pane, 0));
-        toggle(&mut pane);
-        assert!(!range_visible(&mut pane, 0));
-        pane.kind = ModuleKind::Waterfall;
-        assert!(!range_visible(&mut pane, 0));
-        toggle(&mut pane);
-        assert!(range_visible(&mut pane, 0));
+                .any(|label| label == "Camera" || label == "History s")
+        );
         pane.kind = ModuleKind::Spectrum;
-        assert!(!range_visible(&mut pane, 0));
-        assert!(range_visible(&mut pane, 1));
+        assert_eq!(pane.active_section(), SettingsSection::Frequency);
+        pane.select_section(SettingsSection::Appearance);
         pane.kind = ModuleKind::Waterfall;
-        assert!(range_visible(&mut pane, 0));
+        assert_eq!(pane.active_section(), SettingsSection::Geometry);
+        pane.kind = ModuleKind::Spectrum;
+        assert_eq!(pane.active_section(), SettingsSection::Appearance);
+        let other = ModulePane::new(ModuleKind::Spectrum);
+        assert_eq!(other.active_section(), SettingsSection::Frequency);
+        pane.kind = ModuleKind::Waveform;
+        assert_eq!(
+            pane.sections(),
+            &[SettingsSection::TimeWindow, SettingsSection::Amplitude]
+        );
+    }
+
+    #[test]
+    fn global_channel_view_reaches_every_waveform_pane() {
+        let context = egui::Context::default();
+        for kind in ModuleKind::ALL {
+            let mut pane = ModulePane::new(kind);
+            pane.set_channel_view(false, crate::analysis::ChannelMode::StereoMix);
+            pane.kind = ModuleKind::Waveform;
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                pane.draw(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 300.0)),
+                    &AnalysisFrame::default(),
+                    &AppTheme::default(),
+                    false,
+                );
+            });
+            output.textures_delta.clear();
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == "Stereo mix")));
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == "L" || text.galley.job.text == "R")));
+        }
     }
 
     #[test]
@@ -284,6 +343,36 @@ mod tests {
         }
         assert!(colors.len() > 250);
     }
+
+    #[test]
+    fn heatmap_contrast_preserves_endpoints_midpoint_and_other_palettes() {
+        let theme = AppTheme::default();
+        for contrast in [0.25, 1.0, 3.0] {
+            for t in [0.0, 0.5, 1.0] {
+                assert_eq!(
+                    Palette::Heatmap.color_with_contrast(t, contrast, &theme),
+                    Palette::Heatmap.color(t, &theme)
+                );
+            }
+            for palette in [Palette::Theme, Palette::Ember, Palette::Ocean] {
+                assert_eq!(
+                    palette.color_with_contrast(0.3, contrast, &theme),
+                    palette.color(0.3, &theme)
+                );
+            }
+        }
+        let cool = Palette::Heatmap.color_with_contrast(0.25, 3.0, &theme);
+        let warm = Palette::Heatmap.color_with_contrast(0.75, 3.0, &theme);
+        assert!(cool.b() > cool.g());
+        assert!(warm.r() > warm.g());
+        for step in 0..=100 {
+            let t = step as f32 / 100.0;
+            assert_eq!(
+                Palette::Heatmap.color_with_contrast(t, 1.0, &theme),
+                Palette::Heatmap.color(t, &theme)
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -296,6 +385,24 @@ enum Palette {
 }
 
 impl Palette {
+    fn contrast_controls(self, ui: &mut egui::Ui, contrast: &mut f32) {
+        if self == Self::Heatmap {
+            ui.add(egui::Slider::new(contrast, 0.25..=3.0).text("Contrast"))
+                .help_text("1 is neutral. Higher contrast separates quiet blues from loud reds; lower contrast brings colors toward the middle. Changes color only, not height, levels, or retained audio.");
+        }
+    }
+
+    fn color_with_contrast(self, value: f32, contrast: f32, theme: &AppTheme) -> Color32 {
+        let value = if self == Self::Heatmap {
+            let t = value.clamp(0.0, 1.0);
+            let a = t.powf(contrast);
+            a / (a + (1.0 - t).powf(contrast))
+        } else {
+            value
+        };
+        self.color(value, theme)
+    }
+
     fn controls(&mut self, ui: &mut egui::Ui) {
         egui::ComboBox::from_id_salt("palette")
             .selected_text(self.label())
