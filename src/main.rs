@@ -1,6 +1,7 @@
 mod analysis;
 mod app;
 mod audio;
+mod help;
 mod modules;
 mod theme;
 

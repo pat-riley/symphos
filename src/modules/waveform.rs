@@ -1,6 +1,7 @@
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 
 use super::{label, mix, settings_panel};
+use crate::help::HoverHelp;
 use crate::{
     analysis::{AnalysisFrame, ChannelMode},
     theme::AppTheme,
@@ -29,7 +30,7 @@ impl Waveform {
         let max_ms = frame.fft_size as f32 / frame.sample_rate.max(1) as f32 * 1000.0;
         self.time_ms = self.time_ms.min(max_ms);
         settings_panel(ui, "Time Window", true, |ui| {
-            ui.add(egui::Slider::new(&mut self.time_ms, 1.0..=max_ms.max(1.0)).text("Window ms"));
+            ui.add(egui::Slider::new(&mut self.time_ms, 1.0..=max_ms.max(1.0)).text("Window ms")).help_text("Milliseconds of waveform shown. The maximum is set by the shared FFT capture window.");
             ui.small("Limited by the shared FFT capture window.");
         });
         settings_panel(ui, "Amplitude", true, |ui| {
@@ -37,10 +38,11 @@ impl Waveform {
                 egui::Slider::new(&mut self.amplitude, 0.1..=10.0)
                     .logarithmic(true)
                     .text("Amplitude"),
-            );
+            )
+            .help_text("Vertical magnification of the waveform. Does not change audio volume.");
         });
         settings_panel(ui, "Channels", true, |ui| {
-            ui.checkbox(&mut self.stereo, "Separate stereo channels");
+            ui.checkbox(&mut self.stereo, "Separate stereo channels").help_text("Show left and right channels separately, or combine them using the selected channel mode.");
             if !self.stereo {
                 egui::ComboBox::from_id_salt("wave-channel")
                     .selected_text(self.channel.label())
@@ -48,7 +50,9 @@ impl Waveform {
                         for mode in ChannelMode::ALL {
                             ui.selectable_value(&mut self.channel, mode, mode.label());
                         }
-                    });
+                    })
+                    .response
+                    .help_text("Choose which channel or stereo combination the waveform displays.");
             }
         });
     }
