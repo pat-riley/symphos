@@ -56,6 +56,13 @@ fn parse(input: &str, safe: &RangeInclusive<f64>, integer: bool) -> Result<f64, 
 
 impl<T: Numeric> Widget for Parameter<'_, T> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
+        let id = self.text.clone();
+        ui.push_id(id, |ui| self.render(ui)).inner
+    }
+}
+
+impl<T: Numeric> Parameter<'_, T> {
+    fn render(self, ui: &mut egui::Ui) -> Response {
         let before = self.value.to_f64();
         let low = self.range.start().to_f64();
         let high = self.range.end().to_f64();
@@ -89,7 +96,11 @@ impl<T: Numeric> Widget for Parameter<'_, T> {
                 if cancel || commit {
                     if !cancel {
                         match parse(&draft, &self.safe, T::INTEGRAL) {
-                            Ok(parsed) => { value = parsed; ui.data_mut(|d| d.remove::<String>(bar.id.with("error"))); },
+                            Ok(parsed) => {
+                                value = parsed;
+                                if parsed != before { issues::note(&format!("{context} · {}", self.text), &format!("Typed value changed from {before} to {parsed}.")); }
+                                ui.data_mut(|d| d.remove::<String>(bar.id.with("error")));
+                            },
                             Err(reason) => {
                                 issues::record(&format!("{context} · {}", self.text), &format!("Rejected {draft:?}; retained {before}. {reason}"));
                                 ui.data_mut(|d| d.insert_temp(bar.id.with("error"), reason));

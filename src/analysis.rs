@@ -683,6 +683,51 @@ fn estimate_bpm(flux: &VecDeque<f32>, fps: u32) -> (f32, f32) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn analysis_worker_captures_without_a_renderer_and_rejects_reset_epochs() {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(65_536);
+        let runtime = AnalysisRuntime::start(
+            consumer,
+            Arc::new(std::sync::atomic::AtomicU32::new(48_000)),
+            Arc::new(std::sync::atomic::AtomicU32::new(2)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        runtime.settings.lock().unwrap().fft_size = 512;
+        let first_epoch = runtime.capture_epoch.load(Ordering::Acquire);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while runtime.capture_history.lock().unwrap().since(0).len() < 3 {
+            for i in 0..512 {
+                let _ = producer.push([(i as f32 * 0.1).sin() * 0.5; 2]);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "analysis worker did not capture independently"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let before = runtime.snapshot.load_full();
+        assert!(runtime.is_current(&before));
+        runtime.clear_history();
+        assert!(!runtime.is_current(&before));
+        assert!(runtime.capture_history.lock().unwrap().since(0).is_empty());
+        while !runtime.is_current(&runtime.snapshot.load_full())
+            || runtime.capture_history.lock().unwrap().since(0).is_empty()
+        {
+            for _ in 0..512 {
+                let _ = producer.push([0.0; 2]);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "analysis worker did not resume after reset"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let after = runtime.snapshot.load_full();
+        assert!(runtime.is_current(&after));
+        assert_eq!(after.capture_epoch, first_epoch + 1);
+        assert!(after.sequence > before.sequence);
+    }
+
     fn legacy_log_bands(
         bins: &[FrequencyBin],
         min_frequency: f32,

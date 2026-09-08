@@ -123,8 +123,10 @@ const BINDINGS: &[Binding] = &[
 ];
 
 fn editing_text(ctx: &egui::Context) -> bool {
-    ctx.memory(|m| m.focused())
-        .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
+    ctx.memory(|m| m.focused()).is_some_and(|id| {
+        egui::text_edit::TextEditState::load(ctx, id).is_some()
+            || ctx.data(|data| data.get_temp::<String>(id).is_some())
+    })
 }
 
 pub fn take_action(ctx: &egui::Context, modal_open: bool) -> Option<Action> {
@@ -238,6 +240,24 @@ mod tests {
             |ui| {
                 assert_eq!(take_action(ui.ctx(), false), None);
                 ui.text_edit_singleline(&mut text);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn pending_numeric_entry_blocks_shortcuts_before_its_first_text_edit_frame() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("pending-parameter");
+        ctx.data_mut(|d| d.insert_temp(id, "12".to_string()));
+        ctx.memory_mut(|m| m.request_focus(id));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![event(Key::Num1, Modifiers::NONE, false)],
+                ..Default::default()
+            },
+            |ui| {
+                assert_eq!(take_action(ui.ctx(), false), None);
             },
         );
         output.textures_delta.clear();

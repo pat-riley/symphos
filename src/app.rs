@@ -93,6 +93,9 @@ impl SymphosApp {
                     sources_changed = true;
                 }
                 AudioEvent::Status(status) => {
+                    if let AudioStatus::Error(message) = &status {
+                        crate::issues::record("Audio capture", message);
+                    }
                     if matches!(
                         status,
                         AudioStatus::Connecting | AudioStatus::Idle | AudioStatus::Error(_)
@@ -598,7 +601,22 @@ impl eframe::App for SymphosApp {
             ui.painter().rect_filled(help_rect, 7.0, self.theme.panel);
             help::draw(ui, help_rect, &mut self.help_open);
         }
-        crate::issues::show(ui.ctx(), &mut self.show_issues);
+        if self.show_issues {
+            let details = format!(
+                "Source: {}\nState: {}\nSample rate: {} Hz · channels: {} · FFT: {}\nDropped samples: {} · capture epoch: {}\nPane {} · paused: {}\n{:#?}",
+                self.selected_node.as_deref().unwrap_or("None"),
+                self.status.label(),
+                snapshot.sample_rate,
+                snapshot.channels,
+                snapshot.fft_size,
+                snapshot.dropped_samples,
+                snapshot.capture_epoch,
+                self.selected_pane + 1,
+                self.panes[self.selected_pane].is_frozen(),
+                self.panes[self.selected_pane].copy_settings()
+            );
+            crate::issues::show(ui.ctx(), &mut self.show_issues, &details);
+        }
         crate::shortcuts::show(ui.ctx(), &mut self.show_shortcuts);
         let target_rate = self
             .engine

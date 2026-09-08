@@ -39,21 +39,36 @@ pub fn init() {
 }
 
 pub fn record(context: &str, message: &str) {
+    log::warn!("{context}: {message}");
+    append("WARN", context, message);
+}
+
+pub fn note(context: &str, message: &str) {
+    log::info!("{context}: {message}");
+    append("INFO", context, message);
+}
+
+fn append(level: &str, context: &str, message: &str) {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let entry: String = format!("{seconds} · {context}: {message}")
+    let entry: String = format!("{seconds} · {level} · {context}: {message}")
         .chars()
         .take(1200)
         .collect();
-    log::warn!("{entry}");
     let mut log = state().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(path) = &log.path
-        && std::fs::metadata(path).map_or(0, |m| m.len()) < MAX_FILE_BYTES
-        && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
-    {
-        let _ = writeln!(file, "{entry}");
+    if let Some(path) = &log.path {
+        if std::fs::metadata(path).map_or(0, |m| m.len()) + entry.len() as u64 + 1 > MAX_FILE_BYTES
+        {
+            // Keep the previous bounded log, and leave room for the latest error.
+            let _ = std::fs::rename(path, path.with_extension("previous.log"));
+        }
+        if std::fs::metadata(path).map_or(0, |m| m.len()) + (entry.len() as u64) < MAX_FILE_BYTES
+            && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+        {
+            let _ = writeln!(file, "{entry}");
+        }
     }
     log.entries.push_back(entry);
     while log.entries.len() > MAX_ENTRIES {
@@ -79,7 +94,7 @@ pub fn report() -> String {
     )
 }
 
-pub fn show(ctx: &egui::Context, open: &mut bool) {
+pub fn show(ctx: &egui::Context, open: &mut bool, details: &str) {
     if !*open {
         return;
     }
@@ -88,13 +103,14 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
         ui.heading("Issue log");
         ui.label("Rejected parameter values keep the last valid setting. Nothing is sent to GitHub automatically.");
         let path = state().lock().unwrap_or_else(|e| e.into_inner()).path.clone();
-        if let Some(path) = path { ui.small(format!("Log: {} (1 MiB cap)", path.display())); }
-        let mut text = report();
+        if let Some(path) = path { ui.small(format!("Log: {} (1 MiB, plus one previous log)", path.display())); }
+        let mut text = format!("{}\n\nCurrent view/capture:\n{details}", report());
+        let clipboard_text = text.clone();
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             ui.add(egui::TextEdit::multiline(&mut text).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace).interactive(false));
         });
         ui.horizontal(|ui| {
-            if ui.button("Copy issue report").clicked() { ctx.copy_text(report()); }
+            if ui.button("Copy issue report").clicked() { ctx.copy_text(clipboard_text); }
             if ui.button("Clear session").clicked() { state().lock().unwrap_or_else(|e| e.into_inner()).entries.clear(); }
             if ui.button("Close").clicked() { *open = false; }
         });

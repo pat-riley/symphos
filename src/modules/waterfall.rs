@@ -505,15 +505,15 @@ impl Waterfall {
                         ui.checkbox(&mut self.surface_walls, "Base walls").help_text("Close the terrain's perimeter down to the fixed floor. Turn off for a floating sheet.");
                     }
                     RenderMode::Lines => {
-                        width_control(ui, &mut self.line_width, 1.1);
+                        ui.push_id("x-line-width", |ui| width_control(ui, &mut self.line_width, 1.1));
                         spacing_control(ui, &mut self.line_spacing, 1, "Trace spacing", "Display every Nth time slice. Does not change history duration or audio sampling.");
                     }
                     RenderMode::YLines => {
-                        width_control(ui, &mut self.y_line_width, 1.1);
+                        ui.push_id("y-line-width", |ui| width_control(ui, &mut self.y_line_width, 1.1));
                         spacing_control(ui, &mut self.y_line_spacing, 1, "Band spacing", "Display every Nth frequency trace. Does not change FFT resolution.");
                     }
                     RenderMode::Wireframe => {
-                        width_control(ui, &mut self.wire_width, 1.1);
+                        ui.push_id("wire-width", |ui| width_control(ui, &mut self.wire_width, 1.1));
                         spacing_control(ui, &mut self.wire_spacing, 1, "Mesh spacing", "Display every Nth frequency and time grid line; keeps the outer edges.");
                     }
                     RenderMode::Dots => {
@@ -521,7 +521,7 @@ impl Waterfall {
                         spacing_control(ui, &mut self.dot_spacing, 1, "Point spacing", "Display every Nth band and time slice for a more open point cloud.");
                     }
                     RenderMode::Stems => {
-                        width_control(ui, &mut self.stem_width, 1.2);
+                        ui.push_id("stem-width", |ui| width_control(ui, &mut self.stem_width, 1.2));
                         spacing_control(ui, &mut self.stem_spacing, 4, "Stem spacing", "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.");
                     }
                     RenderMode::Bars => {

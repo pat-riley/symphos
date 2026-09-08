@@ -2,7 +2,7 @@
 // Clone is deliberate so this schema can grow owned preset fields later.
 macro_rules! module_settings {
     ($module:ident, $settings:ident, { $($field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
-        #[derive(Clone, PartialEq)]
+        #[derive(Clone, Debug, PartialEq)]
         pub(crate) struct $settings { $( $field: $ty, )* }
         impl $module {
             #[allow(clippy::clone_on_copy)]
@@ -91,7 +91,7 @@ pub struct ModulePane {
     pub last_capture: u64,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ModuleSettings {
     Waterfall(waterfall::WaterfallSettings),
     Spectrum(spectrum::SpectrumSettings),
@@ -339,7 +339,7 @@ impl ModulePane {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TraceStyle {
     Bars,
     Line,
@@ -842,7 +842,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Palette {
     #[default]
     Theme,

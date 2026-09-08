@@ -34,7 +34,10 @@ and visual parameter mapping are still on the roadmap.
   percentages, and algorithm limits remain bounded. Rejected values retain the last
   valid setting and appear in **Settings → Issue log**, with a copyable report.
   Diagnostics also append to `$XDG_STATE_HOME/symphos/issues.log` (fallback
-  `~/.local/state/symphos/issues.log`, capped at roughly 1 MiB); no automatic uploads.
+  `~/.local/state/symphos/issues.log`, 1 MiB plus one rotated previous log).
+  Reports include typed-value changes, rejected values, capture errors, panic
+  messages, and a preview of the selected module/current capture configuration.
+  Review before sharing; no automatic uploads.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
 - Four resizable panes with interchangeable waterfall, spectrum, waveform,
   and spectrogram modules
