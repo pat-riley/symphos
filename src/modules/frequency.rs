@@ -3,6 +3,7 @@ use std::{collections::VecDeque, time::Instant};
 use eframe::egui;
 
 use crate::analysis::AnalysisFrame;
+use crate::help::HoverHelp;
 
 pub const BANDS: usize = 96;
 
@@ -36,31 +37,44 @@ impl Default for FrequencySettings {
 impl FrequencySettings {
     pub fn range_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.logarithmic, true, "Log");
-            ui.selectable_value(&mut self.logarithmic, false, "Linear");
+            ui.selectable_value(&mut self.logarithmic, true, "Log").help_text("Space frequencies logarithmically to give bass and treble comparable room. Retained history is redrawn, not cleared.");
+            ui.selectable_value(&mut self.logarithmic, false, "Linear").help_text("Space frequencies evenly in Hz. Retained history is redrawn, not cleared.");
         });
         ui.add(
             egui::Slider::new(&mut self.min_hz, 10.0..=2000.0)
                 .logarithmic(true)
                 .text("Low Hz"),
-        );
+        )
+        .help_text("Lowest displayed frequency in Hz. Changes only this module's view.");
         ui.add(
             egui::Slider::new(&mut self.max_hz, 2000.0..=24_000.0)
                 .logarithmic(true)
                 .text("High Hz"),
-        );
+        )
+        .help_text("Highest displayed frequency in Hz, limited by the source's sample rate.");
         self.max_hz = self.max_hz.max(self.min_hz + 1.0);
     }
 
     pub fn response_controls(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.gain, -24.0..=36.0).text("Gain dB"));
-        ui.add(egui::Slider::new(&mut self.smoothing, 0.0..=0.98).text("Smooth"));
-        ui.add(egui::Slider::new(&mut self.decay, 6.0..=96.0).text("Decay dB/s"));
+        ui.add(egui::Slider::new(&mut self.gain, -24.0..=36.0).text("Gain dB"))
+            .help_text(
+                "Boost or reduce displayed levels in this module. Does not change audio volume.",
+            );
+        ui.add(egui::Slider::new(&mut self.smoothing, 0.0..=0.98).text("Smooth"))
+            .help_text("Higher values smooth rapid level changes; lower values respond faster.");
+        ui.add(egui::Slider::new(&mut self.decay, 6.0..=96.0).text("Decay dB/s"))
+            .help_text(
+                "How quickly displayed levels fall after a peak. Higher values fall faster.",
+            );
     }
 
     pub fn level_controls(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.floor, -120.0..=-24.0).text("Floor dB"));
-        ui.add(egui::Slider::new(&mut self.ceiling, -18.0..=12.0).text("Ceiling dB"));
+        ui.add(egui::Slider::new(&mut self.floor, -120.0..=-24.0).text("Floor dB"))
+            .help_text("Quietest visible signal level. Lower this to reveal quieter detail.");
+        ui.add(egui::Slider::new(&mut self.ceiling, -18.0..=12.0).text("Ceiling dB"))
+            .help_text(
+                "Signal level mapped to maximum intensity or height. Does not limit the audio.",
+            );
     }
 
     pub fn frequency(&self, fraction: f32, sample_rate: u32) -> f32 {

@@ -5,7 +5,8 @@ use eframe::egui::{
 };
 
 use crate::analysis::{AnalysisFrame, ChannelMode, FFT_SIZES, WindowFunction};
-use crate::audio::{AudioEngine, AudioEvent, AudioSource, AudioStatus};
+use crate::audio::{AudioEngine, AudioEvent, AudioSource, AudioStatus, SourceKind};
+use crate::help::{self, HoverHelp};
 use crate::modules::{ModuleKind, ModulePane};
 use crate::theme::AppTheme;
 
@@ -15,6 +16,7 @@ pub struct SymphosApp {
     engine: AudioEngine,
     sources: Vec<AudioSource>,
     selected_node: Option<String>,
+    source_manually_selected: bool,
     status: AudioStatus,
     theme: AppTheme,
     last_theme_check: Instant,
@@ -25,6 +27,7 @@ pub struct SymphosApp {
     panes: [ModulePane; 4],
     selected_pane: usize,
     sidebar_open: bool,
+    help_open: bool,
     focused_pane: Option<usize>,
     top_fraction: f32,
     bottom_splits: [f32; 2],
@@ -40,6 +43,7 @@ impl SymphosApp {
             engine,
             sources: Vec::new(),
             selected_node: None,
+            source_manually_selected: false,
             status: AudioStatus::Idle,
             theme,
             last_theme_check: Instant::now(),
@@ -55,6 +59,7 @@ impl SymphosApp {
             ],
             selected_pane: 0,
             sidebar_open: true,
+            help_open: false,
             focused_pane: None,
             top_fraction: 0.62,
             bottom_splits: [1.0 / 3.0, 2.0 / 3.0],
@@ -69,9 +74,13 @@ impl SymphosApp {
 
     fn process_audio_events(&mut self) {
         let events: Vec<_> = self.engine.drain_events().collect();
+        let mut sources_changed = false;
         for event in events {
             match event {
-                AudioEvent::Sources(sources) => self.sources = sources,
+                AudioEvent::Sources(sources) => {
+                    self.sources = sources;
+                    sources_changed = true;
+                }
                 AudioEvent::Status(status) => {
                     if !matches!(status, AudioStatus::Streaming) {
                         self.reset_modules();
@@ -79,6 +88,21 @@ impl SymphosApp {
                     self.status = status;
                 }
             }
+        }
+        // Discovery arrives incrementally. Prefer speakers when they appear,
+        // but never override an explicit choice (including a microphone).
+        if sources_changed
+            && let Some(source) = default_output_source(
+                &self.sources,
+                self.selected_node.as_deref(),
+                self.source_manually_selected,
+            )
+            .cloned()
+        {
+            self.selected_node = Some(source.node_name.clone());
+            self.status = AudioStatus::Connecting;
+            self.reset_modules();
+            self.engine.select_source(source);
         }
     }
 
@@ -104,28 +128,31 @@ impl SymphosApp {
             .sources
             .iter()
             .find(|source| Some(&source.node_name) == self.selected_node.as_ref())
-            .map(|source| format!("{} · {}", source.kind.label(), source.display_name))
+            .map(|source| source.display_name.clone())
             .unwrap_or_else(|| {
                 if self.sources.is_empty() {
-                    "Looking for PipeWire sources…".into()
+                    "Looking for outputs…".into()
                 } else {
                     "Select an audio source…".into()
                 }
             });
         egui::ComboBox::from_id_salt("audio-source")
-            .width((ui.available_width() - 250.0).clamp(220.0, 470.0))
+            .width(260.0)
             .truncate()
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
                 for source in &self.sources {
                     let selected = Some(&source.node_name) == self.selected_node.as_ref();
                     let label = format!("{}  {}", source.kind.label(), source.display_name);
-                    if ui.selectable_label(selected, label).clicked() {
+                    if ui.selectable_label(selected, label).help_text(format!("Analyze {}: {}. Changing sources clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
+                        self.source_manually_selected = true;
                         self.selected_node = Some(source.node_name.clone());
                         self.engine.select_source(source.clone());
                     }
                 }
-            });
+            }).response.help_text(format!("Audio source: {}. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session.",
+                self.sources.iter().find(|source| Some(&source.node_name) == self.selected_node.as_ref())
+                    .map_or("none", |source| source.display_name.as_str())));
         if self.selected_node != previous_node {
             self.reset_modules();
         }
@@ -150,9 +177,9 @@ impl SymphosApp {
                     .selected_text(format!("{} samples", settings.fft_size))
                     .show_ui(ui, |ui| {
                         for size in FFT_SIZES {
-                            ui.selectable_value(&mut settings.fft_size, size, size.to_string());
+                            ui.selectable_value(&mut settings.fft_size, size, size.to_string()).help_text("Larger FFT sizes give finer frequency detail but a longer analysis window. Changing this clears histories in all panes.");
                         }
-                    });
+                    }).response.help_text("FFT sample count, shared by all panes. Larger sizes give finer frequency detail and a longer capture window.");
                 ui.end_row();
                 ui.label("Window");
                 egui::ComboBox::from_id_salt("window")
@@ -162,7 +189,7 @@ impl SymphosApp {
                         for window in WindowFunction::ALL {
                             ui.selectable_value(&mut settings.window, window, window.label());
                         }
-                    });
+                    }).response.help_text("Window function used before the FFT. Controls the tradeoff between frequency separation and spectral leakage. Changing this clears all histories.");
                 ui.end_row();
                 ui.label("Channel");
                 egui::ComboBox::from_id_salt("channel")
@@ -176,7 +203,7 @@ impl SymphosApp {
                                 channel.label(),
                             );
                         }
-                    });
+                    }).response.help_text("Channel or stereo combination used for shared frequency analysis. Changing this clears all histories.");
                 ui.end_row();
                 ui.label("Rate");
                 egui::ComboBox::from_id_salt("analysis-fps")
@@ -190,7 +217,7 @@ impl SymphosApp {
                                 format!("{rate} Hz"),
                             );
                         }
-                    });
+                    }).response.help_text("Target analysis and display update rate. Higher rates use more CPU/GPU resources.");
                 ui.end_row();
             });
         if before != (settings.fft_size, settings.window, settings.channel_mode) {
@@ -202,7 +229,8 @@ impl SymphosApp {
             .settings
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = settings;
-        ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics");
+        ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics")
+            .help_text("Open raw frequency bins and detailed audio-analysis statistics.");
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
@@ -225,7 +253,7 @@ impl SymphosApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .small_button("‹")
-                    .on_hover_text("Collapse settings")
+                    .help_text("Collapse settings")
                     .clicked()
                 {
                     self.sidebar_open = false;
@@ -317,9 +345,9 @@ impl SymphosApp {
                 .selected_text(before.label())
                 .show_ui(ui, |ui| {
                     for kind in ModuleKind::ALL {
-                        ui.selectable_value(&mut self.panes[index].kind, kind, kind.label());
+                        ui.selectable_value(&mut self.panes[index].kind, kind, kind.label()).help_text(kind.description());
                     }
-                });
+                }).response.help_text("Choose which visualization appears in this pane. Each module has its own settings.");
             if before != self.panes[index].kind {
                 self.panes[index].reset();
                 self.selected_pane = index;
@@ -334,7 +362,7 @@ impl SymphosApp {
                     } else {
                         "Expand"
                     })
-                    .on_hover_text(if focused {
+                    .help_text(if focused {
                         "Restore dashboard"
                     } else {
                         "Expand pane"
@@ -368,7 +396,8 @@ impl SymphosApp {
         );
         let response = ui
             .interact(divider, ui.id().with("row-split"), Sense::drag())
-            .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+            .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+            .help_text("Drag to resize the main pane and the lower row.");
         if response.dragged() {
             self.top_fraction =
                 (self.top_fraction + response.drag_delta().y / rect.height()).clamp(0.35, 0.75);
@@ -394,7 +423,8 @@ impl SymphosApp {
             );
             let response = ui
                 .interact(handle, ui.id().with(("column-split", split)), Sense::drag())
-                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+                .help_text("Drag to resize the adjacent visualization panes.");
             if response.dragged() {
                 let minimum = if split == 0 {
                     0.2
@@ -439,6 +469,7 @@ impl SymphosApp {
 impl eframe::App for SymphosApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_theme(ui.ctx());
+        help::begin_frame(ui);
         self.process_audio_events();
         if ui.input(|input| input.key_pressed(egui::Key::F11)) {
             self.toggle_fullscreen(ui.ctx());
@@ -464,7 +495,7 @@ impl eframe::App for SymphosApp {
         nav.horizontal_centered(|ui| {
             if ui
                 .selectable_label(self.sidebar_open, "☰")
-                .on_hover_text("Toggle module settings")
+                .help_text("Toggle module settings")
                 .clicked()
             {
                 self.sidebar_open = !self.sidebar_open;
@@ -476,28 +507,29 @@ impl eframe::App for SymphosApp {
                     .color(self.theme.foreground),
             );
             ui.add_space(10.0);
-            self.source_selector(ui);
-            if ui
-                .small_button("↻")
-                .on_hover_text("Refresh audio sources")
-                .clicked()
-            {
-                self.engine.refresh_sources();
-            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.scope(|ui| {
+                    ui.spacing_mut().interact_size.y = 26.0;
+                    ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
+                    ui.style_mut().override_font_id = Some(FontId::proportional(13.0));
+                    self.source_selector(ui);
+                });
+                if ui.small_button("↻").help_text("Refresh audio sources").clicked() {
+                    self.engine.refresh_sources();
+                }
                 ui.menu_button("View", |ui| {
-                    if ui.button("Reset pane sizes").clicked() {
+                    if ui.button("Reset pane sizes").help_text("Restore the default dashboard proportions and leave expanded-pane mode.").clicked() {
                         self.top_fraction = 0.62;
                         self.bottom_splits = [1.0 / 3.0, 2.0 / 3.0];
                         self.focused_pane = None;
                         ui.close();
                     }
-                    if ui.button("Fullscreen · F11").clicked() {
+                    if ui.button("Fullscreen · F11").help_text("Toggle fullscreen. You can also press F11.").clicked() {
                         self.toggle_fullscreen(ui.ctx());
                         ui.close();
                     }
-                    ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics");
-                });
+                    ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics").help_text("Open raw FFT bins and detailed audio-analysis statistics.");
+                }).response.help_text("Dashboard layout, fullscreen, and detailed diagnostics.");
             });
         });
         let footer = Rect::from_min_max(
@@ -507,7 +539,6 @@ impl eframe::App for SymphosApp {
         let mut footer_ui = ui.new_child(egui::UiBuilder::new().id_salt("footer").max_rect(footer));
         footer_ui.spacing_mut().interact_size.y = 22.0;
         footer_ui.horizontal_centered(|ui| {
-            status_badge(ui, &self.status, &self.theme);
             ui.label(
                 RichText::new(format!("{:.0} FPS", self.display_fps))
                     .monospace()
@@ -544,16 +575,17 @@ impl eframe::App for SymphosApp {
                         .color(self.theme.warning),
                 );
             }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                help::toggle(ui, &mut self.help_open);
+                status_badge(ui, &self.status, &self.theme);
+            });
         });
-        let mut content = Rect::from_min_max(
+        let content = Rect::from_min_max(
             Pos2::new(rect.left() + 12.0, rect.top() + 56.0),
             Pos2::new(rect.right() - 12.0, rect.bottom() - 40.0),
         );
-        if self.sidebar_open {
-            let sidebar_rect = Rect::from_min_max(
-                content.min,
-                Pos2::new(content.left() + 236.0, content.bottom()),
-            );
+        let layout = workspace_layout(content, self.sidebar_open, self.help_open);
+        if let Some(sidebar_rect) = layout.sidebar {
             ui.painter()
                 .rect_filled(sidebar_rect, 7.0, self.theme.panel);
             let mut sidebar = ui.new_child(
@@ -563,9 +595,8 @@ impl eframe::App for SymphosApp {
             );
             sidebar.set_clip_rect(sidebar_rect.intersect(ui.clip_rect()));
             self.sidebar(&mut sidebar, &snapshot);
-            content.min.x = sidebar_rect.right() + 10.0;
         }
-        self.dashboard(ui, content, &snapshot);
+        self.dashboard(ui, layout.dashboard, &snapshot);
         if self.show_inspector {
             egui::Window::new("FFT inspector / diagnostics")
                 .open(&mut self.show_inspector)
@@ -574,6 +605,10 @@ impl eframe::App for SymphosApp {
                     diagnostics(ui, &snapshot);
                     raw_inspector(ui, &snapshot, &self.theme);
                 });
+        }
+        if let Some(help_rect) = layout.help {
+            ui.painter().rect_filled(help_rect, 7.0, self.theme.panel);
+            help::draw(ui, help_rect, &mut self.help_open);
         }
         let target_rate = self
             .engine
@@ -584,6 +619,61 @@ impl eframe::App for SymphosApp {
             .analysis_fps;
         ui.ctx()
             .request_repaint_after(Duration::from_secs_f32(1.0 / target_rate.max(1) as f32));
+    }
+}
+
+struct WorkspaceLayout {
+    dashboard: Rect,
+    sidebar: Option<Rect>,
+    help: Option<Rect>,
+}
+
+fn default_output_source<'a>(
+    sources: &'a [AudioSource],
+    selected_node: Option<&str>,
+    manually_selected: bool,
+) -> Option<&'a AudioSource> {
+    if manually_selected {
+        return None;
+    }
+    sources
+        .iter()
+        .filter(|source| source.kind == SourceKind::SystemOutput)
+        .min_by_key(|source| {
+            let speakers = source.display_name.to_lowercase().contains("speaker")
+                || source.node_name.to_lowercase().contains("speaker");
+            (!speakers, &source.node_name)
+        })
+        .filter(|source| Some(source.node_name.as_str()) != selected_node)
+}
+
+fn workspace_layout(content: Rect, sidebar_open: bool, help_open: bool) -> WorkspaceLayout {
+    let help = help_open.then(|| {
+        Rect::from_min_max(
+            Pos2::new(content.left(), content.bottom() - 160.0),
+            Pos2::new(content.left() + 236.0, content.bottom()),
+        )
+    });
+    let sidebar = sidebar_open.then(|| {
+        Rect::from_min_max(
+            content.min,
+            Pos2::new(
+                content.left() + 236.0,
+                help.map_or(content.bottom(), |rect| rect.top() - 10.0),
+            ),
+        )
+    });
+    let mut dashboard = content;
+    if let Some(sidebar) = sidebar {
+        dashboard.min.x = sidebar.right() + 10.0;
+    } else if let Some(help) = help {
+        // Reserve a bottom strip when settings are hidden; never cover a pane.
+        dashboard.max.y = help.top() - 10.0;
+    }
+    WorkspaceLayout {
+        dashboard,
+        sidebar,
+        help,
     }
 }
 
@@ -627,6 +717,7 @@ fn apply_style(context: &egui::Context, theme: &AppTheme) {
     visuals.widgets.open = visuals.widgets.active;
     context.set_visuals(visuals);
     context.style_mut_of(egui::Theme::Dark, |style| {
+        help::suppress_tooltips(style);
         style.spacing.item_spacing = Vec2::new(10.0, 9.0);
         style.spacing.button_padding = Vec2::new(12.0, 8.0);
         style.spacing.menu_margin = egui::Margin::same(8);
@@ -643,6 +734,7 @@ fn apply_style(context: &egui::Context, theme: &AppTheme) {
             .insert(egui::TextStyle::Small, FontId::proportional(13.0));
     });
     context.style_mut_of(egui::Theme::Light, |style| {
+        help::suppress_tooltips(style);
         style.spacing.item_spacing = Vec2::new(10.0, 9.0);
         style.spacing.button_padding = Vec2::new(12.0, 8.0);
         style.spacing.menu_margin = egui::Margin::same(8);
@@ -828,4 +920,88 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
         channel(a.g(), b.g()),
         channel(a.b(), b.b()),
     )
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_speakers_without_overriding_manual_choices() {
+        let microphone = AudioSource {
+            global_id: 1,
+            node_name: "input".into(),
+            display_name: "Microphone".into(),
+            kind: SourceKind::Input,
+        };
+        let headphones = AudioSource {
+            global_id: 2,
+            node_name: "alsa.headphones".into(),
+            display_name: "Built-in Audio Headphones".into(),
+            kind: SourceKind::SystemOutput,
+        };
+        let speakers = AudioSource {
+            global_id: 3,
+            node_name: "audio_effect.j314-convolver".into(),
+            display_name: "MacBook Pro J314 Speakers".into(),
+            kind: SourceKind::SystemOutput,
+        };
+        assert!(default_output_source(&[], None, false).is_none());
+        assert!(default_output_source(std::slice::from_ref(&microphone), None, false).is_none());
+        let mut sources = vec![microphone, headphones];
+        assert_eq!(
+            default_output_source(&sources, None, false)
+                .unwrap()
+                .global_id,
+            2
+        );
+        sources.push(speakers);
+        assert_eq!(
+            default_output_source(&sources, Some("alsa.headphones"), false)
+                .unwrap()
+                .global_id,
+            3
+        );
+        assert!(
+            default_output_source(&sources, Some("audio_effect.j314-convolver"), false).is_none()
+        );
+        for selected in ["input", "alsa.headphones", "disconnected-manual-source"] {
+            assert!(default_output_source(&sources, Some(selected), true).is_none());
+        }
+        sources.reverse();
+        assert_eq!(
+            default_output_source(&sources, None, false)
+                .unwrap()
+                .global_id,
+            3
+        );
+    }
+
+    #[test]
+    fn info_view_never_overlaps_dashboard_or_settings() {
+        for size in [Vec2::new(1024.0, 700.0), Vec2::new(1440.0, 940.0)] {
+            let content = Rect::from_min_max(
+                Pos2::new(12.0, 56.0),
+                (size - Vec2::new(12.0, 40.0)).to_pos2(),
+            );
+            for sidebar_open in [false, true] {
+                for help_open in [false, true] {
+                    let layout = workspace_layout(content, sidebar_open, help_open);
+                    assert!(content.contains_rect(layout.dashboard));
+                    assert!(layout.dashboard.is_positive());
+                    if let Some(help) = layout.help {
+                        assert_eq!(help.left_bottom(), content.left_bottom());
+                        assert!(!help.intersects(layout.dashboard));
+                        if let Some(sidebar) = layout.sidebar {
+                            assert!(!help.intersects(sidebar));
+                            assert!(sidebar.height() >= 400.0);
+                        }
+                    }
+                    if !sidebar_open && !help_open {
+                        assert_eq!(layout.dashboard, content);
+                    }
+                }
+            }
+        }
+    }
 }

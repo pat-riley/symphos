@@ -7,6 +7,7 @@ use super::{
     frequency::{BANDS, History},
     frequency_label, label, settings_panel,
 };
+use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
 pub struct Spectrogram {
@@ -35,7 +36,7 @@ impl Spectrogram {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Time & History", true, |ui| {
-            ui.add(egui::Slider::new(&mut self.seconds, 2.0..=30.0).text("History s"));
+            ui.add(egui::Slider::new(&mut self.seconds, 2.0..=30.0).text("History s")).help_text("Seconds of recent audio shown in the spectrogram. Color shows signal level across frequency and time.");
         });
         settings_panel(ui, "Frequency Range", true, |ui| {
             self.history.data.settings.range_controls(ui)

@@ -6,6 +6,7 @@ use super::{
     frequency::{BANDS, FrequencyData},
     frequency_label, label, mix, settings_panel,
 };
+use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
 pub struct Spectrum {
@@ -39,8 +40,13 @@ impl Spectrum {
         });
         settings_panel(ui, "Appearance", true, |ui| {
             self.data.settings.level_controls(ui);
-            ui.checkbox(&mut self.peak_hold, "Peak hold");
-            if ui.small_button("Reset peaks").clicked() {
+            ui.checkbox(&mut self.peak_hold, "Peak hold")
+                .help_text("Keep a marker at the highest observed level for each frequency band.");
+            if ui
+                .small_button("Reset peaks")
+                .help_text("Clear peak-hold markers and begin measuring new peaks.")
+                .clicked()
+            {
                 self.peaks.fill(-120.0);
             }
         });
@@ -122,7 +128,7 @@ impl Spectrum {
         if let Some(pointer) = response.hover_pos() {
             let t = ((pointer.x - plot.left()) / plot.width()).clamp(0.0, 0.999);
             let index = (t * BANDS as f32) as usize;
-            response.on_hover_text(format!(
+            response.help_text(format!(
                 "{} Hz · {:.1} dBFS",
                 frequency_label(settings.frequency(t, frame.sample_rate)),
                 self.data.levels[index]

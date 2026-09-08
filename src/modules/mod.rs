@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 
+use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 use spectrogram::Spectrogram;
 use spectrum::Spectrum;
@@ -37,6 +38,23 @@ impl ModuleKind {
             Self::Spectrum => "Frequency spectrum",
             Self::Waveform => "Waveform",
             Self::Spectrogram => "Spectrogram",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Waterfall => {
+                "A 3D frequency history: X is frequency, Y is time, and Z is signal level. Drag to orbit; right-drag or Shift-drag to pan."
+            }
+            Self::Spectrum => {
+                "Current signal level by frequency. Hover over a band to inspect its frequency and level."
+            }
+            Self::Waveform => {
+                "Audio amplitude over a short time window. Choose separate stereo channels or a combined signal in settings."
+            }
+            Self::Spectrogram => {
+                "Frequency over time, with color showing signal level. Newest audio appears on the right."
+            }
         }
     }
 }
@@ -85,6 +103,8 @@ impl ModulePane {
     ) {
         let now = Instant::now();
         ui.painter().rect_filled(rect, 4.0, theme.background);
+        ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
+            .help_text(self.kind.description());
         match self.kind {
             ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Spectrum => self.spectrum.draw(ui, rect, frame, theme, now, live),
@@ -119,7 +139,11 @@ pub(crate) fn settings_panel(
                 ui.add_space(3.0);
                 body(ui);
                 ui.add_space(5.0);
-            });
+            })
+            .header_response
+            .help_text(format!(
+                "Show or hide {title} settings. Other panels can stay open."
+            ));
     });
 }
 
@@ -227,6 +251,39 @@ mod tests {
         pane.kind = ModuleKind::Waterfall;
         assert!(range_visible(&mut pane, 0));
     }
+
+    #[test]
+    fn heatmap_spans_cool_to_warm_without_theme_tinting() {
+        let theme = AppTheme::default();
+        let palette = Palette::Heatmap;
+        let quiet = palette.color(0.0, &theme);
+        let middle = palette.color(0.5, &theme);
+        let loud = palette.color(1.0, &theme);
+        assert!(quiet.b() > quiet.r() && quiet.b() > quiet.g());
+        assert!(middle.g() > middle.r() && middle.g() > middle.b());
+        assert!(loud.r() > loud.g() && loud.r() > loud.b());
+        assert_eq!(palette.color(-1.0, &theme), quiet);
+        assert_eq!(palette.color(2.0, &theme), loud);
+        let other_theme = AppTheme {
+            background: Color32::WHITE,
+            foreground: Color32::BLACK,
+            ..theme.clone()
+        };
+        let mut colors = std::collections::HashSet::new();
+        for step in 0..=255 {
+            let level = step as f32 / 255.0;
+            let color = palette.color(level, &theme);
+            colors.insert(color.to_array());
+            assert_eq!(color, palette.color(level, &other_theme));
+            if step > 0 {
+                let previous = palette.color((step - 1) as f32 / 255.0, &theme);
+                for (a, b) in color.to_array().iter().zip(previous.to_array()) {
+                    assert!(a.abs_diff(b) <= 6, "smooth gradient between color stops");
+                }
+            }
+        }
+        assert!(colors.len() > 250);
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -235,6 +292,7 @@ enum Palette {
     Theme,
     Ember,
     Ocean,
+    Heatmap,
 }
 
 impl Palette {
@@ -242,10 +300,18 @@ impl Palette {
         egui::ComboBox::from_id_salt("palette")
             .selected_text(self.label())
             .show_ui(ui, |ui| {
-                for value in [Self::Theme, Self::Ember, Self::Ocean] {
-                    ui.selectable_value(self, value, value.label());
+                for value in [Self::Theme, Self::Ember, Self::Ocean, Self::Heatmap] {
+                    ui.selectable_value(self, value, value.label()).help_text(
+                        if value == Self::Heatmap {
+                            "Full-spectrum heatmap: cool blue and cyan for quiet levels, green through yellow and orange to red for loud peaks. Floor and Ceiling set the level range."
+                        } else {
+                            "Choose the colors used to represent quiet and loud signal levels."
+                        },
+                    );
                 }
-            });
+            })
+            .response
+            .help_text("Choose a signal color palette: current theme, Ember, Ocean, or a full-spectrum Heatmap from cool quiet levels to warm loud peaks.");
     }
 
     fn label(self) -> &'static str {
@@ -253,11 +319,28 @@ impl Palette {
             Self::Theme => "Theme colors",
             Self::Ember => "Ember",
             Self::Ocean => "Ocean",
+            Self::Heatmap => "Heatmap",
         }
     }
 
     fn color(self, value: f32, theme: &AppTheme) -> Color32 {
         let (low, high) = match self {
+            Self::Heatmap => {
+                // Map the same normalized level used for waterfall height to a
+                // full cool-to-warm spectrum, independent of the desktop theme.
+                const STOPS: [Color32; 7] = [
+                    Color32::from_rgb(32, 40, 160),
+                    Color32::from_rgb(36, 100, 240),
+                    Color32::from_rgb(0, 200, 230),
+                    Color32::from_rgb(45, 205, 115),
+                    Color32::from_rgb(245, 224, 55),
+                    Color32::from_rgb(255, 140, 35),
+                    Color32::from_rgb(240, 45, 35),
+                ];
+                let position = value.clamp(0.0, 1.0) * (STOPS.len() - 1) as f32;
+                let index = (position as usize).min(STOPS.len() - 2);
+                return mix(STOPS[index], STOPS[index + 1], position - index as f32);
+            }
             Self::Theme => (theme.accent_alt, theme.accent),
             Self::Ember => (
                 Color32::from_rgb(140, 44, 70),

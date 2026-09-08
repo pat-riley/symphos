@@ -1,5 +1,6 @@
 use std::f32::consts::{FRAC_PI_2, PI};
 
+use crate::help::HoverHelp;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +113,7 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
         Sense::click_and_drag(),
     );
     let points = endpoints(rect, yaw, elevation);
+    // Keep generous invisible click targets without endpoint discs.
     let radius = if compact { 8.0 } else { 12.0 };
     let hit = response.hover_pos().and_then(|pointer| {
         points
@@ -150,23 +152,19 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
             hit.is_some_and(|hit| hit.axis == point.axis && hit.positive == point.positive);
         painter.line_segment(
             [rect.center(), point.pos],
-            Stroke::new(if point.positive { 1.8 } else { 0.8 }, color),
-        );
-        painter.circle_filled(
-            point.pos,
-            radius,
-            if point.positive { color } else { background },
-        );
-        painter.circle_stroke(
-            point.pos,
-            radius,
             Stroke::new(
-                if hovered { 2.0 } else { 1.0 },
-                if hovered { foreground } else { color },
+                if hovered {
+                    2.6
+                } else if point.positive {
+                    1.8
+                } else {
+                    0.8
+                },
+                color,
             ),
         );
         painter.text(
-            point.pos,
+            point.pos + (point.pos - rect.center()).normalized() * 9.0,
             egui::Align2::CENTER_CENTER,
             if point.positive {
                 point.axis.label().to_owned()
@@ -174,17 +172,13 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
                 format!("−{}", point.axis.label())
             },
             FontId::proportional(if compact { 9.0 } else { 11.0 }),
-            if point.positive {
-                Color32::from_rgb(18, 22, 28)
-            } else {
-                color
-            },
+            if hovered { foreground } else { color },
         );
     }
     if let Some(point) = hit {
         response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(format!(
+            .help_text(format!(
                 "{}{} · {}\nClick to align; click again to flip. Drag to orbit.",
                 if point.positive { "+" } else { "−" },
                 point.axis.label(),
@@ -193,7 +187,7 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
     } else {
         response
             .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text("Drag to orbit. Click an axis to align the view.");
+            .help_text("Drag to orbit. Click an axis to align the view.");
     }
     action
 }
@@ -201,6 +195,41 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gizmos_keep_colored_arms_without_endpoint_circles() {
+        for compact in [false, true] {
+            let context = egui::Context::default();
+            let rect =
+                Rect::from_min_size(Pos2::ZERO, Vec2::splat(if compact { 80.0 } else { 128.0 }));
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                draw(ui, rect, -0.35, 0.65, compact);
+            });
+            output.textures_delta.clear();
+            let circles: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Circle(circle) => Some(circle),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(circles.len(), 2, "only the background disc and ring remain");
+            assert!(circles.iter().all(|circle| circle.center == rect.center()));
+            for axis in [Axis::X, Axis::Y, Axis::Z] {
+                assert_eq!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| matches!(&shape.shape,
+                            egui::Shape::LineSegment { stroke, .. } if stroke.color == axis.color()
+                        ))
+                        .count(),
+                    2
+                );
+            }
+        }
+    }
 
     #[test]
     fn every_axis_aligns_and_repeated_selection_flips() {
