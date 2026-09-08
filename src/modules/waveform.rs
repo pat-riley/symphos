@@ -24,6 +24,21 @@ pub struct Waveform {
     channel: ChannelMode,
 }
 
+module_settings!(Waveform, WaveformSettings, {
+time_ms: f32 => time_ms,
+amplitude: f32 => amplitude,
+auto_scale: bool => auto_scale,
+trigger: bool => trigger,
+rising: bool => rising,
+trigger_level: f32 => trigger_level,
+style: TraceStyle => style,
+thickness: f32 => thickness,
+fill_opacity: f32 => fill_opacity,
+centerline: bool => centerline,
+grid: bool => grid,
+labels: bool => labels,
+});
+
 impl Default for Waveform {
     fn default() -> Self {
         Self {
@@ -328,6 +343,28 @@ fn envelope(samples: &[f32], pixels: usize) -> Vec<(usize, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_settings_preserves_target_global_channel_and_is_an_independent_snapshot() {
+        let mut source = Waveform {
+            time_ms: 125.0,
+            amplitude: 2.0,
+            ..Waveform::default()
+        };
+        let settings = source.settings_snapshot();
+        source.time_ms = 10.0;
+        assert_eq!(source.time_ms, 10.0);
+        let mut target = Waveform {
+            stereo: false,
+            channel: ChannelMode::Right,
+            ..Waveform::default()
+        };
+        target.apply_settings(&settings);
+        assert_eq!(target.time_ms, 125.0);
+        assert_eq!(target.amplitude, 2.0);
+        assert!(!target.stereo);
+        assert_eq!(target.channel, ChannelMode::Right);
+    }
 
     #[test]
     fn auto_scale_uses_one_bounded_gain_and_keeps_manual_amplitude() {

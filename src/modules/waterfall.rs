@@ -122,6 +122,45 @@ pub struct Waterfall {
     palette: Palette,
 }
 
+module_settings!(Waterfall, WaterfallSettings, {
+frequency: super::frequency::FrequencySettings => history.data.settings,
+seconds: f32 => seconds,
+length_x: f32 => length_x,
+length_y: f32 => length_y,
+height: f32 => height,
+detail: usize => detail,
+yaw: f32 => yaw,
+elevation: f32 => elevation,
+zoom: f32 => zoom,
+pan: Vec2 => pan,
+grid: bool => grid,
+floor_grid: bool => floor_grid,
+guides: bool => guides,
+axes: bool => axes,
+show_gizmo: bool => show_gizmo,
+surface_walls: bool => surface_walls,
+line_width: f32 => line_width,
+line_spacing: usize => line_spacing,
+y_line_width: f32 => y_line_width,
+y_line_spacing: usize => y_line_spacing,
+wire_width: f32 => wire_width,
+wire_spacing: usize => wire_spacing,
+dot_size: f32 => dot_size,
+dot_spacing: usize => dot_spacing,
+stem_width: f32 => stem_width,
+stem_spacing: usize => stem_spacing,
+bar_width: f32 => bar_width,
+bar_depth: f32 => bar_depth,
+bar_bands: usize => bar_bands,
+bar_time_step: usize => bar_time_step,
+contrast: f32 => contrast,
+auto_orbit: bool => auto_orbit,
+orbit_speed: f32 => orbit_speed,
+orbit_reverse: bool => orbit_reverse,
+mode: RenderMode => mode,
+palette: Palette => palette,
+});
+
 impl Default for Waterfall {
     fn default() -> Self {
         Self {

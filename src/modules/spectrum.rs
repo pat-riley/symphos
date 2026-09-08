@@ -30,6 +30,22 @@ pub struct Spectrum {
     labels: bool,
 }
 
+module_settings!(Spectrum, SpectrumSettings, {
+frequency: super::frequency::FrequencySettings => data.settings,
+peak_hold: bool => peak_hold,
+hold_seconds: f32 => hold_seconds,
+peak_falloff: f32 => peak_falloff,
+infinite_hold: bool => infinite_hold,
+style: TraceStyle => style,
+bar_gap: f32 => bar_gap,
+thickness: f32 => thickness,
+fill_opacity: f32 => fill_opacity,
+palette: Palette => palette,
+contrast: f32 => contrast,
+grid: bool => grid,
+labels: bool => labels,
+});
+
 impl Default for Spectrum {
     fn default() -> Self {
         Self {

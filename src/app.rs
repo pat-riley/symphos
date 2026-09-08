@@ -9,7 +9,7 @@ use crate::audio::{AudioEngine, AudioEvent, AudioSource, AudioStatus, SourceKind
 use crate::global_bar::{BarInfo, GlobalBar};
 use crate::help::{self, HoverHelp};
 use crate::icons::{self, Icon};
-use crate::modules::{ModuleKind, ModulePane};
+use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::AppTheme;
 
 const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
@@ -26,6 +26,7 @@ pub struct SymphosApp {
     show_inspector: bool,
     show_issues: bool,
     show_shortcuts: bool,
+    settings_clipboard: Option<ModuleSettings>,
     display_fps: f32,
     last_frame: Instant,
     panes: [ModulePane; 4],
@@ -56,6 +57,7 @@ impl SymphosApp {
             show_inspector: false,
             show_issues: false,
             show_shortcuts: false,
+            settings_clipboard: None,
             display_fps: 0.0,
             last_frame: Instant::now(),
             panes: [
@@ -180,6 +182,18 @@ impl SymphosApp {
             ))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
+                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
+                    }
+                    let compatible = self.settings_clipboard.as_ref().is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
+                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
+                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.").clicked() {
+                        self.paste_module_settings();
+                    }
+                });
+                if let Some(settings) = &self.settings_clipboard { ui.small(format!("Clipboard: {}", settings.kind().label())); }
+                ui.separator();
                 ui.push_id(self.selected_pane, |ui| {
                     ui.data_mut(|d| {
                         d.insert_temp(
@@ -234,6 +248,10 @@ impl SymphosApp {
             Some(Action::Restore) => self.focused_pane = None,
             Some(Action::Help) => self.help_open = !self.help_open,
             Some(Action::Bindings) => self.show_shortcuts = true,
+            Some(Action::CopySettings) => {
+                self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings())
+            }
+            Some(Action::PasteSettings) => self.paste_module_settings(),
             Some(Action::Pane(index)) => {
                 self.selected_pane = index;
                 if self.focused_pane.is_some() {
@@ -241,6 +259,22 @@ impl SymphosApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn paste_module_settings(&mut self) {
+        if let Some(settings) = &self.settings_clipboard {
+            if !self.panes[self.selected_pane].paste_settings(settings) {
+                crate::issues::record(
+                    "Paste settings",
+                    &format!(
+                        "Clipboard contains {} settings; select a matching module before pasting.",
+                        settings.kind().label()
+                    ),
+                );
+            }
+        } else {
+            crate::issues::record("Paste settings", "No module settings have been copied yet.");
         }
     }
 

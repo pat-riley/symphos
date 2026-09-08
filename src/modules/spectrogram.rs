@@ -41,6 +41,19 @@ struct RasterKey {
     theme: AppTheme,
 }
 
+module_settings!(Spectrogram, SpectrogramSettings, {
+frequency: super::frequency::FrequencySettings => history.data.settings,
+seconds: f32 => seconds,
+palette: Palette => palette,
+contrast: f32 => contrast,
+vertical: bool => vertical,
+smooth: bool => smooth,
+time_pixels: usize => time_pixels,
+frequency_pixels: usize => frequency_pixels,
+grid: bool => grid,
+labels: bool => labels,
+});
+
 impl Default for Spectrogram {
     fn default() -> Self {
         Self {
@@ -294,6 +307,28 @@ impl Spectrogram {
 mod tests {
     use super::super::frequency::HistoryRow;
     use super::*;
+
+    #[test]
+    fn copying_appearance_leaves_destination_history_intact() {
+        let source = Spectrogram {
+            seconds: 2.0,
+            vertical: true,
+            palette: Palette::Heatmap,
+            ..Spectrogram::default()
+        };
+        let mut target = Spectrogram::default();
+        target.history.rows.push_back(HistoryRow {
+            time: Instant::now(),
+            levels: [-25.0; BANDS],
+            magnitudes: vec![0.1],
+            sequence: 9,
+        });
+        target.apply_settings(&source.settings_snapshot());
+        assert_eq!(target.seconds, 2.0);
+        assert!(target.vertical);
+        assert_eq!(target.history.rows.len(), 1);
+        assert_eq!(target.history.rows[0].sequence, 9);
+    }
 
     #[test]
     fn paused_raster_is_cached_but_style_changes_upload_without_clearing_history() {

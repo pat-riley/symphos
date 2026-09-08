@@ -14,6 +14,10 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
+- Copy/Paste settings in the module sidebar (Ctrl+Shift+C / Ctrl+Shift+V) applies
+  a settings-only snapshot to a matching module. Audio/history, pause state, and
+  global channel choices stay with the destination pane. This is session-only;
+  preset files, saved workspaces, and automatic restoration are not implemented.
 - **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
   the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;

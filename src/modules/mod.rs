@@ -1,3 +1,22 @@
+// Explicit settings-only snapshots: no samples, histories, textures, or clocks.
+// Clone is deliberate so this schema can grow owned preset fields later.
+macro_rules! module_settings {
+    ($module:ident, $settings:ident, { $($field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
+        #[derive(Clone, PartialEq)]
+        pub(crate) struct $settings { $( $field: $ty, )* }
+        impl $module {
+            #[allow(clippy::clone_on_copy)]
+            pub(crate) fn settings_snapshot(&self) -> $settings {
+                $settings { $( $field: self.$($path).+.clone(), )* }
+            }
+            #[allow(clippy::clone_on_copy)]
+            pub(crate) fn apply_settings(&mut self, settings: &$settings) {
+                $( self.$($path).+ = settings.$field.clone(); )*
+            }
+        }
+    };
+}
+
 mod camera_gizmo;
 mod frequency;
 mod spectrogram;
@@ -71,6 +90,25 @@ pub struct ModulePane {
     paused_duration: Duration,
 }
 
+#[derive(Clone, PartialEq)]
+pub enum ModuleSettings {
+    Waterfall(waterfall::WaterfallSettings),
+    Spectrum(spectrum::SpectrumSettings),
+    Waveform(waveform::WaveformSettings),
+    Spectrogram(spectrogram::SpectrogramSettings),
+}
+
+impl ModuleSettings {
+    pub fn kind(&self) -> ModuleKind {
+        match self {
+            Self::Waterfall(_) => ModuleKind::Waterfall,
+            Self::Spectrum(_) => ModuleKind::Spectrum,
+            Self::Waveform(_) => ModuleKind::Waveform,
+            Self::Spectrogram(_) => ModuleKind::Spectrogram,
+        }
+    }
+}
+
 struct FrozenFrame {
     frame: AnalysisFrame,
     started: Instant,
@@ -116,6 +154,30 @@ impl SettingsSection {
 }
 
 impl ModulePane {
+    pub fn copy_settings(&self) -> ModuleSettings {
+        match self.kind {
+            ModuleKind::Waterfall => ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
+            ModuleKind::Spectrum => ModuleSettings::Spectrum(self.spectrum.settings_snapshot()),
+            ModuleKind::Waveform => ModuleSettings::Waveform(self.waveform.settings_snapshot()),
+            ModuleKind::Spectrogram => {
+                ModuleSettings::Spectrogram(self.spectrogram.settings_snapshot())
+            }
+        }
+    }
+
+    pub fn paste_settings(&mut self, settings: &ModuleSettings) -> bool {
+        if settings.kind() != self.kind {
+            return false;
+        }
+        match settings {
+            ModuleSettings::Waterfall(settings) => self.waterfall.apply_settings(settings),
+            ModuleSettings::Spectrum(settings) => self.spectrum.apply_settings(settings),
+            ModuleSettings::Waveform(settings) => self.waveform.apply_settings(settings),
+            ModuleSettings::Spectrogram(settings) => self.spectrogram.apply_settings(settings),
+        }
+        true
+    }
+
     pub fn new(kind: ModuleKind) -> Self {
         Self {
             kind,
@@ -404,6 +466,29 @@ fn frequency_label(hz: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_clipboard_is_typed_and_does_not_copy_capture_or_pause_state() {
+        for kind in ModuleKind::ALL {
+            let mut source = ModulePane::new(kind);
+            source.toggle_freeze(&AnalysisFrame::default(), Instant::now());
+            let settings = source.copy_settings();
+            assert_eq!(settings.kind(), kind);
+            let mut target = ModulePane::new(kind);
+            assert!(target.paste_settings(&settings));
+            assert!(target.copy_settings() == settings);
+            assert!(!target.is_frozen());
+            assert_eq!(target.paused_duration, Duration::ZERO);
+            target.kind = if kind == ModuleKind::Waveform {
+                ModuleKind::Spectrum
+            } else {
+                ModuleKind::Waveform
+            };
+            let before = target.copy_settings();
+            assert!(!target.paste_settings(&settings));
+            assert!(target.copy_settings() == before);
+        }
+    }
 
     #[test]
     fn pause_captures_only_one_pane_and_resume_omits_paused_time() {

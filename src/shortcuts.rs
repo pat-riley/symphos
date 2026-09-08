@@ -2,6 +2,8 @@ use eframe::egui::{self, Key, Modifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    CopySettings,
+    PasteSettings,
     Pause,
     PauseAll,
     Sidebar,
@@ -20,6 +22,20 @@ struct Binding {
     description: &'static str,
 }
 const BINDINGS: &[Binding] = &[
+    Binding {
+        action: Action::CopySettings,
+        key: Key::C,
+        modifiers: Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        label: "Ctrl + Shift + C",
+        description: "Copy selected module settings",
+    },
+    Binding {
+        action: Action::PasteSettings,
+        key: Key::V,
+        modifiers: Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        label: "Ctrl + Shift + V",
+        description: "Paste settings into a matching module",
+    },
     Binding {
         action: Action::PauseAll,
         key: Key::Space,
