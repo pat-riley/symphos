@@ -10,6 +10,9 @@ use eframe::egui::{self, Align, FontId, Layout, Pos2, Rect, RichText, Sense, Str
 pub struct GlobalBar {
     pub stereo: bool,
     pub channel: ChannelMode,
+    held_peaks: [f32; 3],
+    clip_latched: [bool; 3],
+    hold_epoch: Option<u64>,
 }
 
 impl Default for GlobalBar {
@@ -17,6 +20,9 @@ impl Default for GlobalBar {
         Self {
             stereo: true,
             channel: ChannelMode::StereoMix,
+            held_peaks: [0.0; 3],
+            clip_latched: [false; 3],
+            hold_epoch: None,
         }
     }
 }
@@ -29,6 +35,30 @@ pub struct BarInfo<'a> {
 }
 
 impl GlobalBar {
+    fn reset_meter_hold(&mut self) {
+        self.held_peaks.fill(0.0);
+        self.clip_latched.fill(false);
+    }
+
+    fn update_meter_hold(&mut self, info: &BarInfo<'_>) {
+        if !matches!(info.status, AudioStatus::Streaming) {
+            self.reset_meter_hold();
+            self.hold_epoch = None;
+            return;
+        }
+        if self.hold_epoch != Some(info.frame.capture_epoch) {
+            self.reset_meter_hold();
+            self.hold_epoch = Some(info.frame.capture_epoch);
+        }
+        for (index, peak) in [info.frame.peak[0], info.frame.peak[1], info.frame.mix_peak]
+            .into_iter()
+            .enumerate()
+        {
+            self.held_peaks[index] = self.held_peaks[index].max(peak);
+            self.clip_latched[index] |= peak >= 1.0;
+        }
+    }
+
     /// Returns whether shared signal interpretation changed and histories need clearing.
     pub fn show(
         &mut self,
@@ -38,6 +68,7 @@ impl GlobalBar {
         inspector: &mut bool,
         info: BarInfo<'_>,
     ) -> bool {
+        self.update_meter_hold(&info);
         let before = (settings.fft_size, settings.window, settings.channel_mode);
         ui.spacing_mut().item_spacing = Vec2::new(7.0, 4.0);
         ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
@@ -91,6 +122,13 @@ impl GlobalBar {
                 ui.label(format!("{} Hz · {} channels", info.frame.sample_rate, info.frame.channels));
                 ui.label(format!("Dropped samples: {}", info.frame.dropped_samples));
                 ui.label(format!("Theme: {}", info.theme.name));
+                if ui
+                    .button("Reset peak / clip hold")
+                    .help_text("Clear the retained meter maxima and latched clip indicators.")
+                    .clicked()
+                {
+                    self.reset_meter_hold();
+                }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.meters(ui, &info);
@@ -116,18 +154,21 @@ impl GlobalBar {
         painter.circle_filled(rect.left_center() + Vec2::new(4.0, 0.0), 3.0, indicator);
         let levels = if self.stereo {
             [
-                ("L", info.frame.rms[0], info.frame.peak[0]),
-                ("R", info.frame.rms[1], info.frame.peak[1]),
+                ("L", info.frame.rms[0], info.frame.peak[0], 0),
+                ("R", info.frame.rms[1], info.frame.peak[1], 1),
             ]
         } else {
-            let (label, rms, peak) = match self.channel {
-                ChannelMode::StereoMix => ("M", info.frame.mix_rms, info.frame.mix_peak),
-                ChannelMode::Left => ("L", info.frame.rms[0], info.frame.peak[0]),
-                ChannelMode::Right => ("R", info.frame.rms[1], info.frame.peak[1]),
+            let (label, rms, peak, hold_index) = match self.channel {
+                ChannelMode::StereoMix => ("M", info.frame.mix_rms, info.frame.mix_peak, 2),
+                ChannelMode::Left => ("L", info.frame.rms[0], info.frame.peak[0], 0),
+                ChannelMode::Right => ("R", info.frame.rms[1], info.frame.peak[1], 1),
             };
-            [(label, rms, peak), (label, rms, peak)]
+            [
+                (label, rms, peak, hold_index),
+                (label, rms, peak, hold_index),
+            ]
         };
-        for (lane, &(label, rms, peak)) in levels
+        for (lane, &(label, rms, peak, hold_index)) in levels
             .iter()
             .take(if self.stereo { 2 } else { 1 })
             .enumerate()
@@ -137,8 +178,8 @@ impl GlobalBar {
             } else {
                 rect.center().y
             };
-            let color = if peak >= 1.0 && live {
-                info.theme.warning
+            let color = if self.clip_latched[hold_index] && live {
+                info.theme.error
             } else if lane == 0 {
                 info.theme.accent
             } else {
@@ -181,12 +222,31 @@ impl GlobalBar {
                     ],
                     Stroke::new(1.0, info.theme.foreground),
                 );
+                let held_x = track.left() + track.width() * fraction(self.held_peaks[hold_index]);
+                painter.line_segment(
+                    [
+                        Pos2::new(held_x, track.top() - 2.0),
+                        Pos2::new(held_x, track.bottom() + 2.0),
+                    ],
+                    Stroke::new(
+                        1.5,
+                        if self.clip_latched[hold_index] {
+                            info.theme.error
+                        } else {
+                            info.theme.warning
+                        },
+                    ),
+                );
             }
             painter.text(
                 Pos2::new(rect.right(), center_y),
                 egui::Align2::RIGHT_CENTER,
                 if live {
-                    format!("{:.1}", level_db(peak))
+                    if self.clip_latched[hold_index] {
+                        "CLIP".into()
+                    } else {
+                        format!("{:.1}", level_db(self.held_peaks[hold_index]))
+                    }
                 } else {
                     "—".into()
                 },
@@ -194,7 +254,7 @@ impl GlobalBar {
                 color,
             );
         }
-        response.help_text_with(|| format!("{} levels: RMS bars with peak markers and peak dBFS readouts. Capture: {}. {} dropped samples.",
+        response.help_text_with(|| format!("{} levels: RMS bars, live peak markers, retained peak markers, and latched clip indicators. Reset hold in Shared options. Capture: {}. {} dropped samples.",
             if self.stereo { "Stereo L/R" } else { self.channel.label() }, info.status.label(), info.frame.dropped_samples));
     }
 }
@@ -342,5 +402,56 @@ mod tests {
         ));
         assert_eq!(settings.fft_size, 4096);
         assert_eq!(settings.channel_mode, ChannelMode::StereoMix);
+    }
+
+    #[test]
+    fn peak_and_clip_hold_are_independent_and_reset_with_capture_state() {
+        let mut bar = GlobalBar::default();
+        let theme = AppTheme::default();
+        let mut frame = AnalysisFrame {
+            capture_epoch: 4,
+            peak: [0.8, 1.1],
+            mix_peak: 0.7,
+            ..AnalysisFrame::default()
+        };
+        bar.update_meter_hold(&BarInfo {
+            frame: &frame,
+            status: &AudioStatus::Streaming,
+            theme: &theme,
+            fps: 60.0,
+        });
+        assert_eq!(bar.held_peaks, [0.8, 1.1, 0.7]);
+        assert_eq!(bar.clip_latched, [false, true, false]);
+
+        frame.peak = [0.2, 0.3];
+        frame.mix_peak = 0.1;
+        bar.update_meter_hold(&BarInfo {
+            frame: &frame,
+            status: &AudioStatus::Streaming,
+            theme: &theme,
+            fps: 60.0,
+        });
+        assert_eq!(bar.held_peaks, [0.8, 1.1, 0.7]);
+        assert_eq!(bar.clip_latched, [false, true, false]);
+
+        frame.capture_epoch = 5;
+        bar.update_meter_hold(&BarInfo {
+            frame: &frame,
+            status: &AudioStatus::Streaming,
+            theme: &theme,
+            fps: 60.0,
+        });
+        assert_eq!(bar.held_peaks, [0.2, 0.3, 0.1]);
+        assert_eq!(bar.clip_latched, [false; 3]);
+
+        bar.update_meter_hold(&BarInfo {
+            frame: &frame,
+            status: &AudioStatus::Idle,
+            theme: &theme,
+            fps: 60.0,
+        });
+        assert_eq!(bar.held_peaks, [0.0; 3]);
+        assert_eq!(bar.clip_latched, [false; 3]);
+        assert_eq!(bar.hold_epoch, None);
     }
 }

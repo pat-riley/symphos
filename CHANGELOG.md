@@ -42,6 +42,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- Retained peak markers and latched clipping for the footer's independent Left,
+  Right, and Mix meters, with an explicit reset action.
+- Live reference capture and comparison overlays in Spectrum panes.
+- Pinned frequency, note, level, and time measurements in frozen Spectrum and
+  Spectrogram panes.
 - A Stereometer module with scaled, one-to-one rotated linear, and Lissajous
   vectorscopes; static, frequency-balanced RGB, and overlaid low/mid/high color
   modes; overall or multi-band phase correlation; and an RMS balance indicator.

@@ -29,17 +29,19 @@ Status meanings:
 
 | Capability | Status | Symphos direction |
 | --- | --- | --- |
+| Footer peak and clip hold | **Shipped** | Footer meters retain independent Left, Right, and Mix maxima and latch clipping until reset or capture restarts. |
 | Calibrated VU meter | **Planned** | Add selectable calibration, VU ballistics, and peak/clip indicators. |
 | Standards-based loudness | **Planned** | Add LUFS momentary and short-term alongside configurable fast/slow RMS. |
 | Stereo vectorscope | **Shipped** | Scaled, one-to-one rotated linear, and Lissajous views include static, RGB, and overlaid low/mid/high rendering. |
 | Phase correlation | **Shipped** | Overall and separate low/mid/high correlation are available with an RMS balance indicator. |
 | Pitch-following oscilloscope | **Planned** | Build a dedicated scope with stable zero-crossing or period tracking and cycle controls. |
 | Per-module Mid/Side spectrum analysis | **Planned** | Extend independent channel routing beyond waveform panes. |
-| Reference spectrum / target curve | **Planned** | Capture a live reference and load supported audio files for comparison overlays. |
+| Live reference spectrum | **Shipped** | Capture, replace, or clear a pane-local overlay that follows the current frequency range and level settings. |
+| Reference audio / target curve | **Planned** | Load supported audio files and target curves for repeatable comparisons. |
 | Mel frequency scale | **Evaluate** | Compare it with the existing linear, logarithmic, and note-label views. |
 | Piano-key spectrogram overlay | **Evaluate** | Add if it improves pitch reading beyond note axis labels without obscuring history. |
 | Multiple spectrogram analysis modes | **Evaluate** | Compare classic STFT rendering with reassigned/sharper time-frequency modes. |
-| Measurement cursor | **Planned** | Pin frequency/note, level, and time readouts on frozen frequency views. |
+| Measurement cursor | **Shipped** | Frozen Spectrum and Spectrogram panes can pin frequency/note, level, and—where applicable—time readouts. |
 
 ## Capture and DAW interoperability
 

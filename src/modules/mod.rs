@@ -38,6 +38,12 @@ use stereometer::Stereometer;
 use waterfall::Waterfall;
 use waveform::Waveform;
 
+#[derive(Clone, Copy)]
+struct ModuleRenderState {
+    live: bool,
+    frozen: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
     Waterfall,
@@ -237,6 +243,8 @@ impl ModulePane {
         if let Some(frozen) = self.frozen.take() {
             self.paused_duration += now.saturating_duration_since(frozen.started);
             self.last_capture = frame.sequence;
+            self.spectrum.clear_cursor();
+            self.spectrogram.clear_cursor();
         } else {
             self.frozen = Some(FrozenFrame {
                 frame: frame.clone(),
@@ -256,26 +264,28 @@ impl ModulePane {
         }
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui, _frame: &AnalysisFrame) {
+    pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         ui.spacing_mut().slider_width = ui.spacing().slider_width.min(78.0);
         let section = self.active_section();
-        ui.push_id(self.kind.label(), |ui| {
+        let reset = ui.push_id(self.kind.label(), |ui| {
             ui.data_mut(|data| data.insert_temp(ui.id().with("active-module-section"), section));
             match self.kind {
                 ModuleKind::Waterfall => self.waterfall.controls(ui),
-                ModuleKind::Spectrum => self.spectrum.controls(ui),
+                ModuleKind::Spectrum => self.spectrum.controls(ui, frame),
                 ModuleKind::Waveform => self.waveform.controls(ui),
                 ModuleKind::Spectrogram => self.spectrogram.controls(ui),
                 ModuleKind::Stereometer => self.stereometer.controls(ui),
             }
             ui.add_space(12.0);
             ui.separator();
-            if ui.small_button("Reset module settings")
+            ui.small_button("Reset module settings")
                 .help_text("Restore all settings for this module in this pane only. Retains captured history and leaves other panes, audio, and global settings unchanged.")
-                .clicked() {
-                self.reset_settings();
-            }
-        });
+                .clicked()
+        }).inner;
+        if reset {
+            self.reset_settings();
+        }
     }
 
     pub fn sections(&self) -> &'static [SettingsSection] {
@@ -334,15 +344,29 @@ impl ModulePane {
             |frozen| frozen.time,
         );
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
+        let frozen = self.frozen.is_some();
         let live = live || self.frozen.is_some();
+        let render_state = ModuleRenderState { live, frozen };
         ui.painter().rect_filled(rect, 4.0, theme.background);
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
             ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, false),
-            ModuleKind::Spectrum => self.spectrum.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Spectrum => self
+                .spectrum
+                .draw(ui, rect, frame, theme, now, render_state),
             ModuleKind::Waveform => self.waveform.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, false),
+            ModuleKind::Spectrogram => self.spectrogram.draw(
+                ui,
+                rect,
+                frame,
+                theme,
+                now,
+                ModuleRenderState {
+                    live: false,
+                    frozen,
+                },
+            ),
             ModuleKind::Stereometer => self.stereometer.draw(ui, rect, frame, theme, live),
         }
         if self.frozen.is_some() {

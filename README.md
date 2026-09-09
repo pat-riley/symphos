@@ -176,6 +176,8 @@ history and leaving global settings and other panes alone.
   gap, thickness, and opacity controls. Signal Response includes peak hold with
   a timed hold, independent dB/s falloff, indefinite hold, and peak reset. Appearance
   adds palettes, heatmap contrast, and independent grid/axis-label switches.
+  Capture a live spectrum as a comparison overlay; frozen panes allow a frequency,
+  note, and dBFS measurement to be pinned.
 - **Waveform:** One or two independently selected Left, Right, Mid, or Side lanes.
   Adjustable 10–500 ms travel spans are independent of FFT size, with full-rate
   capture and peak-preserving display reduction. Optional rising/falling threshold
@@ -193,7 +195,8 @@ history and leaving global settings and other panes alone.
   frequency cells. Lower frequency display resolution preserves the loudest band
   in each cell. Display detail does not increase FFT resolution or the 30 Hz history
   capture rate. Palettes, contrast, levels, grid, and labels are independently
-  adjustable without clearing history.
+  adjustable without clearing history. Frozen panes allow a frequency, note,
+  dBFS, and time measurement to be pinned in either orientation.
 - **Stereometer:** Scaled, one-to-one rotated Linear, and unrotated Lissajous
   views of the recent full-rate stereo signal. Static color, frequency-balanced
   RGB dots, and separate red/green/blue low/mid/high overlays are available.
@@ -208,8 +211,10 @@ switches the footer meters between separate **L/R stereo** and a **single mixed
 view**, without changing waveform panes, frequency analysis, or captured history.
 The shared-options icon holds the FFT window, frequency-analysis channel,
 single-view channel (mix/left/right), diagnostics, capture details, and theme info.
-Level bars show RMS with peak markers and peak dBFS readouts. Mixed levels are
-measured from the summed signal, including phase cancellation. Waveform time
+Level bars show RMS with live and retained peak markers. Left, Right, and Mix
+maxima are held independently, clipping latches visibly, and both can be reset
+from Shared options or by restarting capture. Mixed levels are measured from the
+summed signal, including phase cancellation. Waveform time
 windows are independent of the FFT capture window. The source selector
 and a compact settings icon remain at the top right; there is no top-left menu button.
 

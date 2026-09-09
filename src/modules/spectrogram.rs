@@ -3,7 +3,7 @@ use std::time::Instant;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 
 use super::{
-    Palette,
+    ModuleRenderState, Palette,
     frequency::{BANDS, FrequencySettings, History},
     label, mix, settings_panel,
 };
@@ -23,6 +23,14 @@ pub struct Spectrogram {
     labels: bool,
     texture: Option<egui::TextureHandle>,
     raster_key: Option<RasterKey>,
+    pinned: Option<SpectrogramPin>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpectrogramPin {
+    frequency_hz: f32,
+    age_seconds: f32,
+    dbfs: Option<f32>,
 }
 
 #[derive(PartialEq)]
@@ -69,6 +77,7 @@ impl Default for Spectrogram {
             labels: true,
             texture: None,
             raster_key: None,
+            pinned: None,
         }
     }
 }
@@ -85,6 +94,31 @@ impl Spectrogram {
         self.history.clear();
         self.texture = None;
         self.raster_key = None;
+        self.pinned = None;
+    }
+
+    pub fn clear_cursor(&mut self) {
+        self.pinned = None;
+    }
+
+    fn measurement_at(&self, x: f32, y: f32, now: Instant, sample_rate: u32) -> SpectrogramPin {
+        let x = x.clamp(0.0, 1.0);
+        let y = y.clamp(0.0, 1.0);
+        let (frequency, time) = if self.vertical { (x, y) } else { (1.0 - y, x) };
+        let age_seconds = self.seconds * (1.0 - time);
+        let frequency_pixels = self.frequency_pixels.clamp(1, BANDS);
+        let bin = ((frequency * frequency_pixels as f32) as usize).min(frequency_pixels - 1);
+        let dbfs = self.history.sample(now, age_seconds).map(|levels| {
+            levels[bin * BANDS / frequency_pixels..(bin + 1) * BANDS / frequency_pixels]
+                .iter()
+                .copied()
+                .fold(-120.0_f32, f32::max)
+        });
+        SpectrogramPin {
+            frequency_hz: self.history.data.settings.frequency(frequency, sample_rate),
+            age_seconds,
+            dbfs,
+        }
     }
 
     pub fn reset_settings(&mut self) {
@@ -135,6 +169,16 @@ impl Spectrogram {
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
                 "Show frequency and time labels. Note names are available under Frequency Range.",
             );
+                if ui
+                    .add_enabled(
+                        self.pinned.is_some(),
+                        egui::Button::new("Clear pinned measurement"),
+                    )
+                    .help_text("Remove the pane-local measurement crosshair.")
+                    .clicked()
+                {
+                    self.pinned = None;
+                }
             });
         });
     }
@@ -182,8 +226,9 @@ impl Spectrogram {
         frame: &AnalysisFrame,
         theme: &AppTheme,
         now: Instant,
-        live: bool,
+        render_state: ModuleRenderState,
     ) {
+        let ModuleRenderState { live, frozen } = render_state;
         self.history.update(frame, now, live);
         let key = RasterKey {
             newest: self.history.rows.back().map(|row| (row.sequence, row.time)),
@@ -282,32 +327,77 @@ impl Spectrogram {
             label(&painter, old, format!("−{:.1}s", self.seconds), theme.muted);
             label(&painter, newest, "now", theme.muted);
         }
+        if frozen && let Some(pin) = self.pinned {
+            let frequency = self
+                .history
+                .data
+                .settings
+                .fraction_for_frequency(pin.frequency_hz, frame.sample_rate);
+            let time = (1.0 - pin.age_seconds / self.seconds.max(0.001)).clamp(0.0, 1.0);
+            let (x, y) = if self.vertical {
+                (
+                    plot.left() + frequency * plot.width(),
+                    plot.top() + time * plot.height(),
+                )
+            } else {
+                (
+                    plot.left() + time * plot.width(),
+                    plot.bottom() - frequency * plot.height(),
+                )
+            };
+            let stroke = Stroke::new(1.0, theme.warning);
+            painter.line_segment(
+                [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)],
+                stroke,
+            );
+            label(
+                &painter,
+                Pos2::new(
+                    (x + 5.0).min(plot.right() - 105.0),
+                    (y - 16.0).max(plot.top()),
+                ),
+                format!(
+                    "{} · −{:.2}s · {}",
+                    self.history.data.settings.label_frequency(pin.frequency_hz),
+                    pin.age_seconds,
+                    pin.dbfs
+                        .map_or_else(|| "No audio".into(), |db| format!("{db:.1} dBFS"))
+                ),
+                theme.warning,
+            );
+        }
         let response = ui.interact(
             plot,
-            ui.id().with("spectrogram-hover"),
-            egui::Sense::hover(),
+            ui.id().with("spectrogram-measure"),
+            egui::Sense::click(),
         );
+        if frozen
+            && response.clicked()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let x = ((pointer.x - plot.left()) / plot.width()).clamp(0.0, 1.0);
+            let y = ((pointer.y - plot.top()) / plot.height()).clamp(0.0, 1.0);
+            self.pinned = Some(self.measurement_at(x, y, now, frame.sample_rate));
+        }
         if let Some(pointer) = response.hover_pos() {
             let x = ((pointer.x - plot.left()) / plot.width()).clamp(0.0, 1.0);
             let y = ((pointer.y - plot.top()) / plot.height()).clamp(0.0, 1.0);
-            let (frequency, time) = if self.vertical { (x, y) } else { (1.0 - y, x) };
-            let age = self.seconds * (1.0 - time);
-            let bin = ((frequency * self.frequency_pixels as f32) as usize)
-                .min(self.frequency_pixels - 1);
-            let db = self.history.sample(now, age).map(|levels| {
-                levels
-                    [bin * BANDS / self.frequency_pixels..(bin + 1) * BANDS / self.frequency_pixels]
-                    .iter()
-                    .copied()
-                    .fold(-120.0_f32, f32::max)
-            });
+            let measurement = self.measurement_at(x, y, now, frame.sample_rate);
+            let action = if frozen { " · click to pin" } else { "" };
             response.help_text(format!(
-                "{} · −{age:.2} s · {}",
+                "{} · −{:.2} s · {}{action}",
                 self.history
                     .data
                     .settings
-                    .axis_label(frequency, frame.sample_rate),
-                db.map_or_else(|| "No captured audio".into(), |db| format!("{db:.1} dBFS"))
+                    .label_frequency(measurement.frequency_hz),
+                measurement.age_seconds,
+                measurement
+                    .dbfs
+                    .map_or_else(|| "No captured audio".into(), |db| format!("{db:.1} dBFS"))
             ));
         }
     }
@@ -359,7 +449,10 @@ mod tests {
                     &AnalysisFrame::default(),
                     &AppTheme::default(),
                     now,
-                    false,
+                    ModuleRenderState {
+                        live: false,
+                        frozen: false,
+                    },
                 );
             });
             let updates = output.textures_delta.set.len();
@@ -424,5 +517,29 @@ mod tests {
         let image = spectrogram.image(Instant::now(), &theme);
         assert_eq!(image.size, [1024, BANDS]);
         assert!(image.pixels.iter().all(|p| *p == theme.background));
+    }
+
+    #[test]
+    fn pinned_measurements_map_consistently_in_both_orientations_and_clear() {
+        let now = Instant::now();
+        let mut spectrogram = Spectrogram::default();
+        spectrogram.history.rows.push_back(HistoryRow {
+            time: now,
+            levels: [-24.0; BANDS],
+            magnitudes: vec![].into(),
+            sequence: 1,
+        });
+
+        let horizontal = spectrogram.measurement_at(1.0, 0.5, now, 48_000);
+        spectrogram.vertical = true;
+        let vertical = spectrogram.measurement_at(0.5, 1.0, now, 48_000);
+        assert!((horizontal.frequency_hz - vertical.frequency_hz).abs() < 0.01);
+        assert_eq!(horizontal.age_seconds, 0.0);
+        assert_eq!(horizontal.dbfs, Some(-24.0));
+        assert_eq!(horizontal, vertical);
+
+        spectrogram.pinned = Some(horizontal);
+        spectrogram.clear_cursor();
+        assert!(spectrogram.pinned.is_none());
     }
 }
