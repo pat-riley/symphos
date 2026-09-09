@@ -7,6 +7,29 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Changed
 
+- Constrain visualization dropdown labels so narrow pane headers keep pause and
+  expand controls unobstructed.
+
+- Avoid allocating sample lists and cloning themes on waterfall mesh cache hits;
+  borrow numeric labels and format dynamic help only for the hovered control.
+- Keep axis navigator endpoints on the stack and skip painting offscreen camera
+  controls.
+- Use concise native numeric formatting for exact entry and clear stale input
+  errors after a valid adjustment.
+- Center and orbit the waterfall around the floor grid's midpoint, with default
+  framing sized to keep the full height range visible while rotating.
+- Give camera transforms full-width rows, enlarge the XYZ navigator, and use
+  compact labeled cube shortcuts with active-view feedback.
+- Standardize compact properties dropdowns and show all eight isometric views
+  with aligned entries and automatic closing after selection.
+
+- Right-align property labels against their numeric fields for consistent scanning.
+- Keep the horizontal resize cursor while hovering or dragging numeric fields;
+  show the text cursor only during inline editing.
+- Use transparent collapsible properties headings separated by thin lines,
+  keeping darker backgrounds on editable controls.
+- Replace narrow module sliders and separate value boxes with wide filled fields,
+  centered editable values, and relative dragging inspired by Blender's controls.
 - Restyle module properties with compact recessed controls, aligned numeric
   labels, and collapsible section headers inspired by Blender's Properties editor.
 - Show each properties tab's sections directly, with independent collapsible

@@ -111,7 +111,7 @@ impl Spectrogram {
         });
         settings_panel(ui, "Appearance", |ui| {
             super::settings_group(ui, "Layout & detail", |ui| {
-                egui::ComboBox::from_id_salt("orientation").width(176.0)
+                super::properties_combo("orientation", 176.0, 2)
                 .selected_text(if self.vertical { "Newest at bottom" } else { "Newest at right" })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.vertical, false, "Newest at right").help_text("Time runs left to right; frequency runs low to high from bottom to top.");

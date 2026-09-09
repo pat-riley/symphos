@@ -346,6 +346,21 @@ enum TraceStyle {
     Filled,
 }
 
+// Popups otherwise inherit the application's roomier menu defaults. Keep every
+// properties picker consistent and reserve enough height for its complete list.
+fn properties_combo(id: &str, width: f32, rows: usize) -> egui::ComboBox {
+    egui::ComboBox::from_id_salt(id)
+        .width(width)
+        .height(rows as f32 * 26.0)
+        .truncate()
+        .popup_style(egui::style::StyleModifier::new(|style| {
+            style.spacing.item_spacing.y = 2.0;
+            style.spacing.interact_size.y = 24.0;
+            style.spacing.button_padding = egui::vec2(5.0, 2.0);
+            style.override_font_id = Some(FontId::proportional(13.0));
+        }))
+}
+
 impl TraceStyle {
     fn label(self) -> &'static str {
         match self {
@@ -356,9 +371,7 @@ impl TraceStyle {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui, bars: bool) {
-        egui::ComboBox::from_id_salt("trace-style")
-            .width(176.0)
-            .height(110.0)
+        properties_combo("trace-style", 176.0, 3)
             .selected_text(self.label())
             .show_ui(ui, |ui| {
                 for style in [Self::Bars, Self::Line, Self::Filled] {
@@ -455,14 +468,38 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
 
 /// Compact disclosure rows, with state scoped to the pane, module, and section.
 pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(title)
-        .default_open(true)
-        .show_background(true)
-        .show_unindented(ui, |ui| {
-            ui.add_space(2.0);
-            body(ui);
-            ui.add_space(4.0);
-        });
+    ui.separator();
+    ui.scope(|ui| {
+        let widgets = ui.visuals().widgets.clone();
+        let accent = ui.visuals().selection.bg_fill;
+        let visuals = ui.visuals_mut();
+        // egui uses this flag for full-row hit targets as well as painting.
+        // Keep the hit target, but make every header state transparent.
+        visuals.collapsing_header_frame = true;
+        for widget in [
+            &mut visuals.widgets.noninteractive,
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.weak_bg_fill = Color32::TRANSPARENT;
+            widget.bg_stroke = egui::Stroke::NONE;
+        }
+        visuals.widgets.hovered.fg_stroke.color = accent;
+        visuals.widgets.active.fg_stroke.color = accent;
+        egui::CollapsingHeader::new(title)
+            .default_open(true)
+            .show_background(false)
+            .show_unindented(ui, |ui| {
+                // Fields retain their normal recessed backgrounds.
+                ui.visuals_mut().widgets = widgets;
+                ui.visuals_mut().collapsing_header_frame = false;
+                ui.add_space(2.0);
+                body(ui);
+                ui.add_space(4.0);
+            });
+    });
 }
 
 fn label(painter: &egui::Painter, position: Pos2, text: impl ToString, color: Color32) {
@@ -947,7 +984,7 @@ impl Palette {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
-        egui::ComboBox::from_id_salt("palette")
+        properties_combo("palette", 176.0, 4)
             .selected_text(self.label())
             .show_ui(ui, |ui| {
                 for value in [Self::Theme, Self::Ember, Self::Ocean, Self::Heatmap] {

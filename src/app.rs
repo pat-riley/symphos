@@ -175,7 +175,7 @@ impl SymphosApp {
             mix(self.theme.panel, self.theme.foreground, 0.07)
         };
         let visuals = ui.visuals_mut();
-        visuals.collapsing_header_frame = true;
+        visuals.collapsing_header_frame = false;
         visuals.extreme_bg_color = field;
         visuals.widgets.inactive.bg_fill = field;
         visuals.widgets.inactive.weak_bg_fill = field;
@@ -193,7 +193,6 @@ impl SymphosApp {
         if settings_header(ui, self.panes[self.selected_pane].kind).clicked() {
             self.sidebar_open = false;
         }
-        ui.separator();
         settings_scroll_area(self.selected_pane, &self.panes[self.selected_pane])
             .show(ui, |ui| {
                 ui.push_id(self.selected_pane, |ui| {
@@ -333,15 +332,7 @@ impl SymphosApp {
         child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
         child.horizontal(|ui| {
             let before = self.panes[index].kind;
-            egui::ComboBox::from_id_salt("module-kind")
-                .width((ui.available_width() - 68.0).clamp(45.0, 180.0))
-                .truncate()
-                .selected_text(before.label())
-                .show_ui(ui, |ui| {
-                    for kind in ModuleKind::ALL {
-                        ui.selectable_value(&mut self.panes[index].kind, kind, kind.label()).help_text(kind.description());
-                    }
-                }).response.help_text("Choose which visualization appears in this pane. Each module has its own settings.");
+            module_kind_picker(ui, &mut self.panes[index].kind);
             if before != self.panes[index].kind {
                 self.panes[index].reset();
                 self.selected_pane = index;
@@ -710,6 +701,30 @@ fn build_details(ui: &mut egui::Ui) {
     }
 }
 
+fn module_kind_picker(ui: &mut egui::Ui, kind: &mut ModuleKind) -> egui::Response {
+    // ComboBox::width is only a minimum. Constrain its parent so long names
+    // truncate before reaching the two 24px action buttons.
+    let width =
+        (ui.available_width() - 48.0 - 2.0 * ui.spacing().item_spacing.x).clamp(45.0, 180.0);
+    ui.scope(|ui| {
+        ui.set_width(width);
+        egui::ComboBox::from_id_salt("module-kind")
+            .width(width)
+            .truncate()
+            .selected_text(kind.label())
+            .show_ui(ui, |ui| {
+                ui.set_min_width(180.0);
+                for value in ModuleKind::ALL {
+                    ui.selectable_value(kind, value, value.label())
+                        .help_text(value.description());
+                }
+            })
+            .response
+    })
+    .inner
+    .help_text("Choose which visualization appears in this pane. Each module has its own settings.")
+}
+
 fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mut bool) {
     let mut rail = ui.new_child(
         egui::UiBuilder::new()
@@ -793,14 +808,14 @@ fn audio_source_picker(
                         let selected = Some(source.node_name.as_str()) == selected_node;
                         let text = format!("{}  {}", source.kind.label(), source.display_name);
                         if ui.add(egui::Button::selectable(selected, text).wrap())
-                            .help_text(format!("Analyze {}: {}. Choosing a different source clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
+                            .help_text_with(|| format!("Analyze {}: {}. Choosing a different source clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
                             choice = Some(source.clone());
                             ui.close();
                         }
                     });
                 }
             }).response
-    }).inner.help_text(format!("Audio source: {label}. Available devices update automatically. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session."));
+    }).inner.help_text_with(|| format!("Audio source: {label}. Available devices update automatically. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session."));
     (response, choice)
 }
 
@@ -1100,6 +1115,31 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn narrow_pane_picker_reserves_space_for_both_action_buttons() {
+        for width in [120.0, 160.0, 240.0, 600.0] {
+            for mut kind in ModuleKind::ALL {
+                let context = egui::Context::default();
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+                    ui.horizontal(|ui| {
+                        let picker = module_kind_picker(ui, &mut kind);
+                        let pause = icons::sized_button(ui, Icon::Pause, false, 24.0, "Pause");
+                        let expand =
+                            icons::sized_button(ui, Icon::Fullscreen, false, 24.0, "Expand");
+                        assert!(picker.rect.right() < pause.rect.left());
+                        assert!(pause.rect.right() < expand.rect.left());
+                        assert!(expand.rect.right() <= ui.max_rect().right() + 0.1);
+                    });
+                    assert!(ui.min_rect().width() <= width + 0.1);
+                });
+                output.textures_delta.clear();
+            }
+        }
+    }
 
     #[test]
     fn source_picker_has_stable_width_wraps_menu_names_and_closes_on_selection() {

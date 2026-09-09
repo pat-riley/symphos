@@ -63,6 +63,72 @@ impl Axis {
     }
 }
 
+/// Small cube faces retain a visual target while short labels identify each view.
+pub fn view_button(
+    ui: &mut egui::Ui,
+    name: &str,
+    axis: Axis,
+    positive: bool,
+    width: f32,
+    selected: bool,
+) -> egui::Response {
+    let response = ui.add_sized([width, 24.0], egui::Button::new("").selected(selected));
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            name,
+        )
+    });
+    if !ui.is_rect_visible(response.rect) {
+        return response;
+    }
+    let painter = ui.painter_at(response.rect);
+    let origin = response.rect.left_center() + Vec2::new(3.0, -7.0);
+    let p = |x: f32, y: f32| {
+        origin
+            + Vec2::new(
+                x,
+                if axis == Axis::Z && !positive {
+                    14.0 - y
+                } else {
+                    y
+                },
+            )
+    };
+    let faces = [
+        vec![p(7.0, 1.0), p(13.0, 4.0), p(7.0, 7.0), p(1.0, 4.0)],
+        vec![p(1.0, 4.0), p(7.0, 7.0), p(7.0, 13.0), p(1.0, 10.0)],
+        vec![p(7.0, 7.0), p(13.0, 4.0), p(13.0, 10.0), p(7.0, 13.0)],
+    ];
+    let face = match (axis, positive) {
+        (Axis::Z, _) => 0,
+        (Axis::Y, false) | (Axis::X, false) => 1,
+        _ => 2,
+    };
+    let foreground = ui.style().interact(&response).fg_stroke.color;
+    for (i, points) in faces.into_iter().enumerate() {
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            if i == face {
+                axis.color().gamma_multiply(0.65)
+            } else {
+                Color32::TRANSPARENT
+            },
+            Stroke::new(0.7, foreground),
+        ));
+    }
+    painter.text(
+        response.rect.left_center() + Vec2::new(20.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        name,
+        FontId::proportional(11.0),
+        foreground,
+    );
+    response
+}
+
 pub fn project_direction(yaw: f32, elevation: f32, [x, y, z]: [f32; 3]) -> (Vec2, f32) {
     let (sin_yaw, cos_yaw) = yaw.sin_cos();
     let (sin_el, cos_el) = elevation.sin_cos();
@@ -87,20 +153,19 @@ struct Endpoint {
     depth: f32,
 }
 
-fn endpoints(rect: Rect, yaw: f32, elevation: f32) -> Vec<Endpoint> {
+fn endpoints(rect: Rect, yaw: f32, elevation: f32) -> [Endpoint; 6] {
     let arm = rect.width().min(rect.height()) * 0.31;
-    let mut points = Vec::with_capacity(6);
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        for positive in [false, true] {
-            let (position, depth) = project_direction(yaw, elevation, axis.direction(positive));
-            points.push(Endpoint {
-                axis,
-                positive,
-                pos: rect.center() + position * arm,
-                depth,
-            });
+    let mut points = std::array::from_fn(|i| {
+        let axis = [Axis::X, Axis::Y, Axis::Z][i / 2];
+        let positive = i % 2 == 1;
+        let (position, depth) = project_direction(yaw, elevation, axis.direction(positive));
+        Endpoint {
+            axis,
+            positive,
+            pos: rect.center() + position * arm,
+            depth,
         }
-    }
+    });
     points.sort_by(|a, b| a.depth.total_cmp(&b.depth));
     points
 }
@@ -114,7 +179,7 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
     );
     let points = endpoints(rect, yaw, elevation);
     // Keep generous invisible click targets without endpoint discs.
-    let radius = if compact { 8.0 } else { 12.0 };
+    let radius = if compact { 8.0 } else { 16.0 };
     let hit = response.hover_pos().and_then(|pointer| {
         points
             .iter()
@@ -132,6 +197,9 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if response.clicked_by(egui::PointerButton::Primary) {
         action.snap = hit.map(|point| (point.axis, point.positive));
+    }
+    if !ui.is_rect_visible(rect) {
+        return action;
     }
     let painter = ui.painter_at(rect);
     let background = ui.visuals().extreme_bg_color;
@@ -166,24 +234,27 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
         painter.text(
             point.pos + (point.pos - rect.center()).normalized() * 9.0,
             egui::Align2::CENTER_CENTER,
-            if point.positive {
-                point.axis.label().to_owned()
-            } else {
-                format!("−{}", point.axis.label())
+            match (point.axis, point.positive) {
+                (Axis::X, false) => "−X",
+                (Axis::Y, false) => "−Y",
+                (Axis::Z, false) => "−Z",
+                (_, true) => point.axis.label(),
             },
-            FontId::proportional(if compact { 9.0 } else { 11.0 }),
+            FontId::proportional(if compact { 9.0 } else { 13.0 }),
             if hovered { foreground } else { color },
         );
     }
     if let Some(point) = hit {
         response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .help_text(format!(
-                "{}{} · {}\nClick to align; click again to flip. Drag to orbit.",
-                if point.positive { "+" } else { "−" },
-                point.axis.label(),
-                point.axis.description()
-            ));
+            .help_text_with(|| {
+                format!(
+                    "{}{} · {}\nClick to align; click again to flip. Drag to orbit.",
+                    if point.positive { "+" } else { "−" },
+                    point.axis.label(),
+                    point.axis.description()
+                )
+            });
     } else {
         response
             .on_hover_cursor(egui::CursorIcon::Grab)
