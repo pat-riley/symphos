@@ -12,8 +12,7 @@ pub enum Icon {
     Response,
     Appearance,
     Waveform,
-    Collapse,
-    Expand,
+    Close,
     Stereo,
     Mix,
     Settings,
@@ -226,8 +225,10 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             (15.0, 10.0),
             (19.0, 10.0),
         ]),
-        Icon::Collapse => line(&[(13.0, 3.0), (6.0, 10.0), (13.0, 17.0)]),
-        Icon::Expand => line(&[(7.0, 3.0), (14.0, 10.0), (7.0, 17.0)]),
+        Icon::Close => {
+            line(&[(5.0, 5.0), (15.0, 15.0)]);
+            line(&[(15.0, 5.0), (5.0, 15.0)]);
+        }
         Icon::Stereo => {
             painter.circle_stroke(p(6.0, 10.0), 5.0, stroke);
             painter.circle_stroke(p(14.0, 10.0), 5.0, stroke);

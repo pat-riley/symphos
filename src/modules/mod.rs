@@ -1,3 +1,22 @@
+// Explicit settings-only snapshots: no samples, histories, textures, or clocks.
+// Clone is deliberate so this schema can grow owned preset fields later.
+macro_rules! module_settings {
+    ($module:ident, $settings:ident, { $($field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
+        #[derive(Clone, Debug, PartialEq)]
+        pub(crate) struct $settings { $( $field: $ty, )* }
+        impl $module {
+            #[allow(clippy::clone_on_copy)]
+            pub(crate) fn settings_snapshot(&self) -> $settings {
+                $settings { $( $field: self.$($path).+.clone(), )* }
+            }
+            #[allow(clippy::clone_on_copy)]
+            pub(crate) fn apply_settings(&mut self, settings: &$settings) {
+                $( self.$($path).+ = settings.$field.clone(); )*
+            }
+        }
+    };
+}
+
 mod camera_gizmo;
 mod frequency;
 mod spectrogram;
@@ -69,6 +88,26 @@ pub struct ModulePane {
     active_sections: [usize; 4],
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
+    pub last_capture: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModuleSettings {
+    Waterfall(waterfall::WaterfallSettings),
+    Spectrum(spectrum::SpectrumSettings),
+    Waveform(waveform::WaveformSettings),
+    Spectrogram(spectrogram::SpectrogramSettings),
+}
+
+impl ModuleSettings {
+    pub fn kind(&self) -> ModuleKind {
+        match self {
+            Self::Waterfall(_) => ModuleKind::Waterfall,
+            Self::Spectrum(_) => ModuleKind::Spectrum,
+            Self::Waveform(_) => ModuleKind::Waveform,
+            Self::Spectrogram(_) => ModuleKind::Spectrogram,
+        }
+    }
 }
 
 struct FrozenFrame {
@@ -116,6 +155,30 @@ impl SettingsSection {
 }
 
 impl ModulePane {
+    pub fn copy_settings(&self) -> ModuleSettings {
+        match self.kind {
+            ModuleKind::Waterfall => ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
+            ModuleKind::Spectrum => ModuleSettings::Spectrum(self.spectrum.settings_snapshot()),
+            ModuleKind::Waveform => ModuleSettings::Waveform(self.waveform.settings_snapshot()),
+            ModuleKind::Spectrogram => {
+                ModuleSettings::Spectrogram(self.spectrogram.settings_snapshot())
+            }
+        }
+    }
+
+    pub fn paste_settings(&mut self, settings: &ModuleSettings) -> bool {
+        if settings.kind() != self.kind {
+            return false;
+        }
+        match settings {
+            ModuleSettings::Waterfall(settings) => self.waterfall.apply_settings(settings),
+            ModuleSettings::Spectrum(settings) => self.spectrum.apply_settings(settings),
+            ModuleSettings::Waveform(settings) => self.waveform.apply_settings(settings),
+            ModuleSettings::Spectrogram(settings) => self.spectrogram.apply_settings(settings),
+        }
+        true
+    }
+
     pub fn new(kind: ModuleKind) -> Self {
         Self {
             kind,
@@ -126,10 +189,12 @@ impl ModulePane {
             active_sections: [0; 4],
             frozen: None,
             paused_duration: Duration::ZERO,
+            last_capture: 0,
         }
     }
 
     pub fn reset(&mut self) {
+        self.last_capture = 0;
         self.frozen = None;
         self.paused_duration = Duration::ZERO;
         self.waterfall.clear();
@@ -144,6 +209,7 @@ impl ModulePane {
     pub fn toggle_freeze(&mut self, frame: &AnalysisFrame, now: Instant) {
         if let Some(frozen) = self.frozen.take() {
             self.paused_duration += now.saturating_duration_since(frozen.started);
+            self.last_capture = frame.sequence;
         } else {
             self.frozen = Some(FrozenFrame {
                 frame: frame.clone(),
@@ -211,6 +277,24 @@ impl ModulePane {
         self.waveform.set_channel_view(stereo, channel);
     }
 
+    pub fn ingest(&mut self, frames: &[std::sync::Arc<crate::capture_history::SpectralFrame>]) {
+        for frame in frames {
+            if frame.sequence <= self.last_capture {
+                continue;
+            }
+            self.last_capture = frame.sequence;
+            if self.is_frozen() {
+                continue;
+            }
+            let time = frame.time - self.paused_duration;
+            match self.kind {
+                ModuleKind::Waterfall => self.waterfall.ingest(frame, time),
+                ModuleKind::Spectrogram => self.spectrogram.ingest(frame, time),
+                _ => {}
+            }
+        }
+    }
+
     pub fn draw(
         &mut self,
         ui: &mut egui::Ui,
@@ -229,10 +313,10 @@ impl ModulePane {
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
-            ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, false),
             ModuleKind::Spectrum => self.spectrum.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Waveform => self.waveform.draw(ui, rect, frame, theme, live),
-            ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, false),
         }
         if self.frozen.is_some() {
             ui.painter().text(
@@ -255,7 +339,7 @@ impl ModulePane {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TraceStyle {
     Bars,
     Line,
@@ -404,6 +488,85 @@ fn frequency_label(hz: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_history_panes_catch_up_without_painting_and_manual_pause_still_skips_audio() {
+        use std::sync::Arc;
+        let mut panes = [
+            ModulePane::new(ModuleKind::Spectrogram),
+            ModulePane::new(ModuleKind::Waterfall),
+        ];
+        let start = Instant::now();
+        let frames: Vec<_> = (0..240)
+            .map(|i| {
+                Arc::new(crate::capture_history::SpectralFrame {
+                    sequence: i + 1,
+                    time: start + Duration::from_millis(i * 34),
+                    sample_rate: 48000,
+                    fft_size: 512,
+                    magnitudes: vec![0.1; 257].into(),
+                })
+            })
+            .collect();
+        // No UI frame or draw call occurs during these eight seconds of capture.
+        for pane in &mut panes {
+            pane.ingest(&frames);
+        }
+        assert_eq!(panes[0].spectrogram.history_len(), 240);
+        assert_eq!(panes[1].waterfall.history_len(), 240);
+        let paused_at = start + Duration::from_secs(9);
+        panes[0].toggle_freeze(
+            &AnalysisFrame {
+                sequence: 240,
+                ..Default::default()
+            },
+            paused_at,
+        );
+        let next = Arc::new(crate::capture_history::SpectralFrame {
+            sequence: 241,
+            time: paused_at + Duration::from_secs(1),
+            sample_rate: 48000,
+            fft_size: 512,
+            magnitudes: vec![0.2; 257].into(),
+        });
+        for pane in &mut panes {
+            pane.ingest(std::slice::from_ref(&next));
+        }
+        assert_eq!(panes[0].spectrogram.history_len(), 240);
+        assert_eq!(panes[1].waterfall.history_len(), 241);
+        panes[0].toggle_freeze(
+            &AnalysisFrame {
+                sequence: 241,
+                ..Default::default()
+            },
+            paused_at + Duration::from_secs(1),
+        );
+        panes[0].ingest(&frames);
+        assert_eq!(panes[0].spectrogram.history_len(), 240);
+    }
+
+    #[test]
+    fn settings_clipboard_is_typed_and_does_not_copy_capture_or_pause_state() {
+        for kind in ModuleKind::ALL {
+            let mut source = ModulePane::new(kind);
+            source.toggle_freeze(&AnalysisFrame::default(), Instant::now());
+            let settings = source.copy_settings();
+            assert_eq!(settings.kind(), kind);
+            let mut target = ModulePane::new(kind);
+            assert!(target.paste_settings(&settings));
+            assert!(target.copy_settings() == settings);
+            assert!(!target.is_frozen());
+            assert_eq!(target.paused_duration, Duration::ZERO);
+            target.kind = if kind == ModuleKind::Waveform {
+                ModuleKind::Spectrum
+            } else {
+                ModuleKind::Waveform
+            };
+            let before = target.copy_settings();
+            assert!(!target.paste_settings(&settings));
+            assert!(target.copy_settings() == before);
+        }
+    }
 
     #[test]
     fn pause_captures_only_one_pane_and_resume_omits_paused_time() {
@@ -679,7 +842,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Palette {
     #[default]
     Theme,
@@ -691,7 +854,7 @@ enum Palette {
 impl Palette {
     fn contrast_controls(self, ui: &mut egui::Ui, contrast: &mut f32) {
         if self == Self::Heatmap {
-            ui.add(egui::Slider::new(contrast, 0.25..=3.0).text("Contrast"))
+            ui.add(crate::parameter::Parameter::new(contrast, 0.25..=3.0, 1.0).text("Contrast"))
                 .help_text("1 is neutral. Higher contrast separates quiet blues from loud reds; lower contrast brings colors toward the middle. Changes color only, not height, levels, or retained audio.");
         }
     }

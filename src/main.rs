@@ -1,19 +1,35 @@
 mod analysis;
 mod app;
 mod audio;
+mod capture_history;
 mod global_bar;
 mod help;
 mod icons;
+mod issues;
 mod modules;
+mod parameter;
+mod shortcuts;
 mod theme;
 
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
+    {
+        println!(
+            "Symphos {} · build {}",
+            env!("CARGO_PKG_VERSION"),
+            env!("SYMPHOS_BUILD_ID")
+        );
+        return Ok(());
+    }
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("symphos=info,wgpu_core=warn"),
     )
     .init();
+    issues::init();
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()

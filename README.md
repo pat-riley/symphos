@@ -14,6 +14,30 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
+- Spectrogram/waterfall history continues while panes are hidden or the app window
+  is occluded. Returning views catch up from the latest 30 seconds of independently
+  captured frequency history. Only explicit pane Pause stops that pane's history;
+  this is a rolling analyzer buffer, not an audio recording feature.
+- Copy/Paste settings in the module sidebar (Ctrl+Shift+C / Ctrl+Shift+V) applies
+  a settings-only snapshot to a matching module. Audio/history, pause state, and
+  global channel choices stay with the destination pane. This is session-only;
+  preset files, saved workspaces, and automatic restoration are not implemented.
+- **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
+  Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
+  the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;
+  F11 toggles fullscreen; Escape restores the dashboard or dismisses a modal/menu.
+  Typing, key-repeat events, and open menus/modals do not trigger application actions.
+- Numeric module controls: Shift-drag for fine adjustment, double-click the slider
+  to reset, or click its number to type an exact value (including scientific notation).
+  Slider ranges are comfortable working ranges; selected geometry/appearance fields
+  accept larger custom values within documented safe limits. Buffer sizes, history,
+  percentages, and algorithm limits remain bounded. Rejected values retain the last
+  valid setting and appear in **Settings → Issue log**, with a copyable report.
+  Diagnostics also append to `$XDG_STATE_HOME/symphos/issues.log` (fallback
+  `~/.local/state/symphos/issues.log`, 1 MiB plus one rotated previous log).
+  Reports include typed-value changes, rejected values, capture errors, panic
+  messages, and a preview of the selected module/current capture configuration.
+  Review before sharing; no automatic uploads.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
 - Four resizable panes with interchangeable waterfall, spectrum, waveform,
   and spectrogram modules
@@ -78,8 +102,8 @@ These are axis references, not detected notes or key detection. Both controls al
 work independently in the spectrum and spectrogram.
 Height stretches the surface above its fixed floor.
 The icon rail and settings share one continuous sidebar surface, without a gap
-or separate rounded panels. The chevron collapses or opens settings.
-The rail stays visible when collapsed; clicking a tab opens its section.
+or separate rounded panels. The header X or active tab closes settings.
+The rail stays visible when closed; clicking a tab reopens its section.
 Under **Geometry → Time & detail**, **History s** sets the waterfall's displayed time window.
 Under **Geometry**, **Length X** stretches the frequency axis and **Length Y**
 stretches the time axis independently. Both default to 1× with a 0.25×–10× range.
@@ -211,8 +235,23 @@ To build and add Symphos to the Omarchy application menu for the current user:
 ./scripts/install-dev.sh
 ```
 
-This installs the binary and desktop metadata under `~/.local`. Remove that
-installation with:
+This checks formatting, runs lint and tests, builds the locked release, and
+installs the verified binary and desktop metadata under `~/.local`. Run this
+command after local UI changes to update the launcher, then close and reopen
+Symphos. A running instance does not update itself.
+
+Settings (the gear menu) shows the app version and a source build identifier,
+with a **Copy build info** button. The identifier includes uncommitted source
+changes, so it distinguishes local builds even before a commit. Compare it with
+`symphos --version` when reporting issues or checking what the launcher runs.
+
+The module inspector has a compact title and close X. Click the active tab to
+close it, or another tab to open that section; an accent strip marks the active
+tab. Drag the inspector's right edge to resize, or double-click the edge to
+restore its compact width. Section, width, and per-tab scroll position are
+remembered during the session, not saved as a workspace.
+
+Remove the installation with:
 
 ```sh
 ./scripts/uninstall-dev.sh
