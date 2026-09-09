@@ -42,6 +42,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- A dedicated Oscilloscope module with local pitch-period locking, threshold
+  triggering, free run, single/multiple-cycle views, Left/Right/Mid/Side routing,
+  auto/manual scaling, RGB and multi-band traces, and aligned afterglow overlays.
 - A Stereometer module with scaled, one-to-one rotated linear, and Lissajous
   vectorscopes; static, frequency-balanced RGB, and overlaid low/mid/high color
   modes; overall or multi-band phase correlation; and an RMS balance indicator.

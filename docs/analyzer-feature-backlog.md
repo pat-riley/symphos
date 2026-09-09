@@ -33,7 +33,7 @@ Status meanings:
 | Standards-based loudness | **Planned** | Add LUFS momentary and short-term alongside configurable fast/slow RMS. |
 | Stereo vectorscope | **Shipped** | Scaled, one-to-one rotated linear, and Lissajous views include static, RGB, and overlaid low/mid/high rendering. |
 | Phase correlation | **Shipped** | Overall and separate low/mid/high correlation are available with an RMS balance indicator. |
-| Pitch-following oscilloscope | **Planned** | Build a dedicated scope with stable zero-crossing or period tracking and cycle controls. |
+| Pitch-following oscilloscope | **Shipped** | Local autocorrelation pitch locking, threshold trigger, free run, cycle controls, component routing, and afterglow are available. |
 | Per-module Mid/Side spectrum analysis | **Planned** | Extend independent channel routing beyond waveform panes. |
 | Reference spectrum / target curve | **Planned** | Capture a live reference and load supported audio files for comparison overlays. |
 | Mel frequency scale | **Evaluate** | Compare it with the existing linear, logarithmic, and note-label views. |

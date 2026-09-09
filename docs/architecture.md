@@ -64,6 +64,15 @@ RGB balance, overlaid band plots, and phase correlation; they never run in the
 capture callback or change shared FFT analysis. Linear mode maps full-scale
 Left/Right samples one-to-one into rotated Mid/Side space, Scaled mode expands
 quiet radii inside the same diamond, and Lissajous plots unrotated channels.
+The oscilloscope also consumes that snapshot, routing Left, Right, Mid, or Side
+locally. Pitch follow downsamples a bounded recent window, removes DC, searches
+30 Hz–2 kHz with normalized autocorrelation, refines the strongest early local
+peak, and aligns the selected cycle count to a rising zero crossing. Threshold
+trigger and free-run modes use an FFT-independent manual timebase. Previous
+windows can be overlaid as afterglow without retaining another audio history;
+pitch-locked windows share the detected period and therefore align. Its RGB and
+multi-band modes reuse display-only 200 Hz and 2 kHz crossover behavior. None of
+this processing runs in the capture callback or changes shared analysis.
 Spectrogram raster caching keys on retained rows, pixel-scale time movement,
 display processing, palette, and theme; paused or empty views do not repeatedly
 rebuild/upload the same texture. Display resolution never changes analysis rate.
