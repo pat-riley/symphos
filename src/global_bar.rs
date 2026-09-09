@@ -63,8 +63,8 @@ impl GlobalBar {
                     }
                 }).response.help_text("Shared target analysis/display update rate. Does not change history duration.");
             if icons::button(ui, if self.stereo { Icon::Stereo } else { Icon::Mix }, !self.stereo,
-                if self.stereo { "Stereo view: separate L/R meters and waveform lanes. Click for a mixed single-channel view. Frequency analysis is unchanged." }
-                else { "Mixed view: combined meters and waveform. Click for separate L/R channels. Choose a left/right-only override in Shared options." }).clicked() {
+                if self.stereo { "Stereo meters: separate L/R level bars. Click for a single meter. Waveform lanes have independent per-pane channel settings." }
+                else { "Single meter: show the selected mix, left, or right level. Click for separate L/R meters. Waveform lanes are unchanged." }).clicked() {
                 self.stereo = !self.stereo;
             }
             let options = icons::button(ui, Icon::Settings, false,
@@ -83,7 +83,7 @@ impl GlobalBar {
                     .help_text("Shared signal analyzed by frequency modules: stereo mix, left, or right. Changing this clears histories.");
                 ui.label("Single-view channel");
                 channel_selector(ui, "view-channel", &mut self.channel)
-                    .help_text("Signal used by meters and waveform panes when mixed view is active: stereo mix, left, or right. Does not change the FFT signal.");
+                    .help_text("Signal used by the footer meter when single view is active: stereo mix, left, or right. Waveform panes have independent channel settings.");
                 ui.separator();
                 ui.checkbox(inspector, "FFT inspector / diagnostics")
                     .help_text("Open raw frequency bins and detailed audio-analysis statistics.");

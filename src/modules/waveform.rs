@@ -1,14 +1,62 @@
-use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
+use std::time::Instant;
 
-use super::{TraceStyle, label, mix, settings_panel};
+use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
+
+use super::{Palette, TraceStyle, label, mix, properties_combo, settings_panel};
 use crate::help::HoverHelp;
-use crate::{
-    analysis::{AnalysisFrame, ChannelMode},
-    theme::AppTheme,
-};
+use crate::{analysis::AnalysisFrame, theme::AppTheme};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WaveformChannel {
+    Left,
+    Right,
+    Mid,
+    Side,
+}
+
+impl WaveformChannel {
+    const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Mid, Self::Side];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Mid => "Mid",
+            Self::Side => "Side",
+        }
+    }
+
+    const fn short_label(self) -> &'static str {
+        match self {
+            Self::Left => "L",
+            Self::Right => "R",
+            Self::Mid => "M",
+            Self::Side => "S",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WaveformColorMode {
+    Static,
+    MultiBand,
+    ColorMap,
+}
+
+impl WaveformColorMode {
+    const ALL: [Self; 3] = [Self::Static, Self::MultiBand, Self::ColorMap];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Static => "Static",
+            Self::MultiBand => "Multi-band",
+            Self::ColorMap => "Color map",
+        }
+    }
+}
 
 pub struct Waveform {
-    time_ms: f32,
+    speed_ms: f32,
     amplitude: f32,
     auto_scale: bool,
     trigger: bool,
@@ -20,12 +68,20 @@ pub struct Waveform {
     centerline: bool,
     grid: bool,
     labels: bool,
-    stereo: bool,
-    channel: ChannelMode,
+    two_channels: bool,
+    channels: [WaveformChannel; 2],
+    color_mode: WaveformColorMode,
+    palette: Palette,
+    contrast: f32,
+    peak_history: bool,
+    looped: bool,
+    loop_cursor: usize,
+    last_sequence: Option<u64>,
+    last_update: Option<Instant>,
 }
 
 module_settings!(Waveform, WaveformSettings, {
-time_ms: f32 => time_ms,
+speed_ms: f32 => speed_ms,
 amplitude: f32 => amplitude,
 auto_scale: bool => auto_scale,
 trigger: bool => trigger,
@@ -37,12 +93,19 @@ fill_opacity: f32 => fill_opacity,
 centerline: bool => centerline,
 grid: bool => grid,
 labels: bool => labels,
+two_channels: bool => two_channels,
+channels: [WaveformChannel; 2] => channels,
+color_mode: WaveformColorMode => color_mode,
+palette: Palette => palette,
+contrast: f32 => contrast,
+peak_history: bool => peak_history,
+looped: bool => looped,
 });
 
 impl Default for Waveform {
     fn default() -> Self {
         Self {
-            time_ms: 40.0,
+            speed_ms: 250.0,
             amplitude: 1.0,
             auto_scale: false,
             trigger: false,
@@ -54,31 +117,85 @@ impl Default for Waveform {
             centerline: true,
             grid: false,
             labels: true,
-            stereo: true,
-            channel: ChannelMode::StereoMix,
+            two_channels: true,
+            channels: [WaveformChannel::Left, WaveformChannel::Right],
+            color_mode: WaveformColorMode::Static,
+            palette: Palette::Theme,
+            contrast: 1.0,
+            peak_history: false,
+            looped: false,
+            loop_cursor: 0,
+            last_sequence: None,
+            last_update: None,
         }
     }
 }
 
 impl Waveform {
     pub fn reset_settings(&mut self) {
-        *self = Self {
-            stereo: self.stereo,
-            channel: self.channel,
-            ..Self::default()
-        };
+        *self = Self::default();
+    }
+
+    pub fn clear(&mut self) {
+        self.loop_cursor = 0;
+        self.last_sequence = None;
+        self.last_update = None;
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
+        settings_panel(ui, "Channels", |ui| {
+            super::settings_group(ui, "Layout", |ui| {
+                properties_combo("waveform-channel-count", 176.0, 2)
+                    .selected_text(if self.two_channels {
+                        "Two channels"
+                    } else {
+                        "One channel"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.two_channels, false, "One channel")
+                            .help_text("Use the full pane height for one selected signal.");
+                        ui.selectable_value(&mut self.two_channels, true, "Two channels")
+                            .help_text("Show any two selected signals in aligned lanes.");
+                    })
+                    .response
+                    .help_text("Choose a single signal or an independent pair of waveform lanes.");
+                waveform_channel_selector(
+                    ui,
+                    "waveform-channel-a",
+                    "Channel 1",
+                    &mut self.channels[0],
+                );
+                ui.add_enabled_ui(self.two_channels, |ui| {
+                    waveform_channel_selector(
+                        ui,
+                        "waveform-channel-b",
+                        "Channel 2",
+                        &mut self.channels[1],
+                    );
+                });
+            });
+        });
         settings_panel(ui, "Time Window", |ui| {
-            super::settings_group(ui, "Duration", |ui| {
-                ui.add(crate::parameter::Parameter::new(&mut self.time_ms, 1.0..=250.0, 40.0).logarithmic(true).text("Window ms"))
-                .help_text("Visible time window, independent of the shared FFT size. Long views preserve peaks when reduced to screen pixels.");
+            super::settings_group(ui, "Speed & motion", |ui| {
+                ui.add(crate::parameter::Parameter::new(&mut self.speed_ms, 10.0..=500.0, 250.0).logarithmic(true).text("Across ms"))
+                .help_text("Time required for audio to cross the pane. Smaller values move faster. This is independent of the shared FFT size, and long views preserve peaks when reduced to screen pixels.");
+                properties_combo("waveform-motion", 176.0, 2)
+                    .selected_text(if self.looped { "Loop" } else { "Scroll" })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.looped, false, "Scroll")
+                            .help_text("Keep the newest audio at the right edge and scroll older audio left.");
+                        ui.selectable_value(&mut self.looped, true, "Loop")
+                            .help_text("Keep existing audio at fixed horizontal positions while a write head wraps across the pane.");
+                    })
+                    .response
+                    .help_text("Choose a continuously scrolling trace or a static loop that is overwritten in place.");
             });
             super::settings_group(ui, "Trigger", |ui| {
-                ui.checkbox(&mut self.trigger, "Stabilize repeating signals")
-                .help_text("Align the left edge to a recent threshold crossing. Stereo uses the left channel and keeps both channels aligned. Falls back to the latest window when no crossing is found.");
-                ui.add_enabled_ui(self.trigger, |ui| {
+                ui.add_enabled_ui(!self.looped, |ui| {
+                    ui.checkbox(&mut self.trigger, "Stabilize repeating signals")
+                    .help_text("Align the left edge to a recent threshold crossing in Channel 1 and keep both lanes aligned. Falls back to the latest window when no crossing is found.");
+                });
+                ui.add_enabled_ui(self.trigger && !self.looped, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.rising, true, "Rising").help_text("Trigger when the signal crosses the threshold upward.");
                     ui.selectable_value(&mut self.rising, false, "Falling").help_text("Trigger when the signal crosses the threshold downward.");
@@ -123,6 +240,28 @@ impl Waveform {
                     .help_text("Opacity of the area between the signal and centerline.");
                 }
             });
+            super::settings_group(ui, "Color", |ui| {
+                properties_combo("waveform-color-mode", 176.0, 3)
+                    .selected_text(self.color_mode.label())
+                    .show_ui(ui, |ui| {
+                        for mode in WaveformColorMode::ALL {
+                            ui.selectable_value(&mut self.color_mode, mode, mode.label())
+                                .help_text(match mode {
+                                    WaveformColorMode::Static => "Use one theme color per waveform lane.",
+                                    WaveformColorMode::MultiBand => "Color each part of the trace from its low-, mid-, and high-frequency energy.",
+                                    WaveformColorMode::ColorMap => "Map the selected palette to instantaneous waveform level.",
+                                });
+                        }
+                    })
+                    .response
+                    .help_text("Choose whether color identifies the lane, frequency balance, or signal level.");
+                if self.color_mode == WaveformColorMode::ColorMap {
+                    self.palette.controls(ui);
+                    self.palette.contrast_controls(ui, &mut self.contrast);
+                }
+                ui.checkbox(&mut self.peak_history, "Multi-band peak history")
+                    .help_text("Overlay the recent low-, mid-, and high-frequency peak envelopes behind the waveform.");
+            });
             super::settings_group(ui, "Guides", |ui| {
                 ui.checkbox(&mut self.centerline, "Centerline")
                     .help_text("Show the zero-amplitude reference in each lane.");
@@ -134,32 +273,24 @@ impl Waveform {
         });
     }
 
-    pub fn set_channel_view(&mut self, stereo: bool, channel: ChannelMode) {
-        self.stereo = stereo;
-        self.channel = channel;
-    }
-
     fn sample(&self, frame: &AnalysisFrame, index: usize, lane: usize) -> f32 {
         let left = frame.waveform_left[index];
         let right = frame.waveform_right[index];
-        if self.stereo {
-            if lane == 0 { left } else { right }
-        } else {
-            match self.channel {
-                ChannelMode::Left => left,
-                ChannelMode::Right => right,
-                ChannelMode::StereoMix => (left + right) * 0.5,
-            }
+        match self.channels[lane] {
+            WaveformChannel::Left => left,
+            WaveformChannel::Right => right,
+            WaveformChannel::Mid => (left + right) * 0.5,
+            WaveformChannel::Side => (left - right) * 0.5,
         }
     }
 
     fn window(&self, frame: &AnalysisFrame) -> (std::ops::Range<usize>, bool) {
         let len = frame.waveform_left.len().min(frame.waveform_right.len());
-        let count = ((self.time_ms * frame.sample_rate.max(1) as f32 / 1000.0).ceil() as usize)
+        let count = ((self.speed_ms * frame.sample_rate.max(1) as f32 / 1000.0).ceil() as usize)
             .max(2)
             .min(len);
         let latest = len.saturating_sub(count);
-        if self.trigger {
+        if self.trigger && !self.looped {
             for start in (1..=latest).rev() {
                 let a = self.sample(frame, start - 1, 0);
                 let b = self.sample(frame, start, 0);
@@ -172,7 +303,7 @@ impl Waveform {
     }
 
     fn display_gain(&self, frame: &AnalysisFrame, window: std::ops::Range<usize>) -> f32 {
-        let lanes = if self.stereo { 2 } else { 1 };
+        let lanes = if self.two_channels { 2 } else { 1 };
         if self.auto_scale {
             let peak = (0..lanes)
                 .flat_map(|lane| window.clone().map(move |index| (lane, index)))
@@ -191,6 +322,7 @@ impl Waveform {
         rect: Rect,
         frame: &AnalysisFrame,
         theme: &AppTheme,
+        now: Instant,
         live: bool,
     ) {
         let painter = ui.painter_at(rect);
@@ -200,7 +332,8 @@ impl Waveform {
         }
         let (window, triggered) = self.window(frame);
         let gain = self.display_gain(frame, window.clone());
-        let lanes = if self.stereo { 2 } else { 1 };
+        self.update_loop_cursor(frame, window.len(), now, live);
+        let lanes = if self.two_channels { 2 } else { 1 };
         for lane in 0..lanes {
             let lane_rect = Rect::from_min_max(
                 Pos2::new(
@@ -236,50 +369,83 @@ impl Waveform {
                 }
             }
             if live && window.len() >= 2 {
-                let samples: Vec<_> = window
+                let chronological: Vec<_> = window
                     .clone()
                     .map(|index| self.sample(frame, index, lane))
                     .collect();
-                let points: Vec<_> = envelope(&samples, plot.width().ceil() as usize)
-                    .into_iter()
-                    .map(|(i, sample)| {
-                        Pos2::new(
-                            plot.left() + i as f32 / (samples.len() - 1) as f32 * plot.width(),
-                            lane_rect.center().y
-                                - (sample * gain).clamp(-1.0, 1.0) * lane_rect.height() * 0.45,
+                let chronological_bands = split_bands(&chronological, frame.sample_rate);
+                let samples = if self.looped {
+                    rotate_for_loop(&chronological, self.loop_cursor)
+                } else {
+                    chronological
+                };
+                let bands = if self.looped {
+                    rotate_for_loop(&chronological_bands, self.loop_cursor)
+                } else {
+                    chronological_bands
+                };
+                if self.peak_history {
+                    paint_peak_history(&painter, &bands, lane_rect, plot, gain, theme);
+                }
+                let reduced = envelope(&samples, plot.width().ceil() as usize);
+                let points: Vec<_> = reduced
+                    .iter()
+                    .map(|&(i, sample)| {
+                        (
+                            Pos2::new(
+                                plot.left() + i as f32 / (samples.len() - 1) as f32 * plot.width(),
+                                lane_rect.center().y
+                                    - (sample * gain).clamp(-1.0, 1.0) * lane_rect.height() * 0.45,
+                            ),
+                            self.trace_color(sample, bands[i], gain, lane, theme),
                         )
                     })
                     .collect();
-                let color = if lane == 0 {
-                    theme.accent
-                } else {
-                    theme.accent_alt
-                };
-                if self.style == TraceStyle::Filled {
-                    super::fill_trace(
-                        &painter,
-                        &points,
-                        lane_rect.center().y,
-                        color.gamma_multiply(self.fill_opacity),
-                    );
+                let ranges = trace_ranges(&reduced, self.looped.then_some(self.loop_cursor));
+                for range in ranges {
+                    let trace = &points[range];
+                    if trace.len() < 2 {
+                        continue;
+                    }
+                    if self.style == TraceStyle::Filled {
+                        paint_colored_fill(
+                            &painter,
+                            trace,
+                            lane_rect.center().y,
+                            self.fill_opacity,
+                        );
+                    }
+                    if self.color_mode == WaveformColorMode::Static {
+                        painter.add(egui::Shape::line(
+                            trace.iter().map(|(point, _)| *point).collect(),
+                            Stroke::new(self.thickness, trace[0].1),
+                        ));
+                    } else {
+                        for pair in trace.windows(2) {
+                            painter.line_segment(
+                                [pair[0].0, pair[1].0],
+                                Stroke::new(self.thickness, mix(pair[0].1, pair[1].1, 0.5)),
+                            );
+                        }
+                    }
                 }
-                painter.add(egui::Shape::line(
-                    points,
-                    Stroke::new(self.thickness, color),
-                ));
             }
             if self.labels {
                 label(
                     &painter,
                     lane_rect.left_top(),
-                    if self.stereo {
-                        if lane == 0 { "L" } else { "R" }
-                    } else {
-                        self.channel.label()
-                    },
+                    self.channels[lane].short_label(),
                     theme.muted,
                 );
             }
+        }
+        if self.looped && live && window.len() >= 2 {
+            let x =
+                plot.left() + self.loop_cursor as f32 / window.len().max(1) as f32 * plot.width();
+            painter.line_segment(
+                [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
+                Stroke::new(1.0, theme.foreground.gamma_multiply(0.65)),
+            );
         }
         if self.labels {
             let duration = window.len() as f32 / frame.sample_rate.max(1) as f32 * 1000.0;
@@ -292,18 +458,264 @@ impl Waveform {
             painter.text(
                 rect.right_bottom() - Vec2::new(10.0, 5.0),
                 egui::Align2::RIGHT_BOTTOM,
-                if triggered {
+                if self.looped {
+                    "loop"
+                } else if triggered {
                     "triggered"
                 } else if self.trigger {
                     "waiting for trigger · live"
                 } else {
-                    "now"
+                    "scrolling"
                 },
                 egui::FontId::monospace(10.0),
                 theme.muted,
             );
         }
     }
+
+    fn update_loop_cursor(
+        &mut self,
+        frame: &AnalysisFrame,
+        samples: usize,
+        now: Instant,
+        live: bool,
+    ) {
+        if !self.looped || samples == 0 {
+            self.loop_cursor = 0;
+            self.last_sequence = Some(frame.sequence);
+            self.last_update = Some(now);
+            return;
+        }
+        match self.last_sequence {
+            None => {
+                self.last_sequence = Some(frame.sequence);
+                self.last_update = Some(now);
+            }
+            Some(sequence) if sequence == frame.sequence => {}
+            Some(_) => {
+                if live {
+                    let elapsed = self.last_update.map_or(0.0, |previous| {
+                        now.saturating_duration_since(previous).as_secs_f64()
+                    });
+                    let advanced = (elapsed * f64::from(frame.sample_rate.max(1))).round() as usize;
+                    self.loop_cursor = (self.loop_cursor + advanced.max(1)) % samples;
+                }
+                self.last_sequence = Some(frame.sequence);
+                self.last_update = Some(now);
+            }
+        }
+    }
+
+    fn trace_color(
+        &self,
+        sample: f32,
+        bands: [f32; 3],
+        gain: f32,
+        lane: usize,
+        theme: &AppTheme,
+    ) -> Color32 {
+        match self.color_mode {
+            WaveformColorMode::Static => {
+                if lane == 0 {
+                    theme.accent
+                } else {
+                    theme.accent_alt
+                }
+            }
+            WaveformColorMode::MultiBand => multiband_color(bands, theme),
+            WaveformColorMode::ColorMap => self.palette.color_with_contrast(
+                (sample * gain).abs().clamp(0.0, 1.0),
+                self.contrast,
+                theme,
+            ),
+        }
+    }
+}
+
+fn waveform_channel_selector(
+    ui: &mut egui::Ui,
+    id: &str,
+    label_text: &str,
+    channel: &mut WaveformChannel,
+) {
+    ui.label(label_text);
+    properties_combo(id, 176.0, WaveformChannel::ALL.len())
+        .selected_text(channel.label())
+        .show_ui(ui, |ui| {
+            for candidate in WaveformChannel::ALL {
+                ui.selectable_value(channel, candidate, candidate.label())
+                    .help_text(match candidate {
+                        WaveformChannel::Left => "Original left input channel.",
+                        WaveformChannel::Right => "Original right input channel.",
+                        WaveformChannel::Mid => "Mono-compatible center: (Left + Right) / 2.",
+                        WaveformChannel::Side => "Stereo difference: (Left − Right) / 2.",
+                    });
+            }
+        })
+        .response
+        .help_text("Select the signal shown in this waveform lane.");
+}
+
+fn rotate_for_loop<T: Clone>(values: &[T], cursor: usize) -> Vec<T> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let cursor = cursor % values.len();
+    let split = values.len() - cursor;
+    values[split..]
+        .iter()
+        .chain(&values[..split])
+        .cloned()
+        .collect()
+}
+
+fn trace_ranges(
+    points: &[(usize, f32)],
+    loop_cursor: Option<usize>,
+) -> [std::ops::Range<usize>; 2] {
+    let Some(cursor) = loop_cursor.filter(|cursor| *cursor > 0) else {
+        return [0..points.len(), points.len()..points.len()];
+    };
+    let split = points.partition_point(|(index, _)| *index < cursor);
+    [0..split, split..points.len()]
+}
+
+/// Split a waveform into low (<200 Hz), mid (roughly 200 Hz–2 kHz), and high
+/// (>2 kHz) components, then apply a short release envelope so color does not
+/// flicker at the audio sample rate. These bands are display-only and never
+/// alter the captured audio or shared FFT analysis.
+fn split_bands(samples: &[f32], sample_rate: u32) -> Vec<[f32; 3]> {
+    let rate = sample_rate.max(1) as f32;
+    let coefficient = |frequency: f32| 1.0 - (-std::f32::consts::TAU * frequency / rate).exp();
+    let low_coefficient = coefficient(200.0);
+    let mid_coefficient = coefficient(2_000.0);
+    let release = (-1.0 / (rate * 0.012)).exp();
+    let mut low_pass = 0.0_f32;
+    let mut mid_pass = 0.0_f32;
+    let mut envelope = [0.0_f32; 3];
+    samples
+        .iter()
+        .map(|&sample| {
+            low_pass += (sample - low_pass) * low_coefficient;
+            mid_pass += (sample - mid_pass) * mid_coefficient;
+            let components = [low_pass, mid_pass - low_pass, sample - mid_pass];
+            for band in 0..3 {
+                envelope[band] = components[band].abs().max(envelope[band] * release);
+            }
+            envelope
+        })
+        .collect()
+}
+
+fn multiband_colors(theme: &AppTheme) -> [Color32; 3] {
+    [
+        Color32::from_rgb(232, 91, 71),
+        theme.accent,
+        Color32::from_rgb(72, 151, 232),
+    ]
+}
+
+fn multiband_color(bands: [f32; 3], theme: &AppTheme) -> Color32 {
+    let colors = multiband_colors(theme);
+    let sum = bands.iter().sum::<f32>();
+    if sum <= 1.0e-7 {
+        return theme.muted;
+    }
+    let weighted = |components: [u8; 3]| {
+        bands
+            .iter()
+            .zip(components)
+            .map(|(&weight, component)| weight * component as f32)
+            .sum::<f32>()
+            / sum
+    };
+    Color32::from_rgb(
+        weighted(colors.map(|color| color.r())).round() as u8,
+        weighted(colors.map(|color| color.g())).round() as u8,
+        weighted(colors.map(|color| color.b())).round() as u8,
+    )
+}
+
+fn paint_peak_history(
+    painter: &egui::Painter,
+    bands: &[[f32; 3]],
+    lane: Rect,
+    plot: Rect,
+    gain: f32,
+    theme: &AppTheme,
+) {
+    if bands.len() < 2 {
+        return;
+    }
+    let pixels = plot.width().ceil().max(1.0) as usize;
+    let stride = bands.len().div_ceil(pixels).max(1);
+    for band in (0..3).rev() {
+        let points: Vec<_> = bands
+            .chunks(stride)
+            .enumerate()
+            .map(|(chunk, values)| {
+                let index = (chunk * stride + values.len() / 2).min(bands.len() - 1);
+                let peak = values
+                    .iter()
+                    .map(|levels| levels[band])
+                    .fold(0.0_f32, f32::max);
+                Pos2::new(
+                    plot.left() + index as f32 / (bands.len() - 1) as f32 * plot.width(),
+                    lane.center().y - (peak * gain).clamp(0.0, 1.0) * lane.height() * 0.45,
+                )
+            })
+            .collect();
+        super::fill_trace(
+            painter,
+            &points,
+            lane.center().y,
+            multiband_colors(theme)[band].gamma_multiply(0.16),
+        );
+    }
+}
+
+fn paint_colored_fill(
+    painter: &egui::Painter,
+    points: &[(Pos2, Color32)],
+    baseline: f32,
+    opacity: f32,
+) {
+    let mut mesh = egui::Mesh::default();
+    for pair in points.windows(2) {
+        let (a, color_a) = pair[0];
+        let (b, color_b) = pair[1];
+        let color_a = color_a.gamma_multiply(opacity);
+        let color_b = color_b.gamma_multiply(opacity);
+        let base = mesh.vertices.len() as u32;
+        if (a.y - baseline) * (b.y - baseline) < 0.0 {
+            let t = (baseline - a.y) / (b.y - a.y);
+            let crossing = Pos2::new(egui::lerp(a.x..=b.x, t), baseline);
+            let crossing_color = mix(color_a, color_b, t);
+            for (point, color) in [
+                (a, color_a),
+                (crossing, crossing_color),
+                (Pos2::new(a.x, baseline), color_a),
+                (b, color_b),
+                (Pos2::new(b.x, baseline), color_b),
+            ] {
+                mesh.colored_vertex(point, color);
+            }
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base + 1, base + 3, base + 4);
+        } else {
+            for (point, color) in [
+                (a, color_a),
+                (b, color_b),
+                (Pos2::new(b.x, baseline), color_b),
+                (Pos2::new(a.x, baseline), color_a),
+            ] {
+                mesh.colored_vertex(point, color);
+            }
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base, base + 2, base + 3);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn crossing(a: f32, b: f32, level: f32, rising: bool) -> bool {
@@ -353,25 +765,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn copy_settings_preserves_target_global_channel_and_is_an_independent_snapshot() {
+    fn copy_settings_includes_channel_color_and_motion_but_not_runtime_cursor() {
         let mut source = Waveform {
-            time_ms: 125.0,
+            speed_ms: 125.0,
             amplitude: 2.0,
+            channels: [WaveformChannel::Mid, WaveformChannel::Side],
+            color_mode: WaveformColorMode::MultiBand,
+            peak_history: true,
+            looped: true,
+            loop_cursor: 41,
             ..Waveform::default()
         };
         let settings = source.settings_snapshot();
-        source.time_ms = 10.0;
-        assert_eq!(source.time_ms, 10.0);
+        source.speed_ms = 10.0;
+        assert_eq!(source.speed_ms, 10.0);
         let mut target = Waveform {
-            stereo: false,
-            channel: ChannelMode::Right,
+            loop_cursor: 7,
             ..Waveform::default()
         };
         target.apply_settings(&settings);
-        assert_eq!(target.time_ms, 125.0);
+        assert_eq!(target.speed_ms, 125.0);
         assert_eq!(target.amplitude, 2.0);
-        assert!(!target.stereo);
-        assert_eq!(target.channel, ChannelMode::Right);
+        assert_eq!(
+            target.channels,
+            [WaveformChannel::Mid, WaveformChannel::Side]
+        );
+        assert_eq!(target.color_mode, WaveformColorMode::MultiBand);
+        assert!(target.peak_history && target.looped);
+        assert_eq!(target.loop_cursor, 7);
     }
 
     #[test]
@@ -406,7 +827,7 @@ mod tests {
         for style in [TraceStyle::Line, TraceStyle::Filled] {
             let mut waveform = Waveform {
                 style,
-                time_ms: 250.0,
+                speed_ms: 250.0,
                 labels: false,
                 centerline: false,
                 grid: false,
@@ -418,6 +839,7 @@ mod tests {
                     Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 120.0)),
                     &frame,
                     &AppTheme::default(),
+                    Instant::now(),
                     true,
                 );
             });
@@ -440,6 +862,70 @@ mod tests {
     }
 
     #[test]
+    fn every_color_mode_and_peak_history_render_finite_colored_geometry() {
+        let context = egui::Context::default();
+        let frame = AnalysisFrame {
+            sequence: 2,
+            waveform_left: (0..24_000)
+                .map(|sample| {
+                    let time = sample as f32 / 48_000.0;
+                    (std::f32::consts::TAU * 90.0 * time).sin() * 0.5
+                        + (std::f32::consts::TAU * 4_000.0 * time).sin() * 0.2
+                })
+                .collect(),
+            waveform_right: (0..24_000)
+                .map(|sample| (sample as f32 * 0.17).sin() * 0.4)
+                .collect(),
+            ..AnalysisFrame::default()
+        };
+        for color_mode in WaveformColorMode::ALL {
+            let mut waveform = Waveform {
+                color_mode,
+                palette: Palette::Heatmap,
+                peak_history: true,
+                looped: true,
+                labels: false,
+                ..Waveform::default()
+            };
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                waveform.draw(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 180.0)),
+                    &frame,
+                    &AppTheme::default(),
+                    Instant::now(),
+                    true,
+                );
+            });
+            output.textures_delta.clear();
+            let meshes: Vec<_> = context
+                .tessellate(output.shapes, output.pixels_per_point)
+                .into_iter()
+                .filter_map(|primitive| match primitive.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .collect();
+            assert!(!meshes.is_empty());
+            assert!(
+                meshes
+                    .iter()
+                    .flat_map(|mesh| &mesh.vertices)
+                    .all(|vertex| vertex.pos.is_finite())
+            );
+            let colors: std::collections::HashSet<_> = meshes
+                .iter()
+                .flat_map(|mesh| &mesh.vertices)
+                .map(|vertex| vertex.color.to_array())
+                .collect();
+            assert!(
+                colors.len() >= 3,
+                "{color_mode:?} should render band overlays"
+            );
+        }
+    }
+
+    #[test]
     fn time_window_does_not_depend_on_fft_and_trigger_keeps_stereo_aligned() {
         let mut frame = AnalysisFrame {
             sample_rate: 48_000,
@@ -451,7 +937,7 @@ mod tests {
             ..AnalysisFrame::default()
         };
         let mut waveform = Waveform {
-            time_ms: 250.0,
+            speed_ms: 250.0,
             ..Waveform::default()
         };
         let (range, triggered) = waveform.window(&frame);
@@ -505,16 +991,115 @@ mod tests {
     }
 
     #[test]
-    fn reset_preserves_global_channel_selection() {
+    fn reset_restores_waveform_settings_and_motion_state() {
         let mut waveform = Waveform {
-            stereo: false,
-            channel: ChannelMode::Right,
-            time_ms: 200.0,
+            two_channels: false,
+            channels: [WaveformChannel::Side, WaveformChannel::Mid],
+            speed_ms: 200.0,
+            loop_cursor: 19,
+            last_sequence: Some(4),
             ..Waveform::default()
         };
         waveform.reset_settings();
-        assert!(!waveform.stereo);
-        assert_eq!(waveform.channel, ChannelMode::Right);
-        assert_eq!(waveform.time_ms, 40.0);
+        assert!(waveform.two_channels);
+        assert_eq!(
+            waveform.channels,
+            [WaveformChannel::Left, WaveformChannel::Right]
+        );
+        assert_eq!(waveform.speed_ms, 250.0);
+        assert_eq!(waveform.loop_cursor, 0);
+        assert_eq!(waveform.last_sequence, None);
+    }
+
+    #[test]
+    fn channels_return_left_right_mid_and_side_with_standard_scaling() {
+        let frame = AnalysisFrame {
+            waveform_left: vec![0.8],
+            waveform_right: vec![0.2],
+            ..AnalysisFrame::default()
+        };
+        let mut waveform = Waveform {
+            channels: [WaveformChannel::Left, WaveformChannel::Right],
+            ..Waveform::default()
+        };
+        assert_eq!(waveform.sample(&frame, 0, 0), 0.8);
+        assert_eq!(waveform.sample(&frame, 0, 1), 0.2);
+        waveform.channels = [WaveformChannel::Mid, WaveformChannel::Side];
+        assert!((waveform.sample(&frame, 0, 0) - 0.5).abs() < f32::EPSILON);
+        assert!((waveform.sample(&frame, 0, 1) - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn multiband_split_and_colors_distinguish_low_and_high_tones() {
+        let rate = 48_000;
+        let tone = |frequency: f32| {
+            (0..4_800)
+                .map(|sample| {
+                    (std::f32::consts::TAU * frequency * sample as f32 / rate as f32).sin()
+                })
+                .collect::<Vec<_>>()
+        };
+        let low = split_bands(&tone(80.0), rate);
+        let high = split_bands(&tone(8_000.0), rate);
+        let low = low.last().unwrap();
+        let high = high.last().unwrap();
+        assert!(low[0] > low[2]);
+        assert!(high[2] > high[0]);
+        assert_ne!(
+            multiband_color(*low, &AppTheme::default()),
+            multiband_color(*high, &AppTheme::default())
+        );
+    }
+
+    #[test]
+    fn loop_rotation_holds_existing_samples_in_place_and_splits_at_write_head() {
+        let before = vec![0, 1, 2, 3, 4, 5];
+        let after = vec![2, 3, 4, 5, 6, 7];
+        assert_eq!(rotate_for_loop(&before, 0), before);
+        assert_eq!(rotate_for_loop(&after, 2), vec![6, 7, 2, 3, 4, 5]);
+        let reduced: Vec<_> = (0..6).map(|index| (index, 0.0)).collect();
+        assert_eq!(trace_ranges(&reduced, Some(2)), [0..2, 2..6]);
+    }
+
+    #[test]
+    fn loop_cursor_advances_only_for_new_live_frames_and_clear_resets_it() {
+        let start = Instant::now();
+        let mut waveform = Waveform {
+            looped: true,
+            ..Waveform::default()
+        };
+        let mut frame = AnalysisFrame {
+            sequence: 1,
+            sample_rate: 1_000,
+            ..AnalysisFrame::default()
+        };
+        waveform.update_loop_cursor(&frame, 500, start, true);
+        assert_eq!(waveform.loop_cursor, 0);
+        waveform.update_loop_cursor(
+            &frame,
+            500,
+            start + std::time::Duration::from_millis(10),
+            true,
+        );
+        assert_eq!(waveform.loop_cursor, 0);
+        frame.sequence = 2;
+        waveform.update_loop_cursor(
+            &frame,
+            500,
+            start + std::time::Duration::from_millis(20),
+            true,
+        );
+        assert_eq!(waveform.loop_cursor, 20);
+        frame.sequence = 3;
+        waveform.update_loop_cursor(
+            &frame,
+            500,
+            start + std::time::Duration::from_millis(40),
+            false,
+        );
+        assert_eq!(waveform.loop_cursor, 20);
+        waveform.clear();
+        assert_eq!(waveform.loop_cursor, 0);
+        assert_eq!(waveform.last_sequence, None);
     }
 }

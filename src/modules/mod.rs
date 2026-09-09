@@ -70,7 +70,7 @@ impl ModuleKind {
                 "Current signal level by frequency. Hover over a band to inspect its frequency and level."
             }
             Self::Waveform => {
-                "Audio amplitude over a short time window. Use the bottom-bar stereo/mix icon to switch between separate channels and a combined signal."
+                "Audio amplitude over time. Choose one or two independent Left, Right, Mid, or Side lanes, then scroll the signal or overwrite a static loop."
             }
             Self::Spectrogram => {
                 "Frequency over time, with color showing signal level. Newest audio appears on the right or bottom, depending on orientation."
@@ -124,6 +124,7 @@ pub enum SettingsSection {
     Frequency,
     Response,
     Appearance,
+    Channels,
     TimeWindow,
     Amplitude,
 }
@@ -137,6 +138,7 @@ impl SettingsSection {
             Self::Frequency => "Frequency Range",
             Self::Response => "Signal Response",
             Self::Appearance => "Appearance",
+            Self::Channels => "Channels",
             Self::TimeWindow => "Time Window",
             Self::Amplitude => "Amplitude",
         }
@@ -149,6 +151,7 @@ impl SettingsSection {
             Self::Frequency => Icon::Frequency,
             Self::Response => Icon::Response,
             Self::Appearance => Icon::Appearance,
+            Self::Channels => Icon::Stereo,
             Self::Amplitude => Icon::Waveform,
         }
     }
@@ -199,6 +202,7 @@ impl ModulePane {
         self.paused_duration = Duration::ZERO;
         self.waterfall.clear();
         self.spectrum.clear();
+        self.waveform.clear();
         self.spectrogram.clear();
     }
 
@@ -255,7 +259,7 @@ impl ModulePane {
             ModuleKind::Waterfall => &[Geometry, Frequency, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
-            ModuleKind::Waveform => &[TimeWindow, Amplitude, Appearance],
+            ModuleKind::Waveform => &[Channels, TimeWindow, Amplitude, Appearance],
         }
     }
 
@@ -271,10 +275,6 @@ impl ModulePane {
         {
             self.active_sections[self.kind as usize] = index;
         }
-    }
-
-    pub fn set_channel_view(&mut self, stereo: bool, channel: crate::analysis::ChannelMode) {
-        self.waveform.set_channel_view(stereo, channel);
     }
 
     pub fn ingest(&mut self, frames: &[std::sync::Arc<crate::capture_history::SpectralFrame>]) {
@@ -315,7 +315,7 @@ impl ModulePane {
         match self.kind {
             ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, false),
             ModuleKind::Spectrum => self.spectrum.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Waveform => self.waveform.draw(ui, rect, frame, theme, live),
+            ModuleKind::Waveform => self.waveform.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Spectrogram => self.spectrogram.draw(ui, rect, frame, theme, now, false),
         }
         if self.frozen.is_some() {
@@ -860,35 +860,12 @@ mod tests {
         assert_eq!(
             pane.sections(),
             &[
+                SettingsSection::Channels,
                 SettingsSection::TimeWindow,
                 SettingsSection::Amplitude,
                 SettingsSection::Appearance
             ]
         );
-    }
-
-    #[test]
-    fn global_channel_view_reaches_every_waveform_pane() {
-        let context = egui::Context::default();
-        for kind in ModuleKind::ALL {
-            let mut pane = ModulePane::new(kind);
-            pane.set_channel_view(false, crate::analysis::ChannelMode::StereoMix);
-            pane.kind = ModuleKind::Waveform;
-            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-                pane.draw(
-                    ui,
-                    Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 300.0)),
-                    &AnalysisFrame::default(),
-                    &AppTheme::default(),
-                    false,
-                );
-            });
-            output.textures_delta.clear();
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                egui::Shape::Text(text) if text.galley.job.text == "Stereo mix")));
-            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
-                egui::Shape::Text(text) if text.galley.job.text == "L" || text.galley.job.text == "R")));
-        }
     }
 
     #[test]

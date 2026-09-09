@@ -7,6 +7,22 @@ the response, and perform or share the result.
 Live progress is tracked in the
 [GitHub roadmap issue](https://github.com/pat-riley/symphos/issues/19).
 
+The complete [analyzer feature backlog](analyzer-feature-backlog.md) records
+the current parity inventory, shipped waveform work, proposed metering modules,
+capture workflows, workspace features, and platform integrations. The roadmap
+phases below determine their delivery order:
+
+- **Analyzer foundation:** independent component sources, Mid/Side routing,
+  reference spectra, measurement cursors, Mel/piano views, and sharper
+  spectrogram modes.
+- **Analysis and metering:** calibrated VU, standards-based loudness,
+  stereo-image/Lissajous views, phase correlation, and a pitch-following scope.
+- **Projects and workspaces:** persistent module presets, user color maps,
+  detached components, saved layouts, transparency, and desktop-bar behavior.
+- **Capture and distribution:** audio recording, retrospective clips, DAW
+  transport/audio bridges, plug-in evaluation, cross-platform builds, and
+  platform video-output integrations such as Syphon.
+
 ## 1. Validate the analyzer foundation
 
 - Exercise microphone and system-output capture across device changes.
@@ -22,6 +38,8 @@ Live progress is tracked in the
 - Automatically detect the musical key of a song from accumulated pitch-class
   evidence, with major/minor estimates, confidence, and an insufficient-audio state.
 - Define named low, mid, and high bands alongside arbitrary frequency bands.
+- Extend independent Left, Right, Mid, and Side routing from waveform panes to
+  the other analyzer and metering components.
 - Potential improvement: capture a reference spectrum as a faint overlay while
   live analysis continues, for comparing sounds or EQ changes. Evaluate range
   alignment and clearly distinguish the reference from peak hold.
@@ -66,6 +84,7 @@ predictably across quiet and loud material.
   component layout, routing, mappings, and references to required assets.
 - Save and load presets for individual component windows independently of the
   enclosing project.
+- Save reusable user-authored color maps and reference-spectrum definitions.
 - Add undo/redo and autosave before the editor becomes complex.
 
 Exit condition: users can create a circle, edit it, save the project, restart
@@ -102,6 +121,8 @@ have stable versioning.
 
 - Support multiple component windows with intentional docking, tiling,
   detaching, resizing, fullscreen, and multi-display behavior.
+- Evaluate transparent component backgrounds and a Wayland desktop-bar mode
+  after detached windows have stable sizing and input behavior.
 - Save named workspace layouts and restore them reliably across display and
   resolution changes.
 - Rework the UI around the Analyze, Create, and Perform workflows once their
@@ -142,12 +163,18 @@ gracefully when shader compilation fails.
 - Create deterministic demo audio and visual regression captures.
 - Package scenes with their assets and import untrusted packages safely.
 - Add scene thumbnails, metadata, and exportable bundles.
+- Add bounded source recording and retrospective 10/60-second audio clips
+  without moving file I/O onto the realtime capture path.
+- Evaluate DAW sender and transport bridges before committing to VST3, CLAP,
+  or Audio Unit versions of individual components.
 - Produce reproducible Arch Linux packages and signed GitHub releases.
 - Separate audio capture and theme integration behind platform interfaces, then
   add macOS Core Audio and Windows WASAPI backends, including supported forms
   of system-output capture.
 - Add macOS and Windows CI, packaging, signing/notarization, permissions, and
   downloadable releases.
+- Evaluate platform-specific video output, including Syphon on macOS, after the
+  renderer and window abstractions are portable.
 - Document scene compatibility and migrations before declaring 1.0.
 
 Exit condition: representative scenes meet their published performance budgets
