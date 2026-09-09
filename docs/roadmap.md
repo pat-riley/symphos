@@ -16,8 +16,8 @@ phases below determine their delivery order:
   reference spectra, measurement cursors, Mel/piano views, and sharper
   spectrogram modes.
 - **Analysis and metering:** shipped stereo-image/Lissajous and phase-correlation
-  views, followed by calibrated VU, standards-based loudness, and a
-  pitch-following scope.
+  views and a pitch-following scope, followed by calibrated VU and
+  standards-based loudness.
 - **Projects and workspaces:** persistent module presets, user color maps,
   detached components, saved layouts, transparency, and desktop-bar behavior.
 - **Capture and distribution:** audio recording, retrospective clips, DAW
