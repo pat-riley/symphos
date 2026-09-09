@@ -153,6 +153,9 @@ gracefully when shader compilation fails.
 
 ## 7. Performance, sharing, and distribution
 
+- Adopt the staged review, testing, and compatibility gates described in the
+  [development process](development-process.md) as contributors and releases
+  make each stage worthwhile.
 - Add performance presets for Apple Silicon/Asahi and conventional GPUs.
 - Define frame-time, capture latency, memory, and CPU/GPU budgets for each
   supported workload and track them with repeatable benchmarks.

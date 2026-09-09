@@ -4,6 +4,10 @@ Thanks for helping improve Symphos. The project is in an early proof-of-concept
 stage, so small changes with clear behavior and measurements are the easiest to
 review.
 
+The staged approach to review, testing, releases, and compatibility is described
+in [the development process](docs/development-process.md). Its current phase is
+guidance rather than a set of required merge gates.
+
 ## Before making a change
 
 - Read `docs/architecture.md` before changing the audio or analysis paths.
