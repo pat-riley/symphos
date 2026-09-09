@@ -31,8 +31,8 @@ Status meanings:
 | --- | --- | --- |
 | Calibrated VU meter | **Planned** | Add selectable calibration, VU ballistics, and peak/clip indicators. |
 | Standards-based loudness | **Planned** | Add LUFS momentary and short-term alongside configurable fast/slow RMS. |
-| Stereo vectorscope | **Planned** | Add linear, normalized/scaled, and Lissajous views. |
-| Phase correlation | **Planned** | Show overall correlation, then evaluate low/mid/high correlation. |
+| Stereo vectorscope | **Shipped** | Scaled, one-to-one rotated linear, and Lissajous views include static, RGB, and overlaid low/mid/high rendering. |
+| Phase correlation | **Shipped** | Overall and separate low/mid/high correlation are available with an RMS balance indicator. |
 | Pitch-following oscilloscope | **Planned** | Build a dedicated scope with stable zero-crossing or period tracking and cycle controls. |
 | Per-module Mid/Side spectrum analysis | **Planned** | Extend independent channel routing beyond waveform panes. |
 | Reference spectrum / target curve | **Planned** | Capture a live reference and load supported audio files for comparison overlays. |
@@ -68,7 +68,8 @@ Status meanings:
 ## Delivery order
 
 1. Finish waveform validation and independent component routing.
-2. Add loudness, VU, stereo-image, and phase-correlation modules.
+2. Add loudness and calibrated VU modules; stereo-image and phase-correlation
+   are shipped.
 3. Add persistent component presets and reference-spectrum workflows.
 4. Add bounded audio recording and retrospective clips.
 5. Establish detached workspaces and a DAW bridge before evaluating full meter plug-ins.

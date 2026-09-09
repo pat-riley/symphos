@@ -15,8 +15,9 @@ phases below determine their delivery order:
 - **Analyzer foundation:** independent component sources, Mid/Side routing,
   reference spectra, measurement cursors, Mel/piano views, and sharper
   spectrogram modes.
-- **Analysis and metering:** calibrated VU, standards-based loudness,
-  stereo-image/Lissajous views, phase correlation, and a pitch-following scope.
+- **Analysis and metering:** shipped stereo-image/Lissajous and phase-correlation
+  views, followed by calibrated VU, standards-based loudness, and a
+  pitch-following scope.
 - **Projects and workspaces:** persistent module presets, user color maps,
   detached components, saved layouts, transparency, and desktop-bar behavior.
 - **Capture and distribution:** audio recording, retrospective clips, DAW

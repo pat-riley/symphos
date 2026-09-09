@@ -42,6 +42,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- A Stereometer module with scaled, one-to-one rotated linear, and Lissajous
+  vectorscopes; static, frequency-balanced RGB, and overlaid low/mid/high color
+  modes; overall or multi-band phase correlation; and an RMS balance indicator.
 - Independent one/two-lane waveform routing for Left, Right, Mid, and Side;
   static, multi-band, and level color-map modes; multi-band peak-history
   overlays; adjustable travel speed; and scrolling/static-loop motion.
