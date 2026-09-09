@@ -157,9 +157,12 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             }
         }
         Icon::Camera => {
-            box_outline(p(1.0, 5.0), p(19.0, 17.0));
-            line(&[(5.0, 5.0), (7.0, 2.0), (13.0, 2.0), (15.0, 5.0)]);
-            painter.circle_stroke(p(10.0, 11.0), 3.4, stroke);
+            // Side-profile movie camera: twin reels, body, and projecting lens.
+            for x in [4.0, 10.5] {
+                painter.circle_stroke(p(x, 4.0), 2.7, stroke);
+            }
+            box_outline(p(1.0, 8.0), p(13.0, 18.0));
+            line(&[(13.0, 11.0), (19.0, 8.0), (19.0, 18.0), (13.0, 15.0)]);
         }
         Icon::Time => {
             painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);

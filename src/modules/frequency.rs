@@ -52,57 +52,65 @@ impl FrequencySettings {
     }
 
     pub fn range_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        super::settings_group(ui, "Range & scale", |ui| {
+            ui.horizontal(|ui| {
             ui.selectable_value(&mut self.logarithmic, true, "Log").help_text("Space frequencies logarithmically to give bass and treble comparable room. Retained history is redrawn, not cleared.");
             ui.selectable_value(&mut self.logarithmic, false, "Linear").help_text("Space frequencies evenly in Hz. Retained history is redrawn, not cleared.");
         });
-        ui.add(
-            crate::parameter::Parameter::new(&mut self.min_hz, 10.0..=2000.0, 20.0)
-                .bounds(1.0..=(self.max_hz - 1.0) as f64)
-                .logarithmic(true)
-                .text("Low Hz"),
-        )
-        .help_text("Lowest displayed frequency in Hz. Changes only this module's view.");
-        ui.add(
-            crate::parameter::Parameter::new(&mut self.max_hz, 2000.0..=24_000.0, 20_000.0)
-                .bounds((self.min_hz + 1.0) as f64..=192_000.0)
-                .logarithmic(true)
-                .text("High Hz"),
-        )
-        .help_text("Highest displayed frequency in Hz, limited by the source's sample rate.");
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.min_hz, 10.0..=2000.0, 20.0)
+                    .bounds(1.0..=(self.max_hz - 1.0) as f64)
+                    .logarithmic(true)
+                    .text("Low Hz"),
+            )
+            .help_text("Lowest displayed frequency in Hz. Changes only this module's view.");
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.max_hz, 2000.0..=24_000.0, 20_000.0)
+                    .bounds((self.min_hz + 1.0) as f64..=192_000.0)
+                    .logarithmic(true)
+                    .text("High Hz"),
+            )
+            .help_text("Highest displayed frequency in Hz, limited by the source's sample rate.");
+        });
         self.max_hz = self.max_hz.max(self.min_hz + 1.0);
-        ui.separator();
-        ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
-        if self.note_labels {
-            ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).bounds(200.0..=1000.0).text("A4 Hz"))
+        super::settings_group(ui, "Musical labels", |ui| {
+            ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
+            if self.note_labels {
+                ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).bounds(200.0..=1000.0).text("A4 Hz"))
                 .help_text("Tuning reference for note labels. Standard concert tuning is A4 = 440 Hz; this does not change the audio.");
-        }
+            }
+        });
     }
 
     pub fn response_controls(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().slider_width = ui.spacing().slider_width.min(78.0);
-        ui.add(
-            crate::parameter::Parameter::new(&mut self.gain, -24.0..=36.0, 0.0)
-                .bounds(-96.0..=96.0)
-                .text("Gain dB"),
-        )
-        .help_text(
-            "Boost or reduce displayed levels in this module. Does not change audio volume.",
-        );
-        ui.add(
-            crate::parameter::Parameter::new(&mut self.smoothing, 0.0..=0.98, 0.72)
-                .text("Time smooth"),
-        )
-        .help_text("Higher values smooth rapid level changes; lower values respond faster.");
-        ui.add(
-            crate::parameter::Parameter::new(&mut self.decay, 6.0..=96.0, 36.0)
-                .bounds(0.0..=240.0)
-                .text("Decay dB/s"),
-        )
-        .help_text("How quickly displayed levels fall after a peak. Higher values fall faster.");
-        ui.separator();
-        ui.add(crate::parameter::Parameter::new(&mut self.frequency_smoothing, 0..=8, 0).text("Freq. smooth"))
+        super::settings_group(ui, "Level & dynamics", |ui| {
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.gain, -24.0..=36.0, 0.0)
+                    .bounds(-96.0..=96.0)
+                    .text("Gain dB"),
+            )
+            .help_text(
+                "Boost or reduce displayed levels in this module. Does not change audio volume.",
+            );
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.smoothing, 0.0..=0.98, 0.72)
+                    .text("Time smooth"),
+            )
+            .help_text("Higher values smooth rapid level changes; lower values respond faster.");
+            ui.add(
+                crate::parameter::Parameter::new(&mut self.decay, 6.0..=96.0, 36.0)
+                    .bounds(0.0..=240.0)
+                    .text("Decay dB/s"),
+            )
+            .help_text(
+                "How quickly displayed levels fall after a peak. Higher values fall faster.",
+            );
+        });
+        super::settings_group(ui, "Frequency smoothing", |ui| {
+            ui.add(crate::parameter::Parameter::new(&mut self.frequency_smoothing, 0..=8, 0).text("Freq. smooth"))
             .help_text("Blend neighboring displayed frequency bands. 0 is off; higher values soften jagged peaks across frequency, independently of time smoothing. Retained history is reprocessed without clearing it; audio and FFT resolution are unchanged.");
+        });
     }
 
     pub fn level_controls(&mut self, ui: &mut egui::Ui) {

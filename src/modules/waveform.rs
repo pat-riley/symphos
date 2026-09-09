@@ -71,13 +71,14 @@ impl Waveform {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Time Window", |ui| {
-            ui.add(crate::parameter::Parameter::new(&mut self.time_ms, 1.0..=250.0, 40.0).logarithmic(true).text("Window ms"))
+            super::settings_group(ui, "Duration", |ui| {
+                ui.add(crate::parameter::Parameter::new(&mut self.time_ms, 1.0..=250.0, 40.0).logarithmic(true).text("Window ms"))
                 .help_text("Visible time window, independent of the shared FFT size. Long views preserve peaks when reduced to screen pixels.");
-            ui.separator();
-            ui.strong("Trigger");
-            ui.checkbox(&mut self.trigger, "Stabilize repeating signals")
+            });
+            super::settings_group(ui, "Trigger", |ui| {
+                ui.checkbox(&mut self.trigger, "Stabilize repeating signals")
                 .help_text("Align the left edge to a recent threshold crossing. Stereo uses the left channel and keeps both channels aligned. Falls back to the latest window when no crossing is found.");
-            ui.add_enabled_ui(self.trigger, |ui| {
+                ui.add_enabled_ui(self.trigger, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.rising, true, "Rising").help_text("Trigger when the signal crosses the threshold upward.");
                     ui.selectable_value(&mut self.rising, false, "Falling").help_text("Trigger when the signal crosses the threshold downward.");
@@ -85,44 +86,51 @@ impl Waveform {
                 ui.add(crate::parameter::Parameter::new(&mut self.trigger_level, -1.0..=1.0, 0.0).text("Threshold"))
                     .help_text("Trigger threshold in original sample amplitude, before display scaling; zero is the centerline.");
             });
+            });
         });
         settings_panel(ui, "Amplitude", |ui| {
-            ui.checkbox(&mut self.auto_scale, "Auto scale")
+            super::settings_group(ui, "Scaling", |ui| {
+                ui.checkbox(&mut self.auto_scale, "Auto scale")
                 .help_text("Fit the visible signal to the lane height. Both stereo lanes share one gain so their relative levels remain accurate. Does not change audio volume.");
-            ui.add_enabled_ui(!self.auto_scale, |ui| {
-                ui.add(
-                    crate::parameter::Parameter::new(&mut self.amplitude, 0.1..=10.0, 1.0)
-                        .bounds(0.01..=100.0)
-                        .logarithmic(true)
-                        .text("Amplitude"),
-                )
-                .help_text("Manual vertical magnification. Retained while Auto scale is enabled.");
+                ui.add_enabled_ui(!self.auto_scale, |ui| {
+                    ui.add(
+                        crate::parameter::Parameter::new(&mut self.amplitude, 0.1..=10.0, 1.0)
+                            .bounds(0.01..=100.0)
+                            .logarithmic(true)
+                            .text("Amplitude"),
+                    )
+                    .help_text(
+                        "Manual vertical magnification. Retained while Auto scale is enabled.",
+                    );
+                });
             });
         });
         settings_panel(ui, "Appearance", |ui| {
-            self.style.controls(ui, false);
-            ui.add(
-                crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.2)
-                    .bounds(0.1..=20.0)
-                    .text("Line px"),
-            )
-            .help_text("Outline thickness in screen pixels.");
-            if self.style == TraceStyle::Filled {
+            super::settings_group(ui, "Trace", |ui| {
+                self.style.controls(ui, false);
                 ui.add(
-                    crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
-                        .bounds(0.0..=1.0)
-                        .text("Fill opacity"),
+                    crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.2)
+                        .bounds(0.1..=20.0)
+                        .text("Line px"),
                 )
-                .help_text("Opacity of the area between the signal and centerline.");
-            }
-            ui.separator();
-            ui.strong("Guides");
-            ui.checkbox(&mut self.centerline, "Centerline")
-                .help_text("Show the zero-amplitude reference in each lane.");
-            ui.checkbox(&mut self.grid, "Grid")
-                .help_text("Show time divisions and half-scale amplitude guides.");
-            ui.checkbox(&mut self.labels, "Axis & channel labels")
-                .help_text("Show channel names and the visible time range.");
+                .help_text("Outline thickness in screen pixels.");
+                if self.style == TraceStyle::Filled {
+                    ui.add(
+                        crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                            .bounds(0.0..=1.0)
+                            .text("Fill opacity"),
+                    )
+                    .help_text("Opacity of the area between the signal and centerline.");
+                }
+            });
+            super::settings_group(ui, "Guides", |ui| {
+                ui.checkbox(&mut self.centerline, "Centerline")
+                    .help_text("Show the zero-amplitude reference in each lane.");
+                ui.checkbox(&mut self.grid, "Grid")
+                    .help_text("Show time divisions and half-scale amplitude guides.");
+                ui.checkbox(&mut self.labels, "Axis & channel labels")
+                    .help_text("Show channel names and the visible time range.");
+            });
         });
     }
 

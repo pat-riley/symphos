@@ -5,6 +5,18 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Restyle module properties with compact recessed controls, aligned numeric
+  labels, and collapsible section headers inspired by Blender's Properties editor.
+- Show each properties tab's sections directly, with independent collapsible
+  groups and no redundant dropdown that hides the entire tab.
+- Use a side-profile film camera icon for the camera properties tab.
+- Remove the properties close button's background, using an accent-colored X
+  on hover and press.
+- Simplify the settings toolbar to unboxed icons, using the accent color for
+  the open tab and hover feedback instead of a side marker or separators.
+
 ### Added
 
 - Fine parameter dragging, individual double-click resets, exact numeric entry,

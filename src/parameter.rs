@@ -71,7 +71,15 @@ impl<T: Numeric> Parameter<'_, T> {
             .data(|d| d.get_temp::<String>(egui::Id::new("parameter-context")))
             .unwrap_or_else(|| "Module".into());
         let inner = ui.horizontal(|ui| {
-            ui.spacing_mut().slider_width = ui.spacing().slider_width.min(66.0);
+            let width = ui.available_width().min(420.0);
+            let label_width = (width * 0.42).min(108.0);
+            let value_width = 48.0;
+            ui.add_sized(
+                [label_width, ui.spacing().interact_size.y],
+                egui::Label::new(&self.text).truncate().halign(egui::Align::RIGHT),
+            );
+            ui.spacing_mut().slider_width =
+                (width - label_width - value_width - ui.spacing().item_spacing.x * 2.0).max(16.0);
             let bar = ui.add(egui::Slider::new(&mut value, low..=high).show_value(false)
                 .clamping(egui::SliderClamping::Never).logarithmic(self.logarithmic))
                 .interact(egui::Sense::click_and_drag());
@@ -90,7 +98,7 @@ impl<T: Numeric> Parameter<'_, T> {
             let edit_id = bar.id.with("typed-value");
             let stored = ui.data(|d| d.get_temp::<String>(edit_id));
             if let Some(mut draft) = stored {
-                let edit = ui.add(egui::TextEdit::singleline(&mut draft).id(edit_id).desired_width(48.0));
+                let edit = ui.add_sized([value_width, ui.spacing().interact_size.y], egui::TextEdit::singleline(&mut draft).id(edit_id).desired_width(0.0));
                 let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let commit = edit.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if cancel || commit {
@@ -112,14 +120,13 @@ impl<T: Numeric> Parameter<'_, T> {
                 } else { ui.data_mut(|d| d.insert_temp(edit_id, draft)); }
             } else {
                 let formatted = if T::INTEGRAL { format!("{value:.0}") } else { egui::emath::format_with_decimals_in_range(value, 0..=3) };
-                if ui.add_sized([48.0, ui.spacing().interact_size.y], egui::Button::new(formatted).truncate())
+                if ui.add_sized([value_width, ui.spacing().interact_size.y], egui::Button::new(formatted).truncate())
                     .help_text("Click to enter an exact value, including scientific notation. Enter or click away to apply; Escape cancels. Invalid values go to Settings → Issue log.")
                     .clicked() {
                     ui.data_mut(|d| d.insert_temp(edit_id, before.to_string()));
                     ui.memory_mut(|m| m.request_focus(edit_id));
                 }
             }
-            ui.label(&self.text);
             bar
         });
         if let Some(reason) = ui.data(|d| d.get_temp::<String>(inner.inner.id.with("error"))) {
@@ -195,7 +202,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut value = 5.0;
         let response = frame(&ctx, &mut value, Default::default());
-        let start = response.rect.min + egui::vec2(32.0, 8.0);
+        let start = ctx.read_response(response.id).unwrap().rect.center();
         let pointer = |pos, pressed, modifiers| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,

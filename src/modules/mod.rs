@@ -449,11 +449,20 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
     if selected.is_some_and(|section| section.title() != title) {
         return;
     }
-    ui.push_id(title, |ui| {
-        ui.strong(title);
-        ui.add_space(6.0);
-        body(ui);
-    });
+    // The toolbar selects the tab; only the groups inside it are collapsible.
+    ui.push_id(title, body);
+}
+
+/// Compact disclosure rows, with state scoped to the pane, module, and section.
+pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::CollapsingHeader::new(title)
+        .default_open(true)
+        .show_background(true)
+        .show_unindented(ui, |ui| {
+            ui.add_space(2.0);
+            body(ui);
+            ui.add_space(4.0);
+        });
 }
 
 fn label(painter: &egui::Painter, position: Pos2, text: impl ToString, color: Color32) {
@@ -661,11 +670,7 @@ mod tests {
 
     #[test]
     fn module_controls_fit_the_compact_sidebar_and_reset_is_always_available() {
-        for kind in [
-            ModuleKind::Spectrum,
-            ModuleKind::Waveform,
-            ModuleKind::Spectrogram,
-        ] {
+        for kind in ModuleKind::ALL {
             let context = egui::Context::default();
             let mut pane = ModulePane::new(kind);
             for &section in pane.sections() {
@@ -696,8 +701,78 @@ mod tests {
                 );
                 output.textures_delta.clear();
                 assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Reset module settings")));
+                let tab_title_count = output.shapes.iter().filter(|shape| matches!(
+                    &shape.shape, egui::Shape::Text(text) if text.galley.job.text == section.title()
+                )).count();
+                // Amplitude is also a numeric field label. No tab gets an
+                // additional heading that could collapse all of its groups.
+                assert_eq!(
+                    tab_title_count,
+                    usize::from(section == SettingsSection::Amplitude),
+                    "{kind:?}/{section:?} must show its groups directly",
+                );
             }
         }
+    }
+
+    #[test]
+    fn property_groups_remember_collapsed_state_without_affecting_other_panes() {
+        let context = egui::Context::default();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            context.style_mut_of(theme, |style| style.animation_time = 0.0);
+        }
+        let mut pane = ModulePane::new(ModuleKind::Waterfall);
+        let render = |pane: &mut ModulePane, pane_index, events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.push_id(pane_index, |ui| {
+                        pane.controls(ui, &AnalysisFrame::default())
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let text_rect = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+        };
+        let output = render(&mut pane, 0, vec![]);
+        assert!(text_rect(&output, "Geometry").is_none());
+        let header = text_rect(&output, "Dimensions").unwrap().center();
+        assert!(text_rect(&output, "Length X").is_some());
+        for pressed in [true, false] {
+            render(
+                &mut pane,
+                0,
+                vec![
+                    egui::Event::PointerMoved(header),
+                    egui::Event::PointerButton {
+                        pos: header,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let output = render(&mut pane, 0, vec![]);
+        assert!(text_rect(&output, "Length X").is_none());
+        assert!(text_rect(&output, "History s").is_some());
+        assert!(text_rect(&output, "Reset module settings").is_some());
+        pane.select_section(SettingsSection::Frequency);
+        render(&mut pane, 0, vec![]);
+        pane.select_section(SettingsSection::Geometry);
+        assert!(text_rect(&render(&mut pane, 0, vec![]), "Length X").is_none());
+        assert!(text_rect(&render(&mut pane, 1, vec![]), "Length X").is_some());
     }
 
     #[test]
@@ -723,7 +798,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let labels = render(&mut pane);
-        assert!(labels.iter().any(|label| label == "Camera"));
+        assert!(labels.iter().any(|label| label == "View presets"));
+        assert!(!labels.iter().any(|label| label == "Camera"));
         assert!(!labels.iter().any(|label| label == "History s"));
         pane.select_section(SettingsSection::Geometry);
         let labels = render(&mut pane);

@@ -378,16 +378,17 @@ impl Waterfall {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Camera", |ui| {
-            let (area, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 128.0), Sense::hover());
-            self.orientation_gizmo(
-                ui,
-                Rect::from_center_size(area.center(), Vec2::splat(128.0)),
-                false,
-            );
-            ui.small("X frequency · Y time · Z level");
-            ui.small("Orthographic views");
-            egui::Grid::new("camera-presets").num_columns(3).show(ui, |ui| {
+            super::settings_group(ui, "View presets", |ui| {
+                let (area, _) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 128.0), Sense::hover());
+                self.orientation_gizmo(
+                    ui,
+                    Rect::from_center_size(area.center(), Vec2::splat(128.0)),
+                    false,
+                );
+                ui.small("X frequency · Y time · Z level");
+                ui.small("Orthographic views");
+                egui::Grid::new("camera-presets").num_columns(3).show(ui, |ui| {
                 for (i, (name, axis, positive)) in [
                     ("Front", Axis::Y, false), ("Right", Axis::X, true), ("Top", Axis::Z, true),
                     ("Back", Axis::Y, true), ("Left", Axis::X, false), ("Bottom", Axis::Z, false),
@@ -400,7 +401,7 @@ impl Waterfall {
                     if i % 3 == 2 { ui.end_row(); }
                 }
             });
-            egui::ComboBox::from_id_salt("isometric-views")
+                egui::ComboBox::from_id_salt("isometric-views")
                 .selected_text("Snap isometric…").width(190.0).show_ui(ui, |ui| {
                     for above in [true, false] {
                         ui.strong(if above { "From above" } else { "From below" });
@@ -416,8 +417,9 @@ impl Waterfall {
                         }
                     }
                 }).response.help_text("Choose one of eight isometric corner views, above or below the waterfall.");
-            ui.separator();
-            egui::Grid::new("camera-angles")
+            });
+            super::settings_group(ui, "Transform", |ui| {
+                egui::Grid::new("camera-angles")
                 .num_columns(2)
                 .show(ui, |ui| {
                     for (label, angle) in [
@@ -440,11 +442,11 @@ impl Waterfall {
                         ui.end_row();
                     }
                 });
-            if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).logarithmic(true).text("Zoom"))
+                if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).logarithmic(true).text("Zoom"))
                 .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
                 self.auto_orbit = false;
             }
-            ui.horizontal(|ui| {
+                ui.horizontal(|ui| {
                 if ui
                     .small_button("Center view")
                     .help_text("Reset pan; keep rotation and zoom")
@@ -457,35 +459,37 @@ impl Waterfall {
                     self.reset_camera();
                 }
             });
-            ui.separator();
-            ui.strong("Auto-orbit");
-            ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
-            ui.add_enabled_ui(self.auto_orbit, |ui| {
+            });
+            super::settings_group(ui, "Auto-orbit", |ui| {
+                ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
+                ui.add_enabled_ui(self.auto_orbit, |ui| {
                 ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 1.0..=30.0, 10.0).bounds(0.0..=360.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
             });
+            });
         });
         settings_panel(ui, "Geometry", |ui| {
-            ui.strong("Dimensions");
-            ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length X"))
+            super::settings_group(ui, "Dimensions", |ui| {
+                ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length X"))
                 .help_text("Stretch or compress the frequency axis visually. 1 is the default size; frequency range and audio are unchanged.");
-            ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length Y"))
+                ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length Y"))
                 .help_text("Stretch or compress the time axis visually. 1 is the default size; history duration and audio are unchanged.");
-            ui.add(
-                crate::parameter::Parameter::new(&mut self.height, 0.0..=MAX_HEIGHT, 0.85)
-                    .bounds(0.0..=10.0)
-                    .text("Height"),
-            )
-            .help_text("Scale signal peaks vertically above the fixed floor grid.");
-            ui.separator();
-            ui.strong("Time & detail");
-            ui.add(
+                ui.add(
+                    crate::parameter::Parameter::new(&mut self.height, 0.0..=MAX_HEIGHT, 0.85)
+                        .bounds(0.0..=10.0)
+                        .text("Height"),
+                )
+                .help_text("Scale signal peaks vertically above the fixed floor grid.");
+            });
+            super::settings_group(ui, "Time & detail", |ui| {
+                ui.add(
                 crate::parameter::Parameter::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS, DEFAULT_HISTORY_SECONDS)
                     .logarithmic(true)
                     .text("History s"),
             ).help_text("How many seconds of recent audio are displayed. Does not change the waterfall's physical length.");
-            ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).bounds(8.0..=256.0).text("Time slices"))
+                ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).bounds(8.0..=256.0).text("Time slices"))
                 .help_text("Number of displayed time slices. More slices add detail and rendering work; history duration is unchanged.");
+            });
         });
         settings_panel(ui, "Frequency Range", |ui| {
             self.history.data.settings.range_controls(ui)
@@ -495,8 +499,7 @@ impl Waterfall {
         });
         settings_panel(ui, "Appearance", |ui| {
             ui.spacing_mut().slider_width = 60.0;
-            ui.group(|ui| {
-                ui.strong("Render style");
+            super::settings_group(ui, "Render style", |ui| {
                 render_style_picker(ui, &mut self.mode);
                 ui.add_space(4.0);
                 match self.mode {
@@ -505,43 +508,90 @@ impl Waterfall {
                         ui.checkbox(&mut self.surface_walls, "Base walls").help_text("Close the terrain's perimeter down to the fixed floor. Turn off for a floating sheet.");
                     }
                     RenderMode::Lines => {
-                        ui.push_id("x-line-width", |ui| width_control(ui, &mut self.line_width, 1.1));
-                        spacing_control(ui, &mut self.line_spacing, 1, "Trace spacing", "Display every Nth time slice. Does not change history duration or audio sampling.");
+                        ui.push_id("x-line-width", |ui| {
+                            width_control(ui, &mut self.line_width, 1.1)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.line_spacing,
+                            1,
+                            "Trace spacing",
+                            "Display every Nth time slice. Does not change history duration or audio sampling.",
+                        );
                     }
                     RenderMode::YLines => {
-                        ui.push_id("y-line-width", |ui| width_control(ui, &mut self.y_line_width, 1.1));
-                        spacing_control(ui, &mut self.y_line_spacing, 1, "Band spacing", "Display every Nth frequency trace. Does not change FFT resolution.");
+                        ui.push_id("y-line-width", |ui| {
+                            width_control(ui, &mut self.y_line_width, 1.1)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.y_line_spacing,
+                            1,
+                            "Band spacing",
+                            "Display every Nth frequency trace. Does not change FFT resolution.",
+                        );
                     }
                     RenderMode::Wireframe => {
-                        ui.push_id("wire-width", |ui| width_control(ui, &mut self.wire_width, 1.1));
-                        spacing_control(ui, &mut self.wire_spacing, 1, "Mesh spacing", "Display every Nth frequency and time grid line; keeps the outer edges.");
+                        ui.push_id("wire-width", |ui| {
+                            width_control(ui, &mut self.wire_width, 1.1)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.wire_spacing,
+                            1,
+                            "Mesh spacing",
+                            "Display every Nth frequency and time grid line; keeps the outer edges.",
+                        );
                     }
                     RenderMode::Dots => {
-                        ui.add(crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=12.0, 3.2).bounds(0.1..=40.0).text("Dot size px")).help_text("Screen-space diameter of each dot, independent of camera zoom.");
-                        spacing_control(ui, &mut self.dot_spacing, 1, "Point spacing", "Display every Nth band and time slice for a more open point cloud.");
+                        ui.add(
+                            crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=12.0, 3.2)
+                                .bounds(0.1..=40.0)
+                                .text("Dot size px"),
+                        )
+                        .help_text(
+                            "Screen-space diameter of each dot, independent of camera zoom.",
+                        );
+                        spacing_control(
+                            ui,
+                            &mut self.dot_spacing,
+                            1,
+                            "Point spacing",
+                            "Display every Nth band and time slice for a more open point cloud.",
+                        );
                     }
                     RenderMode::Stems => {
-                        ui.push_id("stem-width", |ui| width_control(ui, &mut self.stem_width, 1.2));
-                        spacing_control(ui, &mut self.stem_spacing, 4, "Stem spacing", "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.");
+                        ui.push_id("stem-width", |ui| {
+                            width_control(ui, &mut self.stem_width, 1.2)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.stem_spacing,
+                            4,
+                            "Stem spacing",
+                            "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.",
+                        );
                     }
                     RenderMode::Bars => {
                         ui.add(crate::parameter::Parameter::new(&mut self.bar_width, 10.0..=100.0, 75.0).bounds(1.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
                         ui.add(crate::parameter::Parameter::new(&mut self.bar_depth, 10.0..=100.0, 65.0).bounds(1.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
                         ui.add(crate::parameter::Parameter::new(&mut self.bar_bands, 1..=12, 4).text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
-                        spacing_control(ui, &mut self.bar_time_step, 3, "Time spacing", "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.");
+                        spacing_control(
+                            ui,
+                            &mut self.bar_time_step,
+                            3,
+                            "Time spacing",
+                            "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.",
+                        );
                     }
                 }
             });
-            ui.add_space(6.0);
-            ui.group(|ui| {
-                ui.strong("Color & level");
+            super::settings_group(ui, "Color & level", |ui| {
                 self.palette.controls(ui);
                 self.palette.contrast_controls(ui, &mut self.contrast);
                 self.history.data.settings.level_controls(ui);
             });
-            ui.add_space(6.0);
-            ui.group(|ui| {
-                ui.strong("Viewport guides");
+            super::settings_group(ui, "Viewport guides", |ui| {
                 ui.checkbox(&mut self.guides, "Show guides").help_text("Master switch: hide floor and surface grids, all axes and labels, navigation hints, and the viewport gizmo. Your individual guide settings are remembered.");
                 ui.add_enabled_ui(self.guides, |ui| {
                     ui.checkbox(&mut self.floor_grid, "Floor grid").help_text("Reference grid beneath the waterfall.");
