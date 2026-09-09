@@ -47,10 +47,10 @@ automatically or overrides an explicit session choice. No system default device
 is changed; selection only targets the analyzer's capture stream. The navbar's
 compact top-right selector preserves full device names in its dropdown/Info View.
 
-Each dashboard pane owns independent waterfall, spectrum, waveform, and
-spectrogram state in `src/modules/`. Selecting a pane directs the compact
-sidebar to its active module. Pane assignment and sizing live in the UI;
-capture and analysis remain independent of layout and rendering.
+Each dashboard pane owns independent waterfall, spectrum, waveform,
+spectrogram, and stereometer state in `src/modules/`. Selecting a pane directs
+the compact sidebar to its active module. Pane assignment and sizing live in
+the UI; capture and analysis remain independent of layout and rendering.
 
 Per-pane freeze holds a cloned analysis snapshot and a fixed virtual timestamp.
 Resume accumulates the paused duration into that pane's clock offset, so old
@@ -58,6 +58,12 @@ history does not expire while paused or jump forward on resume. Other panes and
 capture are unaffected; skipped wall-clock time is intentionally not recorded
 in the paused pane. Capture/module resets discard freeze state and clock offset.
 Module-settings resets retain capture/history and global waveform channel state.
+The stereometer consumes the same full-rate half-second stereo snapshot as the
+waveform. Its visible-window-only filters split samples at 200 Hz and 2 kHz for
+RGB balance, overlaid band plots, and phase correlation; they never run in the
+capture callback or change shared FFT analysis. Linear mode maps full-scale
+Left/Right samples one-to-one into rotated Mid/Side space, Scaled mode expands
+quiet radii inside the same diamond, and Lissajous plots unrotated channels.
 Spectrogram raster caching keys on retained rows, pixel-scale time movement,
 display processing, palette, and theme; paused or empty views do not repeatedly
 rebuild/upload the same texture. Display resolution never changes analysis rate.
