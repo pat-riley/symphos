@@ -43,7 +43,7 @@ and visual parameter mapping are still on the roadmap.
   Review before sharing; no automatic uploads.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
 - Four resizable panes with interchangeable waterfall, spectrum, waveform,
-  spectrogram, and stereometer modules
+  spectrogram, stereometer, and oscilloscope modules
 - A live 3D waterfall with Surface, Lines, Y Lines, Wireframe, Dots, Stems, and Bars render styles,
   fully hideable guides, rotation, zoom, and 0.1–30 second history (2 seconds by default)
 - Independent waterfall X/Y lengths (0.25×–10×, default 1× each) without changing frequency range or history duration
@@ -163,7 +163,8 @@ spectrogram retains its Time & History tab. One section is visible at a time; th
 and scroll position are remembered separately for each pane/module/tab during the session. Waveform
 has Channels, Time Window, Amplitude, and Appearance tabs; its channel layout is
 independent for every pane. Stereometer has Display, Appearance, and Correlation
-tabs.
+tabs. Oscilloscope has Channels, Synchronization, Time Window, Amplitude, and
+Appearance tabs.
 
 Each pane has a **pause/resume** icon beside expand/restore. Pausing freezes that
 pane's captured frame and history clock while capture and other panes continue.
@@ -205,6 +206,15 @@ history and leaving global settings and other panes alone.
   labels, and the Left/Right RMS balance indicator are independent per pane.
   The display-only crossovers are 200 Hz and 2 kHz and do not alter capture or
   shared FFT analysis.
+- **Oscilloscope:** A short, stabilized view for examining the repeating shape
+  of Left, Right, Mid, or Side. Follow pitch estimates a local 30 Hz–2 kHz
+  period and supports one or multiple detected cycles; Threshold trigger aligns
+  a manual timebase to a selected level and slope; Free run shows the newest
+  manual window. Auto/manual amplitude, static or frequency-balanced RGB color,
+  separate low/mid/high overlays, configurable afterglow, centerline, grid, and
+  status labels are independent per pane. Pitch detection and band splitting
+  consume only the existing full-rate sample snapshot and do not alter capture
+  or shared FFT analysis.
 
 The bottom bar keeps **FFT** and **Rate** visible. The overlapping-circles icon
 switches the footer meters between separate **L/R stereo** and a **single mixed

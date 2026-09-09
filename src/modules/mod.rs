@@ -19,6 +19,7 @@ macro_rules! module_settings {
 
 mod camera_gizmo;
 mod frequency;
+mod oscilloscope;
 mod spectrogram;
 mod spectrum;
 mod stereometer;
@@ -32,6 +33,7 @@ use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 use crate::help::HoverHelp;
 use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
+use oscilloscope::Oscilloscope;
 use spectrogram::Spectrogram;
 use spectrum::Spectrum;
 use stereometer::Stereometer;
@@ -51,15 +53,17 @@ pub enum ModuleKind {
     Waveform,
     Spectrogram,
     Stereometer,
+    Oscilloscope,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
         Self::Spectrogram,
         Self::Stereometer,
+        Self::Oscilloscope,
     ];
 
     pub fn label(self) -> &'static str {
@@ -69,6 +73,7 @@ impl ModuleKind {
             Self::Waveform => "Waveform",
             Self::Spectrogram => "Spectrogram",
             Self::Stereometer => "Stereometer",
+            Self::Oscilloscope => "Oscilloscope",
         }
     }
 
@@ -89,6 +94,9 @@ impl ModuleKind {
             Self::Stereometer => {
                 "Stereo width, balance, and phase correlation. The vectorscope plots the relationship between the left and right channels."
             }
+            Self::Oscilloscope => {
+                "A short, stabilized amplitude view for inspecting the repeating cycle, symmetry, and shape of a sound."
+            }
         }
     }
 }
@@ -100,7 +108,8 @@ pub struct ModulePane {
     waveform: Waveform,
     spectrogram: Spectrogram,
     stereometer: Stereometer,
-    active_sections: [usize; 5],
+    oscilloscope: Oscilloscope,
+    active_sections: [usize; 6],
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
     pub last_capture: u64,
@@ -113,6 +122,7 @@ pub enum ModuleSettings {
     Waveform(waveform::WaveformSettings),
     Spectrogram(spectrogram::SpectrogramSettings),
     Stereometer(stereometer::StereometerSettings),
+    Oscilloscope(oscilloscope::OscilloscopeSettings),
 }
 
 impl ModuleSettings {
@@ -123,6 +133,7 @@ impl ModuleSettings {
             Self::Waveform(_) => ModuleKind::Waveform,
             Self::Spectrogram(_) => ModuleKind::Spectrogram,
             Self::Stereometer(_) => ModuleKind::Stereometer,
+            Self::Oscilloscope(_) => ModuleKind::Oscilloscope,
         }
     }
 }
@@ -146,6 +157,7 @@ pub enum SettingsSection {
     Amplitude,
     Display,
     Correlation,
+    Sync,
 }
 
 impl SettingsSection {
@@ -162,6 +174,7 @@ impl SettingsSection {
             Self::Amplitude => "Amplitude",
             Self::Display => "Display",
             Self::Correlation => "Correlation",
+            Self::Sync => "Synchronization",
         }
     }
     pub fn icon(self) -> Icon {
@@ -176,6 +189,7 @@ impl SettingsSection {
             Self::Amplitude => Icon::Waveform,
             Self::Display => Icon::Geometry,
             Self::Correlation => Icon::Stereo,
+            Self::Sync => Icon::Response,
         }
     }
 }
@@ -192,6 +206,9 @@ impl ModulePane {
             ModuleKind::Stereometer => {
                 ModuleSettings::Stereometer(self.stereometer.settings_snapshot())
             }
+            ModuleKind::Oscilloscope => {
+                ModuleSettings::Oscilloscope(self.oscilloscope.settings_snapshot())
+            }
         }
     }
 
@@ -205,6 +222,7 @@ impl ModulePane {
             ModuleSettings::Waveform(settings) => self.waveform.apply_settings(settings),
             ModuleSettings::Spectrogram(settings) => self.spectrogram.apply_settings(settings),
             ModuleSettings::Stereometer(settings) => self.stereometer.apply_settings(settings),
+            ModuleSettings::Oscilloscope(settings) => self.oscilloscope.apply_settings(settings),
         }
         true
     }
@@ -217,7 +235,8 @@ impl ModulePane {
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
             stereometer: Stereometer::default(),
-            active_sections: [0; 5],
+            oscilloscope: Oscilloscope::default(),
+            active_sections: [0; 6],
             frozen: None,
             paused_duration: Duration::ZERO,
             last_capture: 0,
@@ -233,6 +252,7 @@ impl ModulePane {
         self.waveform.clear();
         self.spectrogram.clear();
         self.stereometer.clear();
+        self.oscilloscope.clear();
     }
 
     pub fn is_frozen(&self) -> bool {
@@ -261,6 +281,7 @@ impl ModulePane {
             ModuleKind::Waveform => self.waveform.reset_settings(),
             ModuleKind::Spectrogram => self.spectrogram.reset_settings(),
             ModuleKind::Stereometer => self.stereometer.reset_settings(),
+            ModuleKind::Oscilloscope => self.oscilloscope.reset_settings(),
         }
     }
 
@@ -276,6 +297,7 @@ impl ModulePane {
                 ModuleKind::Waveform => self.waveform.controls(ui),
                 ModuleKind::Spectrogram => self.spectrogram.controls(ui),
                 ModuleKind::Stereometer => self.stereometer.controls(ui),
+                ModuleKind::Oscilloscope => self.oscilloscope.controls(ui),
             }
             ui.add_space(12.0);
             ui.separator();
@@ -296,6 +318,7 @@ impl ModulePane {
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
             ModuleKind::Waveform => &[Channels, TimeWindow, Amplitude, Appearance],
             ModuleKind::Stereometer => &[Display, Appearance, Correlation],
+            ModuleKind::Oscilloscope => &[Channels, Sync, TimeWindow, Amplitude, Appearance],
         }
     }
 
@@ -368,6 +391,7 @@ impl ModulePane {
                 },
             ),
             ModuleKind::Stereometer => self.stereometer.draw(ui, rect, frame, theme, live),
+            ModuleKind::Oscilloscope => self.oscilloscope.draw(ui, rect, frame, theme, live),
         }
         if self.frozen.is_some() {
             ui.painter().text(
