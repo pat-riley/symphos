@@ -102,8 +102,8 @@ These are axis references, not detected notes or key detection. Both controls al
 work independently in the spectrum and spectrogram.
 Height stretches the surface above its fixed floor.
 The icon rail and settings share one continuous sidebar surface, without a gap
-or separate rounded panels. The chevron collapses or opens settings.
-The rail stays visible when collapsed; clicking a tab opens its section.
+or separate rounded panels. The header X or active tab closes settings.
+The rail stays visible when closed; clicking a tab reopens its section.
 Under **Geometry → Time & detail**, **History s** sets the waterfall's displayed time window.
 Under **Geometry**, **Length X** stretches the frequency axis and **Length Y**
 stretches the time axis independently. Both default to 1× with a 0.25×–10× range.
@@ -235,8 +235,23 @@ To build and add Symphos to the Omarchy application menu for the current user:
 ./scripts/install-dev.sh
 ```
 
-This installs the binary and desktop metadata under `~/.local`. Remove that
-installation with:
+This checks formatting, runs lint and tests, builds the locked release, and
+installs the verified binary and desktop metadata under `~/.local`. Run this
+command after local UI changes to update the launcher, then close and reopen
+Symphos. A running instance does not update itself.
+
+Settings (the gear menu) shows the app version and a source build identifier,
+with a **Copy build info** button. The identifier includes uncommitted source
+changes, so it distinguishes local builds even before a commit. Compare it with
+`symphos --version` when reporting issues or checking what the launcher runs.
+
+The module inspector has a compact title and close X. Click the active tab to
+close it, or another tab to open that section; an accent strip marks the active
+tab. Drag the inspector's right edge to resize, or double-click the edge to
+restore its compact width. Section, width, and per-tab scroll position are
+remembered during the session, not saved as a workspace.
+
+Remove the installation with:
 
 ```sh
 ./scripts/uninstall-dev.sh

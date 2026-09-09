@@ -13,6 +13,7 @@ use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::AppTheme;
 
 const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
 
 pub struct SymphosApp {
     engine: AudioEngine,
@@ -32,6 +33,7 @@ pub struct SymphosApp {
     panes: [ModulePane; 4],
     selected_pane: usize,
     sidebar_open: bool,
+    sidebar_width: f32,
     help_open: bool,
     global_bar: GlobalBar,
     focused_pane: Option<usize>,
@@ -68,6 +70,7 @@ impl SymphosApp {
             ],
             selected_pane: 0,
             sidebar_open: true,
+            sidebar_width: DEFAULT_SETTINGS_WIDTH,
             help_open: false,
             global_bar: GlobalBar::default(),
             focused_pane: None,
@@ -165,29 +168,11 @@ impl SymphosApp {
             .insert(egui::TextStyle::Button, FontId::proportional(13.0));
         ui.spacing_mut().button_padding = Vec2::new(7.0, 4.0);
         ui.spacing_mut().interact_size.y = 24.0;
-        ui.label(
-            RichText::new("MODULE SETTINGS")
-                .small()
-                .color(self.theme.muted),
-        );
-        ui.label(RichText::new(self.panes[self.selected_pane].kind.label()).strong());
-        ui.label(
-            RichText::new(format!(
-                "Pane {} · click a pane to select",
-                self.selected_pane + 1
-            ))
-            .small()
-            .color(self.theme.muted),
-        );
+        if settings_header(ui, self.panes[self.selected_pane].kind).clicked() {
+            self.sidebar_open = false;
+        }
         ui.separator();
-        egui::ScrollArea::vertical()
-            .id_salt((
-                "module-settings",
-                self.selected_pane,
-                self.panes[self.selected_pane].kind.label(),
-                self.panes[self.selected_pane].active_section().title(),
-            ))
-            .auto_shrink([false, false])
+        settings_scroll_area(self.selected_pane, &self.panes[self.selected_pane])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
@@ -501,6 +486,8 @@ impl eframe::App for SymphosApp {
                         ui.close();
                     }
                     ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics").help_text("Open raw FFT bins and detailed audio-analysis statistics.");
+                    ui.separator();
+                    build_details(ui);
                 });
             });
         });
@@ -562,7 +549,12 @@ impl eframe::App for SymphosApp {
             Pos2::new(rect.left() + 12.0, rect.top() + 56.0),
             Pos2::new(rect.right() - 12.0, rect.bottom() - 50.0),
         );
-        let initial_layout = workspace_layout(content, self.sidebar_open, self.help_open);
+        let initial_layout = workspace_layout(
+            content,
+            self.sidebar_open,
+            self.help_open,
+            self.sidebar_width,
+        );
         let sidebar_background = ui.painter().add(egui::Shape::Noop);
         settings_rail(
             ui,
@@ -570,7 +562,19 @@ impl eframe::App for SymphosApp {
             &mut self.panes[self.selected_pane],
             &mut self.sidebar_open,
         );
-        let layout = workspace_layout(content, self.sidebar_open, self.help_open);
+        resize_settings(
+            ui,
+            content,
+            self.sidebar_open,
+            self.help_open,
+            &mut self.sidebar_width,
+        );
+        let layout = workspace_layout(
+            content,
+            self.sidebar_open,
+            self.help_open,
+            self.sidebar_width,
+        );
         let settings_rect = layout
             .sidebar
             .map_or(layout.rail, |sidebar| layout.rail.union(sidebar));
@@ -630,6 +634,52 @@ impl eframe::App for SymphosApp {
     }
 }
 
+fn settings_header(ui: &mut egui::Ui, kind: ModuleKind) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let response = icons::sized_button(
+                ui,
+                Icon::Close,
+                false,
+                24.0,
+                "Close module settings. Click any tab icon to reopen them.",
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close module settings")
+            });
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(kind.label()).strong()).truncate());
+            });
+            response
+        })
+        .inner
+    })
+    .inner
+}
+
+fn settings_scroll_area(pane_index: usize, pane: &ModulePane) -> egui::ScrollArea {
+    // Stable per-pane/module/tab identity keeps scroll positions when the panel
+    // is closed, resized, or switched to another tab. This is session state only.
+    egui::ScrollArea::vertical()
+        .id_salt((
+            "module-settings",
+            pane_index,
+            pane.kind.label(),
+            pane.active_section().title(),
+        ))
+        .auto_shrink([false, false])
+}
+
+fn build_details(ui: &mut egui::Ui) {
+    ui.small(format!("Symphos {}", env!("CARGO_PKG_VERSION")));
+    ui.small(format!("Build {}", env!("SYMPHOS_BUILD_ID")));
+    if ui.small_button("Copy build info")
+        .help_text("Copy the version and source build identifier for issue reports or checking the installed app.")
+        .clicked() {
+        ui.ctx().copy_text(format!("Symphos {} · build {} · {}/{}", env!("CARGO_PKG_VERSION"), env!("SYMPHOS_BUILD_ID"), std::env::consts::OS, std::env::consts::ARCH));
+    }
+}
+
 fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mut bool) {
     let mut rail = ui.new_child(
         egui::UiBuilder::new()
@@ -640,38 +690,32 @@ fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mu
     rail.spacing_mut().item_spacing.y = 5.0;
     rail.spacing_mut().button_padding = Vec2::ZERO;
     rail.spacing_mut().interact_size = Vec2::splat(30.0);
+    let accent = rail.visuals().selection.bg_fill;
+    rail.visuals_mut().selection.bg_fill = accent.gamma_multiply(0.18);
     rail.vertical(|ui| {
-        if icons::button(
-            ui,
-            if *open { Icon::Collapse } else { Icon::Expand },
-            false,
-            if *open {
-                "Collapse module settings. The tab icons remain available."
-            } else {
-                "Expand module settings for the selected tab."
-            },
-        )
-        .clicked()
-        {
-            *open = !*open;
-        }
-        ui.separator();
         for &section in pane.sections() {
             ui.push_id(section.title(), |ui| {
-                if icons::button(
+                let active = *open && pane.active_section() == section;
+                let response = icons::button(
                     ui,
                     section.icon(),
-                    pane.active_section() == section,
+                    active,
                     &format!(
-                        "{} · {} settings. Click to open this tab.",
+                        "{} · {} settings. Click to open this tab; click the active tab again to close it.",
                         section.title(),
                         pane.kind.label()
                     ),
-                )
-                .clicked()
-                {
+                );
+                if active {
+                    ui.painter().rect_filled(
+                        Rect::from_min_max(response.rect.left_top() + Vec2::new(0.0, 5.0), response.rect.left_bottom() + Vec2::new(2.0, -5.0)),
+                        1.0,
+                        accent,
+                    );
+                }
+                if response.clicked() {
                     pane.select_section(section);
-                    *open = true;
+                    *open = !active;
                 }
             });
         }
@@ -751,18 +795,62 @@ fn default_output_source<'a>(
         .filter(|source| Some(source.node_name.as_str()) != selected_node)
 }
 
-fn workspace_layout(content: Rect, sidebar_open: bool, help_open: bool) -> WorkspaceLayout {
+fn settings_width(content: Rect, requested: f32) -> f32 {
+    // Preserve enough space for useful plots even at the minimum window size.
+    let maximum = (content.width() - 36.0 - 10.0 - 540.0).clamp(DEFAULT_SETTINGS_WIDTH, 440.0);
+    requested.clamp(DEFAULT_SETTINGS_WIDTH, maximum)
+}
+
+fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool, width: &mut f32) {
+    let layout = workspace_layout(content, open, help_open, *width);
+    let Some(sidebar) = layout.sidebar else {
+        return;
+    };
+    let handle = Rect::from_min_max(
+        Pos2::new(sidebar.right() - 3.0, sidebar.top()),
+        Pos2::new(sidebar.right() + 5.0, sidebar.bottom()),
+    );
+    let response = ui
+        .interact(
+            handle,
+            ui.id().with("settings-resize"),
+            Sense::click_and_drag(),
+        )
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .help_text("Drag to resize module settings. Double-click to restore the compact width.");
+    if response.double_clicked() {
+        *width = DEFAULT_SETTINGS_WIDTH;
+    } else if response.dragged()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        *width = settings_width(content, pointer.x - layout.rail.right());
+    }
+    if response.hovered() || response.dragged() {
+        ui.painter().vline(
+            sidebar.right() + 2.0,
+            sidebar.y_range(),
+            Stroke::new(2.0, ui.visuals().selection.bg_fill),
+        );
+    }
+}
+
+fn workspace_layout(
+    content: Rect,
+    sidebar_open: bool,
+    help_open: bool,
+    requested_width: f32,
+) -> WorkspaceLayout {
     const RAIL_WIDTH: f32 = 36.0;
-    const SETTINGS_WIDTH: f32 = 236.0;
+    let settings_width = settings_width(content, requested_width);
     let help = help_open.then(|| {
         Rect::from_min_max(
             Pos2::new(content.left(), content.bottom() - 160.0),
             Pos2::new(
                 content.left()
                     + if sidebar_open {
-                        RAIL_WIDTH + SETTINGS_WIDTH
+                        RAIL_WIDTH + settings_width
                     } else {
-                        SETTINGS_WIDTH
+                        DEFAULT_SETTINGS_WIDTH
                     },
                 content.bottom(),
             ),
@@ -778,7 +866,7 @@ fn workspace_layout(content: Rect, sidebar_open: bool, help_open: bool) -> Works
     let sidebar = sidebar_open.then(|| {
         Rect::from_min_max(
             Pos2::new(rail.right(), content.top()),
-            Pos2::new(rail.right() + SETTINGS_WIDTH, rail.bottom()),
+            Pos2::new(rail.right() + settings_width, rail.bottom()),
         )
     });
     let mut dashboard = content;
@@ -1082,85 +1170,235 @@ mod layout_tests {
     }
 
     #[test]
-    fn sidebar_chevron_collapses_and_icon_tab_reopens_the_requested_section() {
+    fn sidebar_close_button_collapses_and_icon_tabs_reopen_every_module() {
+        for kind in ModuleKind::ALL {
+            let context = egui::Context::default();
+            let mut pane = ModulePane::new(kind);
+            let mut open = true;
+            let render = |pane: &mut ModulePane, open: &mut bool, events| {
+                let mut close_rect = None;
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1000.0, 700.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        settings_rail(
+                            ui,
+                            Rect::from_min_size(Pos2::new(12.0, 56.0), Vec2::new(36.0, 580.0)),
+                            pane,
+                            open,
+                        );
+                        if *open {
+                            let mut sidebar = ui.new_child(
+                                egui::UiBuilder::new().id_salt("test-sidebar").max_rect(
+                                    Rect::from_min_size(
+                                        Pos2::new(58.0, 66.0),
+                                        Vec2::new(216.0, 560.0),
+                                    ),
+                                ),
+                            );
+                            let close = settings_header(&mut sidebar, pane.kind);
+                            close_rect = Some(close.rect);
+                            if close.clicked() {
+                                *open = false;
+                            }
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                (output, close_rect)
+            };
+            let (header, close_rect) = render(&mut pane, &mut open, vec![]);
+            assert!(header.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == kind.label())));
+            assert!(!header.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text.contains("MODULE SETTINGS") || text.galley.job.text.contains("click a pane"))));
+            let close_rect = close_rect.expect("close button in every module settings header");
+            assert_eq!(close_rect.size(), Vec2::splat(24.0));
+            assert!((close_rect.right() - 274.0).abs() < 0.1);
+            assert!((close_rect.top() - 66.0).abs() < 0.1);
+            let close = close_rect.center();
+            for pressed in [true, false] {
+                render(
+                    &mut pane,
+                    &mut open,
+                    vec![
+                        egui::Event::PointerMoved(close),
+                        egui::Event::PointerButton {
+                            pos: close,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert!(!open);
+            let (_, close_rect) = render(&mut pane, &mut open, vec![]);
+            assert!(close_rect.is_none());
+            let sections = pane.sections();
+            for (index, &section) in sections.iter().enumerate() {
+                // Tabs start at the top of the rail, with no separate arrow row.
+                let tab = Pos2::new(30.0, 75.0 + index as f32 * 35.0);
+                for pressed in [true, false] {
+                    render(
+                        &mut pane,
+                        &mut open,
+                        vec![
+                            egui::Event::PointerMoved(tab),
+                            egui::Event::PointerButton {
+                                pos: tab,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                assert!(open);
+                assert_eq!(pane.active_section(), section);
+                let (_, close_rect) = render(&mut pane, &mut open, vec![]);
+                assert!(
+                    close_rect.is_some(),
+                    "close button remains available on every tab"
+                );
+                for pressed in [true, false] {
+                    render(
+                        &mut pane,
+                        &mut open,
+                        vec![
+                            egui::Event::PointerMoved(tab),
+                            egui::Event::PointerButton {
+                                pos: tab,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                assert!(!open, "clicking the active tab closes settings");
+                assert_eq!(
+                    pane.active_section(),
+                    section,
+                    "closing retains the selected tab"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_scroll_positions_survive_closing_switching_and_resizing() {
+        for kind in ModuleKind::ALL {
+            let context = egui::Context::default();
+            let mut pane = ModulePane::new(kind);
+            let render = |pane: &ModulePane, pane_index, open, width| {
+                let mut scroll = None;
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    if open {
+                        let mut sidebar =
+                            ui.new_child(egui::UiBuilder::new().id_salt("sidebar").max_rect(
+                                Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 160.0)),
+                            ));
+                        let result =
+                            settings_scroll_area(pane_index, pane).show(&mut sidebar, |ui| {
+                                ui.allocate_space(Vec2::new(100.0, 1500.0));
+                            });
+                        scroll = Some((result.id, result.state));
+                    }
+                });
+                output.textures_delta.clear();
+                scroll
+            };
+            let first = pane.active_section();
+            let (id, mut state) = render(&pane, 0, true, 216.0).unwrap();
+            state.offset.y = 240.0;
+            state.store(&context, id);
+            assert!(render(&pane, 0, false, 216.0).is_none());
+            pane.select_section(pane.sections()[1]);
+            let (other_id, other_state) = render(&pane, 0, true, 216.0).unwrap();
+            assert_ne!(id, other_id);
+            assert_eq!(other_state.offset.y, 0.0);
+            pane.select_section(first);
+            let (restored_id, restored) = render(&pane, 0, true, 400.0).unwrap();
+            assert_eq!(id, restored_id);
+            assert_eq!(restored.offset.y, 240.0);
+            assert_eq!(
+                render(&pane, 1, true, 400.0).unwrap().1.offset.y,
+                0.0,
+                "another pane keeps its own scroll position"
+            );
+        }
+    }
+
+    #[test]
+    fn inspector_resize_drag_and_double_click_reset() {
         let context = egui::Context::default();
-        let mut pane = ModulePane::new(ModuleKind::Waterfall);
-        let mut open = true;
-        let render = |pane: &mut ModulePane, open: &mut bool, events| {
+        let content = Rect::from_min_size(Pos2::new(12.0, 56.0), Vec2::new(1400.0, 800.0));
+        let mut width = DEFAULT_SETTINGS_WIDTH;
+        let mut time = 0.0;
+        let mut render = |width: &mut f32, events| {
+            time += 0.05;
             let mut output = context.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 940.0))),
+                    time: Some(time),
                     events,
                     ..Default::default()
                 },
-                |ui| {
-                    settings_rail(
-                        ui,
-                        Rect::from_min_size(Pos2::new(12.0, 56.0), Vec2::new(36.0, 580.0)),
-                        pane,
-                        open,
-                    )
-                },
+                |ui| resize_settings(ui, content, true, false, width),
             );
             output.textures_delta.clear();
-            output
         };
-        let output = render(&mut pane, &mut open, vec![]);
-        let chevron = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Path(path) if path.points.len() == 3 => Some(path.points[1]),
-                _ => None,
-            })
-            .expect("collapse chevron");
-        for pressed in [true, false] {
-            render(
-                &mut pane,
-                &mut open,
-                vec![
-                    egui::Event::PointerMoved(chevron),
-                    egui::Event::PointerButton {
-                        pos: chevron,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
+        let pointer = |pos, pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        render(&mut width, vec![]);
+        let start = Pos2::new(48.0 + width, 180.0);
+        render(&mut width, pointer(start, true));
+        let end = Pos2::new(48.0 + 380.0, 180.0);
+        render(&mut width, vec![egui::Event::PointerMoved(end)]);
+        render(&mut width, pointer(end, false));
+        assert_eq!(width, 380.0);
+        for _ in 0..2 {
+            render(&mut width, pointer(end, true));
+            render(&mut width, pointer(end, false));
         }
-        assert!(!open);
-        let output = render(&mut pane, &mut open, vec![]);
-        let geometry = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Path(path) if path.points.len() == 7 => {
-                    Some(path.points[0] + Vec2::new(0.0, 8.0))
+        assert_eq!(width, DEFAULT_SETTINGS_WIDTH);
+    }
+
+    #[test]
+    fn inspector_width_is_bounded_and_keeps_dashboard_usable() {
+        for size in [Vec2::new(1000.0, 594.0), Vec2::new(1416.0, 834.0)] {
+            let content = Rect::from_min_size(Pos2::new(12.0, 56.0), size);
+            for requested in [100.0, DEFAULT_SETTINGS_WIDTH, 360.0, 440.0, 2000.0] {
+                for help_open in [false, true] {
+                    let layout = workspace_layout(content, true, help_open, requested);
+                    let sidebar = layout.sidebar.unwrap();
+                    assert!(sidebar.width() >= DEFAULT_SETTINGS_WIDTH);
+                    assert!(sidebar.width() <= 440.0);
+                    assert!(layout.dashboard.width() >= 540.0);
+                    assert!(!sidebar.intersects(layout.dashboard));
+                    if let Some(help) = layout.help {
+                        assert_eq!(help.right(), sidebar.right());
+                        assert!(!help.intersects(layout.dashboard));
+                    }
                 }
-                _ => None,
-            })
-            .expect("geometry cube icon");
-        for pressed in [true, false] {
-            render(
-                &mut pane,
-                &mut open,
-                vec![
-                    egui::Event::PointerMoved(geometry),
-                    egui::Event::PointerButton {
-                        pos: geometry,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
+            }
         }
-        assert!(open);
-        assert_eq!(
-            pane.active_section(),
-            crate::modules::SettingsSection::Geometry
-        );
     }
 
     #[test]
@@ -1223,7 +1461,8 @@ mod layout_tests {
             );
             for sidebar_open in [false, true] {
                 for help_open in [false, true] {
-                    let layout = workspace_layout(content, sidebar_open, help_open);
+                    let layout =
+                        workspace_layout(content, sidebar_open, help_open, DEFAULT_SETTINGS_WIDTH);
                     assert!(content.contains_rect(layout.dashboard));
                     assert!(layout.dashboard.is_positive());
                     if let Some(help) = layout.help {
