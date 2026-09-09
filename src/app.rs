@@ -554,9 +554,6 @@ impl eframe::App for SymphosApp {
         for pane in &mut self.panes {
             pane.ingest(&captures);
         }
-        for pane in &mut self.panes {
-            pane.set_channel_view(self.global_bar.stereo, self.global_bar.channel);
-        }
         let content = Rect::from_min_max(
             Pos2::new(rect.left() + 12.0, rect.top() + 56.0),
             Pos2::new(rect.right() - 12.0, rect.bottom() - 50.0),

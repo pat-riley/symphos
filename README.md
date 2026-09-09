@@ -20,8 +20,9 @@ and visual parameter mapping are still on the roadmap.
   this is a rolling analyzer buffer, not an audio recording feature.
 - Copy/Paste settings in the module sidebar (Ctrl+Shift+C / Ctrl+Shift+V) applies
   a settings-only snapshot to a matching module. Audio/history, pause state, and
-  global channel choices stay with the destination pane. This is session-only;
-  preset files, saved workspaces, and automatic restoration are not implemented.
+  global FFT and footer-meter choices stay outside the destination pane. This is
+  session-only; preset files, saved workspaces, and automatic restoration are not
+  implemented.
 - **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
   the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;
@@ -50,7 +51,9 @@ and visual parameter mapping are still on the roadmap.
   intensity controls for each frequency module
 - Optional musical-note axis labels and adjustable A4 tuning reference
 - Mode-specific appearance controls, heatmap contrast, eight isometric views, and camera auto-orbit
-- Spectrum peak hold, stereo waveform time/amplitude controls, and color palettes
+- Spectrum peak hold and waveform controls for independent L/R/Mid/Side lanes,
+  scroll or loop motion, speed, static/multi-band/color-map rendering, multi-band
+  peak history, triggering, time/amplitude, and color palettes
 - Module-only settings sidebar with icon tabs that follows the selected pane
 - Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Toggleable bottom-left Info View with hover descriptions instead of popup tooltips
@@ -158,7 +161,8 @@ the default tab and includes history duration, so the waterfall no longer needs
 a separate Time & History tab. Other modules show only relevant tabs; the
 spectrogram retains its Time & History tab. One section is visible at a time; the selected tab
 and scroll position are remembered separately for each pane/module/tab during the session. Waveform
-has Time Window, Amplitude, and Appearance tabs; channel display is a global setting.
+has Channels, Time Window, Amplitude, and Appearance tabs; its channel layout is
+independent for every pane.
 
 Each pane has a **pause/resume** icon beside expand/restore. Pausing freezes that
 pane's captured frame and history clock while capture and other panes continue.
@@ -171,13 +175,18 @@ history and leaving global settings and other panes alone.
   gap, thickness, and opacity controls. Signal Response includes peak hold with
   a timed hold, independent dB/s falloff, indefinite hold, and peak reset. Appearance
   adds palettes, heatmap contrast, and independent grid/axis-label switches.
-- **Waveform:** 1–250 ms windows independent of FFT size, with full-rate capture
-  and peak-preserving display reduction. Optional rising/falling threshold trigger
-  aligns repeating signals (left channel in stereo, selected channel in single
-  view), falling back to the latest window when no crossing exists. Auto scale uses
-  a common, bounded gain for both channels; manual amplitude remains available.
-  Line/Filled area styles have thickness/opacity controls, plus separate centerline,
-  grid, and label switches. Trigger and auto scale default off; window remains 40 ms.
+- **Waveform:** One or two independently selected Left, Right, Mid, or Side lanes.
+  Adjustable 10–500 ms travel spans are independent of FFT size, with full-rate
+  capture and peak-preserving display reduction. Optional rising/falling threshold
+  trigger aligns repeating signals from the first lane, falling back to the latest
+  window when no crossing exists. Scroll mode keeps new audio at the right edge;
+  Loop mode advances a write head over a static trace. Static, low/mid/high
+  multi-band, and level color-map modes are available, with an optional multi-band
+  peak-history overlay. Auto scale uses a common, bounded gain for both lanes;
+  manual amplitude remains available. Line/Filled area styles have
+  thickness/opacity controls, plus separate centerline, grid, and label switches.
+  Trigger, auto scale, peak history, and Loop default off; the travel span defaults
+  to 250 ms.
 - **Spectrogram:** 0.1–30 seconds of visible history (8 seconds by default), newest
   at right or bottom, smooth or pixelated rendering, 64–1024 time cells and 24–96
   frequency cells. Lower frequency display resolution preserves the loudest band
@@ -186,8 +195,8 @@ history and leaving global settings and other panes alone.
   adjustable without clearing history.
 
 The bottom bar keeps **FFT** and **Rate** visible. The overlapping-circles icon
-switches all waveform panes and meters between separate **L/R stereo** and a
-**single mixed view**, without changing frequency analysis or clearing history.
+switches the footer meters between separate **L/R stereo** and a **single mixed
+view**, without changing waveform panes, frequency analysis, or captured history.
 The shared-options icon holds the FFT window, frequency-analysis channel,
 single-view channel (mix/left/right), diagnostics, capture details, and theme info.
 Level bars show RMS with peak markers and peak dBFS readouts. Mixed levels are
@@ -276,7 +285,8 @@ slow visual frame cannot block real-time capture. See
 
 The [project roadmap](docs/roadmap.md) describes the path from the current
 analyzer to editable scenes, audio-to-visual mappings, effects, shaders, and
-Arch packaging.
+Arch packaging. The [analyzer feature backlog](docs/analyzer-feature-backlog.md)
+tracks metering, capture, DAW, workspace, and platform gaps in more detail.
 
 ## Contributing
 
