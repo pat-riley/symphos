@@ -346,6 +346,21 @@ enum TraceStyle {
     Filled,
 }
 
+// Popups otherwise inherit the application's roomier menu defaults. Keep every
+// properties picker consistent and reserve enough height for its complete list.
+fn properties_combo(id: &str, width: f32, rows: usize) -> egui::ComboBox {
+    egui::ComboBox::from_id_salt(id)
+        .width(width)
+        .height(rows as f32 * 26.0)
+        .truncate()
+        .popup_style(egui::style::StyleModifier::new(|style| {
+            style.spacing.item_spacing.y = 2.0;
+            style.spacing.interact_size.y = 24.0;
+            style.spacing.button_padding = egui::vec2(5.0, 2.0);
+            style.override_font_id = Some(FontId::proportional(13.0));
+        }))
+}
+
 impl TraceStyle {
     fn label(self) -> &'static str {
         match self {
@@ -356,9 +371,7 @@ impl TraceStyle {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui, bars: bool) {
-        egui::ComboBox::from_id_salt("trace-style")
-            .width(176.0)
-            .height(110.0)
+        properties_combo("trace-style", 176.0, 3)
             .selected_text(self.label())
             .show_ui(ui, |ui| {
                 for style in [Self::Bars, Self::Line, Self::Filled] {
@@ -449,10 +462,43 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
     if selected.is_some_and(|section| section.title() != title) {
         return;
     }
-    ui.push_id(title, |ui| {
-        ui.strong(title);
-        ui.add_space(6.0);
-        body(ui);
+    // The toolbar selects the tab; only the groups inside it are collapsible.
+    ui.push_id(title, body);
+}
+
+/// Compact disclosure rows, with state scoped to the pane, module, and section.
+pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    ui.separator();
+    ui.scope(|ui| {
+        let widgets = ui.visuals().widgets.clone();
+        let accent = ui.visuals().selection.bg_fill;
+        let visuals = ui.visuals_mut();
+        // egui uses this flag for full-row hit targets as well as painting.
+        // Keep the hit target, but make every header state transparent.
+        visuals.collapsing_header_frame = true;
+        for widget in [
+            &mut visuals.widgets.noninteractive,
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.weak_bg_fill = Color32::TRANSPARENT;
+            widget.bg_stroke = egui::Stroke::NONE;
+        }
+        visuals.widgets.hovered.fg_stroke.color = accent;
+        visuals.widgets.active.fg_stroke.color = accent;
+        egui::CollapsingHeader::new(title)
+            .default_open(true)
+            .show_background(false)
+            .show_unindented(ui, |ui| {
+                // Fields retain their normal recessed backgrounds.
+                ui.visuals_mut().widgets = widgets;
+                ui.visuals_mut().collapsing_header_frame = false;
+                ui.add_space(2.0);
+                body(ui);
+                ui.add_space(4.0);
+            });
     });
 }
 
@@ -661,11 +707,7 @@ mod tests {
 
     #[test]
     fn module_controls_fit_the_compact_sidebar_and_reset_is_always_available() {
-        for kind in [
-            ModuleKind::Spectrum,
-            ModuleKind::Waveform,
-            ModuleKind::Spectrogram,
-        ] {
+        for kind in ModuleKind::ALL {
             let context = egui::Context::default();
             let mut pane = ModulePane::new(kind);
             for &section in pane.sections() {
@@ -696,8 +738,78 @@ mod tests {
                 );
                 output.textures_delta.clear();
                 assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Reset module settings")));
+                let tab_title_count = output.shapes.iter().filter(|shape| matches!(
+                    &shape.shape, egui::Shape::Text(text) if text.galley.job.text == section.title()
+                )).count();
+                // Amplitude is also a numeric field label. No tab gets an
+                // additional heading that could collapse all of its groups.
+                assert_eq!(
+                    tab_title_count,
+                    usize::from(section == SettingsSection::Amplitude),
+                    "{kind:?}/{section:?} must show its groups directly",
+                );
             }
         }
+    }
+
+    #[test]
+    fn property_groups_remember_collapsed_state_without_affecting_other_panes() {
+        let context = egui::Context::default();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            context.style_mut_of(theme, |style| style.animation_time = 0.0);
+        }
+        let mut pane = ModulePane::new(ModuleKind::Waterfall);
+        let render = |pane: &mut ModulePane, pane_index, events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.push_id(pane_index, |ui| {
+                        pane.controls(ui, &AnalysisFrame::default())
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let text_rect = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+        };
+        let output = render(&mut pane, 0, vec![]);
+        assert!(text_rect(&output, "Geometry").is_none());
+        let header = text_rect(&output, "Dimensions").unwrap().center();
+        assert!(text_rect(&output, "Length X").is_some());
+        for pressed in [true, false] {
+            render(
+                &mut pane,
+                0,
+                vec![
+                    egui::Event::PointerMoved(header),
+                    egui::Event::PointerButton {
+                        pos: header,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let output = render(&mut pane, 0, vec![]);
+        assert!(text_rect(&output, "Length X").is_none());
+        assert!(text_rect(&output, "History s").is_some());
+        assert!(text_rect(&output, "Reset module settings").is_some());
+        pane.select_section(SettingsSection::Frequency);
+        render(&mut pane, 0, vec![]);
+        pane.select_section(SettingsSection::Geometry);
+        assert!(text_rect(&render(&mut pane, 0, vec![]), "Length X").is_none());
+        assert!(text_rect(&render(&mut pane, 1, vec![]), "Length X").is_some());
     }
 
     #[test]
@@ -723,7 +835,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let labels = render(&mut pane);
-        assert!(labels.iter().any(|label| label == "Camera"));
+        assert!(labels.iter().any(|label| label == "View presets"));
+        assert!(!labels.iter().any(|label| label == "Camera"));
         assert!(!labels.iter().any(|label| label == "History s"));
         pane.select_section(SettingsSection::Geometry);
         let labels = render(&mut pane);
@@ -871,7 +984,7 @@ impl Palette {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
-        egui::ComboBox::from_id_salt("palette")
+        properties_combo("palette", 176.0, 4)
             .selected_text(self.label())
             .show_ui(ui, |ui| {
                 for value in [Self::Theme, Self::Ember, Self::Ocean, Self::Heatmap] {

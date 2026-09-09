@@ -194,7 +194,7 @@ impl GlobalBar {
                 color,
             );
         }
-        response.help_text(format!("{} levels: RMS bars with peak markers and peak dBFS readouts. Capture: {}. {} dropped samples.",
+        response.help_text_with(|| format!("{} levels: RMS bars with peak markers and peak dBFS readouts. Capture: {}. {} dropped samples.",
             if self.stereo { "Stereo L/R" } else { self.channel.label() }, info.status.label(), info.frame.dropped_samples));
     }
 }

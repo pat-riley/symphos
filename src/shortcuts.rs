@@ -160,7 +160,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
             });
             ui.separator();
             ui.strong("Parameter editing");
-            ui.label("Click number: exact entry · Enter: apply · Escape: cancel\nShift-drag slider: fine adjustment · Double-click slider: reset");
+            ui.label("Click number: exact entry · Enter: apply · Escape: cancel\nDrag field: adjust · Shift-drag: fine adjustment\nDouble-click beside number: reset · Left/right arrows: adjust focused field");
             ui.separator();
             ui.strong("Waterfall camera");
             ui.label("Left-drag: orbit · Right/middle-drag or Shift-left-drag: pan\nScroll: zoom · Double-click viewport: reset camera\nClick axis: align / flip · Drag axis navigator: orbit");

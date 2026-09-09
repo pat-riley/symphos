@@ -158,7 +158,7 @@ impl SymphosApp {
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
-        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
         ui.spacing_mut().slider_width = 90.0;
         ui.style_mut()
             .text_styles
@@ -166,26 +166,35 @@ impl SymphosApp {
         ui.style_mut()
             .text_styles
             .insert(egui::TextStyle::Button, FontId::proportional(13.0));
-        ui.spacing_mut().button_padding = Vec2::new(7.0, 4.0);
-        ui.spacing_mut().interact_size.y = 24.0;
+        ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.spacing_mut().indent = 16.0;
+        let field = if self.theme.dark_mode {
+            mix(self.theme.panel, Color32::BLACK, 0.24)
+        } else {
+            mix(self.theme.panel, self.theme.foreground, 0.07)
+        };
+        let visuals = ui.visuals_mut();
+        visuals.collapsing_header_frame = false;
+        visuals.extreme_bg_color = field;
+        visuals.widgets.inactive.bg_fill = field;
+        visuals.widgets.inactive.weak_bg_fill = field;
+        visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+        visuals.widgets.noninteractive.bg_stroke =
+            Stroke::new(1.0, self.theme.foreground.gamma_multiply(0.10));
+        for widget in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.corner_radius = egui::CornerRadius::same(3);
+        }
         if settings_header(ui, self.panes[self.selected_pane].kind).clicked() {
             self.sidebar_open = false;
         }
-        ui.separator();
         settings_scroll_area(self.selected_pane, &self.panes[self.selected_pane])
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
-                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
-                    }
-                    let compatible = self.settings_clipboard.as_ref().is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
-                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
-                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.").clicked() {
-                        self.paste_module_settings();
-                    }
-                });
-                if let Some(settings) = &self.settings_clipboard { ui.small(format!("Clipboard: {}", settings.kind().label())); }
-                ui.separator();
                 ui.push_id(self.selected_pane, |ui| {
                     ui.data_mut(|d| {
                         d.insert_temp(
@@ -200,6 +209,17 @@ impl SymphosApp {
                     });
                     self.panes[self.selected_pane].controls(ui, frame)
                 });
+                ui.horizontal(|ui| {
+                    if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
+                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
+                    }
+                    let compatible = self.settings_clipboard.as_ref().is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
+                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
+                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.").clicked() {
+                        self.paste_module_settings();
+                    }
+                });
+                if let Some(settings) = &self.settings_clipboard { ui.weak(format!("Clipboard: {}", settings.kind().label())); }
             });
     }
 
@@ -312,15 +332,7 @@ impl SymphosApp {
         child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
         child.horizontal(|ui| {
             let before = self.panes[index].kind;
-            egui::ComboBox::from_id_salt("module-kind")
-                .width((ui.available_width() - 68.0).clamp(45.0, 180.0))
-                .truncate()
-                .selected_text(before.label())
-                .show_ui(ui, |ui| {
-                    for kind in ModuleKind::ALL {
-                        ui.selectable_value(&mut self.panes[index].kind, kind, kind.label()).help_text(kind.description());
-                    }
-                }).response.help_text("Choose which visualization appears in this pane. Each module has its own settings.");
+            module_kind_picker(ui, &mut self.panes[index].kind);
             if before != self.panes[index].kind {
                 self.panes[index].reset();
                 self.selected_pane = index;
@@ -580,9 +592,14 @@ impl eframe::App for SymphosApp {
             .map_or(layout.rail, |sidebar| layout.rail.union(sidebar));
         ui.painter().set(
             sidebar_background,
-            egui::Shape::rect_filled(settings_rect, 7.0, self.theme.panel),
+            egui::Shape::rect_filled(settings_rect, 4.0, self.theme.panel),
         );
         if let Some(sidebar_rect) = layout.sidebar {
+            ui.painter().vline(
+                sidebar_rect.left(),
+                sidebar_rect.y_range(),
+                Stroke::new(1.0, self.theme.foreground.gamma_multiply(0.08)),
+            );
             let mut sidebar = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt("sidebar")
@@ -637,6 +654,10 @@ impl eframe::App for SymphosApp {
 fn settings_header(ui: &mut egui::Ui, kind: ModuleKind) -> egui::Response {
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let accent = ui.visuals().selection.bg_fill;
+            ui.visuals_mut().button_frame = false;
+            ui.visuals_mut().widgets.hovered.fg_stroke.color = accent;
+            ui.visuals_mut().widgets.active.fg_stroke.color = accent;
             let response = icons::sized_button(
                 ui,
                 Icon::Close,
@@ -680,6 +701,30 @@ fn build_details(ui: &mut egui::Ui) {
     }
 }
 
+fn module_kind_picker(ui: &mut egui::Ui, kind: &mut ModuleKind) -> egui::Response {
+    // ComboBox::width is only a minimum. Constrain its parent so long names
+    // truncate before reaching the two 24px action buttons.
+    let width =
+        (ui.available_width() - 48.0 - 2.0 * ui.spacing().item_spacing.x).clamp(45.0, 180.0);
+    ui.scope(|ui| {
+        ui.set_width(width);
+        egui::ComboBox::from_id_salt("module-kind")
+            .width(width)
+            .truncate()
+            .selected_text(kind.label())
+            .show_ui(ui, |ui| {
+                ui.set_min_width(180.0);
+                for value in ModuleKind::ALL {
+                    ui.selectable_value(kind, value, value.label())
+                        .help_text(value.description());
+                }
+            })
+            .response
+    })
+    .inner
+    .help_text("Choose which visualization appears in this pane. Each module has its own settings.")
+}
+
 fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mut bool) {
     let mut rail = ui.new_child(
         egui::UiBuilder::new()
@@ -691,11 +736,16 @@ fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mu
     rail.spacing_mut().button_padding = Vec2::ZERO;
     rail.spacing_mut().interact_size = Vec2::splat(30.0);
     let accent = rail.visuals().selection.bg_fill;
-    rail.visuals_mut().selection.bg_fill = accent.gamma_multiply(0.18);
+    rail.visuals_mut().button_frame = false;
+    rail.visuals_mut().widgets.hovered.fg_stroke.color = accent;
+    rail.visuals_mut().widgets.active.fg_stroke.color = accent;
     rail.vertical(|ui| {
         for &section in pane.sections() {
             ui.push_id(section.title(), |ui| {
                 let active = *open && pane.active_section() == section;
+                if active {
+                    ui.visuals_mut().widgets.inactive.fg_stroke.color = accent;
+                }
                 let response = icons::button(
                     ui,
                     section.icon(),
@@ -706,13 +756,6 @@ fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mu
                         pane.kind.label()
                     ),
                 );
-                if active {
-                    ui.painter().rect_filled(
-                        Rect::from_min_max(response.rect.left_top() + Vec2::new(0.0, 5.0), response.rect.left_bottom() + Vec2::new(2.0, -5.0)),
-                        1.0,
-                        accent,
-                    );
-                }
                 if response.clicked() {
                     pane.select_section(section);
                     *open = !active;
@@ -765,14 +808,14 @@ fn audio_source_picker(
                         let selected = Some(source.node_name.as_str()) == selected_node;
                         let text = format!("{}  {}", source.kind.label(), source.display_name);
                         if ui.add(egui::Button::selectable(selected, text).wrap())
-                            .help_text(format!("Analyze {}: {}. Choosing a different source clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
+                            .help_text_with(|| format!("Analyze {}: {}. Choosing a different source clears the displayed histories.", source.kind.label(), source.display_name)).clicked() {
                             choice = Some(source.clone());
                             ui.close();
                         }
                     });
                 }
             }).response
-    }).inner.help_text(format!("Audio source: {label}. Available devices update automatically. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session."));
+    }).inner.help_text_with(|| format!("Audio source: {label}. Available devices update automatically. Speakers/system output is selected automatically on startup. Choose another output or microphone here; your choice is kept for this session."));
     (response, choice)
 }
 
@@ -1072,6 +1115,31 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn narrow_pane_picker_reserves_space_for_both_action_buttons() {
+        for width in [120.0, 160.0, 240.0, 600.0] {
+            for mut kind in ModuleKind::ALL {
+                let context = egui::Context::default();
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+                    ui.horizontal(|ui| {
+                        let picker = module_kind_picker(ui, &mut kind);
+                        let pause = icons::sized_button(ui, Icon::Pause, false, 24.0, "Pause");
+                        let expand =
+                            icons::sized_button(ui, Icon::Fullscreen, false, 24.0, "Expand");
+                        assert!(picker.rect.right() < pause.rect.left());
+                        assert!(pause.rect.right() < expand.rect.left());
+                        assert!(expand.rect.right() <= ui.max_rect().right() + 0.1);
+                    });
+                    assert!(ui.min_rect().width() <= width + 0.1);
+                });
+                output.textures_delta.clear();
+            }
+        }
+    }
 
     #[test]
     fn source_picker_has_stable_width_wraps_menu_names_and_closes_on_selection() {

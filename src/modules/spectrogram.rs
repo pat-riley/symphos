@@ -98,8 +98,10 @@ impl Spectrogram {
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         settings_panel(ui, "Time & History", |ui| {
-            ui.add(crate::parameter::Parameter::new(&mut self.seconds, 0.1..=30.0, 8.0).logarithmic(true).text("History s"))
+            super::settings_group(ui, "Duration", |ui| {
+                ui.add(crate::parameter::Parameter::new(&mut self.seconds, 0.1..=30.0, 8.0).logarithmic(true).text("History s"))
                 .help_text("Visible history duration. Retains up to 30 seconds so changing the view does not discard recent audio.");
+            });
         });
         settings_panel(ui, "Frequency Range", |ui| {
             self.history.data.settings.range_controls(ui)
@@ -108,31 +110,32 @@ impl Spectrogram {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
-            ui.strong("Layout & detail");
-            egui::ComboBox::from_id_salt("orientation").width(176.0)
+            super::settings_group(ui, "Layout & detail", |ui| {
+                super::properties_combo("orientation", 176.0, 2)
                 .selected_text(if self.vertical { "Newest at bottom" } else { "Newest at right" })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.vertical, false, "Newest at right").help_text("Time runs left to right; frequency runs low to high from bottom to top.");
                     ui.selectable_value(&mut self.vertical, true, "Newest at bottom").help_text("Time runs top to bottom; frequency runs low to high from left to right.");
                 }).response.help_text("Change scrolling orientation without clearing captured history.");
-            ui.checkbox(&mut self.smooth, "Smooth pixels")
+                ui.checkbox(&mut self.smooth, "Smooth pixels")
                 .help_text("Interpolate between display cells. Turn off for sharp, pixelated cells. Does not change FFT or frequency smoothing.");
-            ui.add(crate::parameter::Parameter::new(&mut self.time_pixels, 64..=1024, 240).text("Time cells"))
+                ui.add(crate::parameter::Parameter::new(&mut self.time_pixels, 64..=1024, 240).text("Time cells"))
                 .help_text("Display resolution along time. More cells produce a finer raster, not a higher capture rate; history is sampled up to 30 times per second.");
-            ui.add(crate::parameter::Parameter::new(&mut self.frequency_pixels, 24..=BANDS, BANDS).text("Freq. cells"))
+                ui.add(crate::parameter::Parameter::new(&mut self.frequency_pixels, 24..=BANDS, BANDS).text("Freq. cells"))
                 .help_text("Displayed frequency rows or columns. Fewer cells group bands using their loudest level to preserve peaks. FFT resolution is unchanged.");
-            ui.separator();
-            ui.strong("Color & level");
-            self.palette.controls(ui);
-            self.palette.contrast_controls(ui, &mut self.contrast);
-            self.history.data.settings.level_controls(ui);
-            ui.separator();
-            ui.strong("Guides");
-            ui.checkbox(&mut self.grid, "Grid")
-                .help_text("Overlay time and frequency reference divisions.");
-            ui.checkbox(&mut self.labels, "Axis labels").help_text(
+            });
+            super::settings_group(ui, "Color & level", |ui| {
+                self.palette.controls(ui);
+                self.palette.contrast_controls(ui, &mut self.contrast);
+                self.history.data.settings.level_controls(ui);
+            });
+            super::settings_group(ui, "Guides", |ui| {
+                ui.checkbox(&mut self.grid, "Grid")
+                    .help_text("Overlay time and frequency reference divisions.");
+                ui.checkbox(&mut self.labels, "Axis labels").help_text(
                 "Show frequency and time labels. Note names are available under Frequency Range.",
             );
+            });
         });
     }
 

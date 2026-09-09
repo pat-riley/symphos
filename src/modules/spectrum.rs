@@ -98,13 +98,12 @@ impl Spectrum {
         });
         settings_panel(ui, "Signal Response", |ui| {
             self.data.settings.response_controls(ui);
-            ui.separator();
-            ui.strong("Peak markers");
-            if ui.checkbox(&mut self.peak_hold, "Peak hold")
+            super::settings_group(ui, "Peak markers", |ui| {
+                if ui.checkbox(&mut self.peak_hold, "Peak hold")
                 .help_text("Track recent maxima above the live trace. Starts a fresh measurement when enabled.").changed() {
                 self.reset_peaks();
             }
-            ui.add_enabled_ui(self.peak_hold, |ui| {
+                ui.add_enabled_ui(self.peak_hold, |ui| {
                 ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
                     .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
                 ui.add_enabled_ui(!self.infinite_hold, |ui| {
@@ -117,44 +116,48 @@ impl Spectrum {
                     self.reset_peaks();
                 }
             });
+            });
         });
         settings_panel(ui, "Appearance", |ui| {
-            ui.strong("Trace");
-            self.style.controls(ui, true);
-            if self.style == TraceStyle::Bars {
-                ui.add(
-                    crate::parameter::Parameter::new(&mut self.bar_gap, 0.0..=90.0, 15.0)
-                        .text("Gap %"),
-                )
-                .help_text("Space between bars as a percentage of each frequency band's width.");
-            } else {
-                ui.add(
-                    crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.5)
-                        .bounds(0.1..=20.0)
-                        .text("Line px"),
-                )
-                .help_text("Trace outline thickness in screen pixels.");
-            }
-            if self.style == TraceStyle::Filled {
-                ui.add(
-                    crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
-                        .bounds(0.0..=1.0)
-                        .text("Fill opacity"),
-                )
-                .help_text("Opacity of the filled area beneath the spectrum.");
-            }
-            ui.separator();
-            ui.strong("Color & level");
-            self.palette.controls(ui);
-            self.palette.contrast_controls(ui, &mut self.contrast);
-            self.data.settings.level_controls(ui);
-            ui.separator();
-            ui.strong("Guides");
-            ui.checkbox(&mut self.grid, "Grid")
-                .help_text("Show horizontal dB reference lines.");
-            ui.checkbox(&mut self.labels, "Axis labels").help_text(
-                "Show dB and frequency labels. Frequency Range can replace Hz with note names.",
-            );
+            super::settings_group(ui, "Trace", |ui| {
+                self.style.controls(ui, true);
+                if self.style == TraceStyle::Bars {
+                    ui.add(
+                        crate::parameter::Parameter::new(&mut self.bar_gap, 0.0..=90.0, 15.0)
+                            .text("Gap %"),
+                    )
+                    .help_text(
+                        "Space between bars as a percentage of each frequency band's width.",
+                    );
+                } else {
+                    ui.add(
+                        crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.5)
+                            .bounds(0.1..=20.0)
+                            .text("Line px"),
+                    )
+                    .help_text("Trace outline thickness in screen pixels.");
+                }
+                if self.style == TraceStyle::Filled {
+                    ui.add(
+                        crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                            .bounds(0.0..=1.0)
+                            .text("Fill opacity"),
+                    )
+                    .help_text("Opacity of the filled area beneath the spectrum.");
+                }
+            });
+            super::settings_group(ui, "Color & level", |ui| {
+                self.palette.controls(ui);
+                self.palette.contrast_controls(ui, &mut self.contrast);
+                self.data.settings.level_controls(ui);
+            });
+            super::settings_group(ui, "Guides", |ui| {
+                ui.checkbox(&mut self.grid, "Grid")
+                    .help_text("Show horizontal dB reference lines.");
+                ui.checkbox(&mut self.labels, "Axis labels").help_text(
+                    "Show dB and frequency labels. Frequency Range can replace Hz with note names.",
+                );
+            });
         });
     }
 

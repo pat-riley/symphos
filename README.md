@@ -27,8 +27,10 @@ and visual parameter mapping are still on the roadmap.
   the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;
   F11 toggles fullscreen; Escape restores the dashboard or dismisses a modal/menu.
   Typing, key-repeat events, and open menus/modals do not trigger application actions.
-- Numeric module controls: Shift-drag for fine adjustment, double-click the slider
-  to reset, or click its number to type an exact value (including scientific notation).
+- Numeric module controls: drag the filled field to adjust, Shift-drag for fine
+  adjustment, double-click beside its number to reset, or click the number to type
+  an exact value (including scientific notation). Focused fields also accept
+  left/right arrows to adjust and Enter to start typing.
   Slider ranges are comfortable working ranges; selected geometry/appearance fields
   accept larger custom values within documented safe limits. Buffer sizes, history,
   percentages, and algorithm limits remain bounded. Rejected values retain the last

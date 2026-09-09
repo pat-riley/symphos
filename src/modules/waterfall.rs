@@ -376,116 +376,128 @@ impl Waterfall {
         }
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
-        settings_panel(ui, "Camera", |ui| {
-            let (area, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 128.0), Sense::hover());
-            self.orientation_gizmo(
-                ui,
-                Rect::from_center_size(area.center(), Vec2::splat(128.0)),
-                false,
-            );
-            ui.small("X frequency · Y time · Z level");
-            ui.small("Orthographic views");
-            egui::Grid::new("camera-presets").num_columns(3).show(ui, |ui| {
-                for (i, (name, axis, positive)) in [
-                    ("Front", Axis::Y, false), ("Right", Axis::X, true), ("Top", Axis::Z, true),
-                    ("Back", Axis::Y, true), ("Left", Axis::X, false), ("Bottom", Axis::Z, false),
-                ].into_iter().enumerate() {
-                    if ui.add_sized([58.0, 24.0], egui::Button::new(name))
-                        .help_text(format!("Snap to the {name} orthographic view. Keeps zoom and pan; stops auto-orbit."))
-                        .clicked() {
-                        self.snap_view(axis.angles(positive));
-                    }
-                    if i % 3 == 2 { ui.end_row(); }
-                }
-            });
-            egui::ComboBox::from_id_salt("isometric-views")
-                .selected_text("Snap isometric…").width(190.0).show_ui(ui, |ui| {
+    fn matches_view(&self, (yaw, elevation): (f32, f32)) -> bool {
+        (wrap_angle(self.yaw - yaw)).abs() < 0.001 && (self.elevation - elevation).abs() < 0.001
+    }
+
+    fn isometric_picker(&mut self, ui: &mut egui::Ui) {
+        ui.scope(|ui| {
+            ui.set_width(176.0);
+            super::properties_combo("isometric-views", 176.0, 10)
+                .selected_text("Snap isometric…")
+                .show_ui(ui, |ui| {
                     for above in [true, false] {
                         ui.strong(if above { "From above" } else { "From below" });
                         for (corner, name) in ["Front right", "Front left", "Back left", "Back right"].into_iter().enumerate() {
                             let angles = Self::isometric_angles(corner, above);
-                            let selected = (wrap_angle(self.yaw - angles.0)).abs() < 0.001
-                                && (self.elevation - angles.1).abs() < 0.001;
-                            if ui.selectable_label(selected, name)
+                            // Left-align entries with the trigger and group headings.
+                            if ui.selectable_label(self.matches_view(angles), name)
                                 .help_text("True isometric view: equal foreshortening on all three axes. Keeps zoom and pan; stops auto-orbit.")
                                 .clicked() {
                                 self.snap_view(angles);
+                                ui.close();
                             }
                         }
                     }
                 }).response.help_text("Choose one of eight isometric corner views, above or below the waterfall.");
-            ui.separator();
-            egui::Grid::new("camera-angles")
-                .num_columns(2)
-                .show(ui, |ui| {
-                    for (label, angle) in [
-                        ("Rotation", &mut self.yaw),
-                        ("Elevation", &mut self.elevation),
-                    ] {
-                        let mut degrees = angle.to_degrees();
-                        let default = if label == "Rotation" { -0.35_f32 } else { 0.65_f32 }.to_degrees();
-                        if ui
-                            .add(
-                                crate::parameter::Parameter::new(&mut degrees, -180.0..=180.0, default)
-                                    .bounds(-3600.0..=3600.0).text(format!("{label} °")),
-                            )
-                            .help_text("Rotate the camera around the waterfall. Angles are in degrees; full rotation is supported.")
-                            .changed()
-                        {
-                            *angle = wrap_angle(degrees.to_radians());
-                            self.auto_orbit = false;
+        });
+    }
+
+    pub fn controls(&mut self, ui: &mut egui::Ui) {
+        settings_panel(ui, "Camera", |ui| {
+            super::settings_group(ui, "View presets", |ui| {
+                let diameter = ui.available_width().min(240.0);
+                let (area, _) = ui
+                    .allocate_exact_size(Vec2::new(ui.available_width(), diameter), Sense::hover());
+                self.orientation_gizmo(
+                    ui,
+                    Rect::from_center_size(area.center(), Vec2::splat(diameter)),
+                    false,
+                );
+                ui.small("X frequency · Y time · Z level");
+                ui.add_space(3.0);
+                let width = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
+                egui::Grid::new("camera-presets").num_columns(3).show(ui, |ui| {
+                    for (i, (name, axis, positive)) in [
+                        ("Front", Axis::Y, false), ("Right", Axis::X, true), ("Top", Axis::Z, true),
+                        ("Back", Axis::Y, true), ("Left", Axis::X, false), ("Bottom", Axis::Z, false),
+                    ].into_iter().enumerate() {
+                        let angles = axis.angles(positive);
+                        let selected = self.matches_view(angles);
+                        if camera_gizmo::view_button(ui, name, axis, positive, width, selected)
+                            .help_text_with(|| format!("Snap to the {name} orthographic view. Keeps zoom and pan; stops auto-orbit."))
+                            .clicked() {
+                            self.snap_view(angles);
                         }
-                        ui.end_row();
+                        if i % 3 == 2 { ui.end_row(); }
                     }
                 });
-            if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).logarithmic(true).text("Zoom"))
-                .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
-                self.auto_orbit = false;
-            }
-            ui.horizontal(|ui| {
-                if ui
-                    .small_button("Center view")
-                    .help_text("Reset pan; keep rotation and zoom")
-                    .clicked()
-                {
-                    self.pan = Vec2::ZERO;
+                self.isometric_picker(ui);
+            });
+            super::settings_group(ui, "Transform", |ui| {
+                // Parameters already lay out a complete label/value row.
+                for (label, angle, default) in [
+                    ("Rotation °", &mut self.yaw, -0.35_f32),
+                    ("Elevation °", &mut self.elevation, 0.65_f32),
+                ] {
+                    let mut degrees = angle.to_degrees();
+                    if ui.add(crate::parameter::Parameter::new(
+                        &mut degrees, -180.0..=180.0, default.to_degrees())
+                        .bounds(-3600.0..=3600.0).text(label))
+                        .help_text("Rotate the camera around the waterfall. Angles are in degrees; full rotation is supported.")
+                        .changed() {
+                        *angle = wrap_angle(degrees.to_radians());
+                        self.auto_orbit = false;
+                    }
+                }
+                if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).logarithmic(true).text("Zoom"))
+                    .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
                     self.auto_orbit = false;
                 }
-                if ui.small_button("Reset camera").help_text("Restore the default rotation, zoom, and pan. Audio history and geometry are unchanged.").clicked() {
-                    self.reset_camera();
-                }
+                ui.add_space(4.0);
+                let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+                ui.horizontal(|ui| {
+                    if ui.add_sized([width, 24.0], egui::Button::new("Center view"))
+                        .help_text("Center the floor grid in the viewport; keep rotation and zoom").clicked() {
+                        self.pan = Vec2::ZERO;
+                        self.auto_orbit = false;
+                    }
+                    if ui.add_sized([width, 24.0], egui::Button::new("Reset camera"))
+                        .help_text("Restore the default rotation, zoom, and pan. Audio history and geometry are unchanged.").clicked() {
+                        self.reset_camera();
+                    }
+                });
             });
-            ui.separator();
-            ui.strong("Auto-orbit");
-            ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
-            ui.add_enabled_ui(self.auto_orbit, |ui| {
+            super::settings_group(ui, "Auto-orbit", |ui| {
+                ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
+                ui.add_enabled_ui(self.auto_orbit, |ui| {
                 ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 1.0..=30.0, 10.0).bounds(0.0..=360.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
             });
+            });
         });
         settings_panel(ui, "Geometry", |ui| {
-            ui.strong("Dimensions");
-            ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length X"))
+            super::settings_group(ui, "Dimensions", |ui| {
+                ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length X"))
                 .help_text("Stretch or compress the frequency axis visually. 1 is the default size; frequency range and audio are unchanged.");
-            ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length Y"))
+                ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length Y"))
                 .help_text("Stretch or compress the time axis visually. 1 is the default size; history duration and audio are unchanged.");
-            ui.add(
-                crate::parameter::Parameter::new(&mut self.height, 0.0..=MAX_HEIGHT, 0.85)
-                    .bounds(0.0..=10.0)
-                    .text("Height"),
-            )
-            .help_text("Scale signal peaks vertically above the fixed floor grid.");
-            ui.separator();
-            ui.strong("Time & detail");
-            ui.add(
+                ui.add(
+                    crate::parameter::Parameter::new(&mut self.height, 0.0..=MAX_HEIGHT, 0.85)
+                        .bounds(0.0..=10.0)
+                        .text("Height"),
+                )
+                .help_text("Scale signal peaks vertically above the fixed floor grid.");
+            });
+            super::settings_group(ui, "Time & detail", |ui| {
+                ui.add(
                 crate::parameter::Parameter::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS, DEFAULT_HISTORY_SECONDS)
                     .logarithmic(true)
                     .text("History s"),
             ).help_text("How many seconds of recent audio are displayed. Does not change the waterfall's physical length.");
-            ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).bounds(8.0..=256.0).text("Time slices"))
+                ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).bounds(8.0..=256.0).text("Time slices"))
                 .help_text("Number of displayed time slices. More slices add detail and rendering work; history duration is unchanged.");
+            });
         });
         settings_panel(ui, "Frequency Range", |ui| {
             self.history.data.settings.range_controls(ui)
@@ -495,8 +507,7 @@ impl Waterfall {
         });
         settings_panel(ui, "Appearance", |ui| {
             ui.spacing_mut().slider_width = 60.0;
-            ui.group(|ui| {
-                ui.strong("Render style");
+            super::settings_group(ui, "Render style", |ui| {
                 render_style_picker(ui, &mut self.mode);
                 ui.add_space(4.0);
                 match self.mode {
@@ -505,43 +516,90 @@ impl Waterfall {
                         ui.checkbox(&mut self.surface_walls, "Base walls").help_text("Close the terrain's perimeter down to the fixed floor. Turn off for a floating sheet.");
                     }
                     RenderMode::Lines => {
-                        ui.push_id("x-line-width", |ui| width_control(ui, &mut self.line_width, 1.1));
-                        spacing_control(ui, &mut self.line_spacing, 1, "Trace spacing", "Display every Nth time slice. Does not change history duration or audio sampling.");
+                        ui.push_id("x-line-width", |ui| {
+                            width_control(ui, &mut self.line_width, 1.1)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.line_spacing,
+                            1,
+                            "Trace spacing",
+                            "Display every Nth time slice. Does not change history duration or audio sampling.",
+                        );
                     }
                     RenderMode::YLines => {
-                        ui.push_id("y-line-width", |ui| width_control(ui, &mut self.y_line_width, 1.1));
-                        spacing_control(ui, &mut self.y_line_spacing, 1, "Band spacing", "Display every Nth frequency trace. Does not change FFT resolution.");
+                        ui.push_id("y-line-width", |ui| {
+                            width_control(ui, &mut self.y_line_width, 1.1)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.y_line_spacing,
+                            1,
+                            "Band spacing",
+                            "Display every Nth frequency trace. Does not change FFT resolution.",
+                        );
                     }
                     RenderMode::Wireframe => {
-                        ui.push_id("wire-width", |ui| width_control(ui, &mut self.wire_width, 1.1));
-                        spacing_control(ui, &mut self.wire_spacing, 1, "Mesh spacing", "Display every Nth frequency and time grid line; keeps the outer edges.");
+                        ui.push_id("wire-width", |ui| {
+                            width_control(ui, &mut self.wire_width, 1.1)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.wire_spacing,
+                            1,
+                            "Mesh spacing",
+                            "Display every Nth frequency and time grid line; keeps the outer edges.",
+                        );
                     }
                     RenderMode::Dots => {
-                        ui.add(crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=12.0, 3.2).bounds(0.1..=40.0).text("Dot size px")).help_text("Screen-space diameter of each dot, independent of camera zoom.");
-                        spacing_control(ui, &mut self.dot_spacing, 1, "Point spacing", "Display every Nth band and time slice for a more open point cloud.");
+                        ui.add(
+                            crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=12.0, 3.2)
+                                .bounds(0.1..=40.0)
+                                .text("Dot size px"),
+                        )
+                        .help_text(
+                            "Screen-space diameter of each dot, independent of camera zoom.",
+                        );
+                        spacing_control(
+                            ui,
+                            &mut self.dot_spacing,
+                            1,
+                            "Point spacing",
+                            "Display every Nth band and time slice for a more open point cloud.",
+                        );
                     }
                     RenderMode::Stems => {
-                        ui.push_id("stem-width", |ui| width_control(ui, &mut self.stem_width, 1.2));
-                        spacing_control(ui, &mut self.stem_spacing, 4, "Stem spacing", "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.");
+                        ui.push_id("stem-width", |ui| {
+                            width_control(ui, &mut self.stem_width, 1.2)
+                        });
+                        spacing_control(
+                            ui,
+                            &mut self.stem_spacing,
+                            4,
+                            "Stem spacing",
+                            "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.",
+                        );
                     }
                     RenderMode::Bars => {
                         ui.add(crate::parameter::Parameter::new(&mut self.bar_width, 10.0..=100.0, 75.0).bounds(1.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
                         ui.add(crate::parameter::Parameter::new(&mut self.bar_depth, 10.0..=100.0, 65.0).bounds(1.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
                         ui.add(crate::parameter::Parameter::new(&mut self.bar_bands, 1..=12, 4).text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
-                        spacing_control(ui, &mut self.bar_time_step, 3, "Time spacing", "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.");
+                        spacing_control(
+                            ui,
+                            &mut self.bar_time_step,
+                            3,
+                            "Time spacing",
+                            "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.",
+                        );
                     }
                 }
             });
-            ui.add_space(6.0);
-            ui.group(|ui| {
-                ui.strong("Color & level");
+            super::settings_group(ui, "Color & level", |ui| {
                 self.palette.controls(ui);
                 self.palette.contrast_controls(ui, &mut self.contrast);
                 self.history.data.settings.level_controls(ui);
             });
-            ui.add_space(6.0);
-            ui.group(|ui| {
-                ui.strong("Viewport guides");
+            super::settings_group(ui, "Viewport guides", |ui| {
                 ui.checkbox(&mut self.guides, "Show guides").help_text("Master switch: hide floor and surface grids, all axes and labels, navigation hints, and the viewport gizmo. Your individual guide settings are remembered.");
                 ui.add_enabled_ui(self.guides, |ui| {
                     ui.checkbox(&mut self.floor_grid, "Floor grid").help_text("Reference grid beneath the waterfall.");
@@ -559,23 +617,27 @@ impl Waterfall {
         now: Instant,
         theme: &AppTheme,
     ) -> std::sync::Arc<egui::Mesh> {
-        let key = MeshKey {
-            settings: self.settings_snapshot(),
-            plot,
-            theme: theme.clone(),
-            samples: (0..self.detail)
-                .map(|row| {
-                    self.history
-                        .sample_row(now, row as f32 / (self.detail - 1) as f32 * self.seconds)
-                        .map(|sample| sample.sequence)
-                })
-                .collect(),
-        };
+        let settings = self.settings_snapshot();
+        let samples = (0..self.detail).map(|row| {
+            self.history
+                .sample_row(now, row as f32 / (self.detail - 1) as f32 * self.seconds)
+                .map(|sample| sample.sequence)
+        });
         if let Some((previous, mesh)) = &self.mesh_cache
-            && *previous == key
+            && previous.settings == settings
+            && previous.plot == plot
+            && previous.theme == *theme
+            && samples.clone().eq(previous.samples.iter().copied())
         {
             return mesh.clone();
         }
+        // Cache hits need neither a new sequence buffer nor an owned theme.
+        let key = MeshKey {
+            settings,
+            plot,
+            theme: theme.clone(),
+            samples: samples.collect(),
+        };
         let mesh = std::sync::Arc::new(self.build_mesh(camera, now, theme));
         self.mesh_cache = Some((key, mesh.clone()));
         mesh
@@ -895,23 +957,12 @@ impl Waterfall {
 fn render_style_picker(ui: &mut egui::Ui, mode: &mut RenderMode) {
     const WIDTH: f32 = 176.0;
     const ROW_HEIGHT: f32 = 24.0;
-    const ROW_GAP: f32 = 2.0;
-    // Size the scroll area for the complete list; egui can still constrain it
-    // when the viewport cannot accommodate the menu above or below the trigger.
-    let menu_height = RenderMode::ALL.len() as f32 * (ROW_HEIGHT + ROW_GAP);
     let combo = ui
         .scope(|ui| {
             ui.set_width(WIDTH);
-            egui::ComboBox::from_id_salt("render-mode")
+            super::properties_combo("render-mode", WIDTH, RenderMode::ALL.len())
                 .selected_text(format!("      {}", mode.label()))
-                .width(WIDTH)
-                .height(menu_height)
-                .truncate()
                 .show_ui(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = ROW_GAP;
-                    ui.spacing_mut().interact_size.y = ROW_HEIGHT;
-                    ui.spacing_mut().button_padding = Vec2::new(5.0, 2.0);
-                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
                     for value in RenderMode::ALL {
                         let response = ui.add_sized(
                             [WIDTH, ROW_HEIGHT],
@@ -1111,12 +1162,12 @@ struct Camera {
 
 impl Camera {
     fn fit(rect: Rect, yaw: f32, elevation: f32, zoom: f32, length: Vec2) -> Self {
-        // A sphere enclosing the full height range fits at every orientation.
-        // Its scale and orbit center stay fixed while either angle changes.
-        let radius = ((1.4 * length.x.max(1.0)).powi(2)
-            + length.y.max(1.0).powi(2)
-            + (MAX_HEIGHT * 0.5).powi(2))
-        .sqrt();
+        // Orbit around the floor grid's center. A sphere centered there must
+        // enclose the full height above the floor, so default framing still
+        // fits at every orientation without changing scale during rotation.
+        let radius =
+            ((1.4 * length.x.max(1.0)).powi(2) + length.y.max(1.0).powi(2) + MAX_HEIGHT.powi(2))
+                .sqrt();
         Self {
             yaw,
             elevation,
@@ -1126,7 +1177,6 @@ impl Camera {
     }
 
     fn project(&self, [x, y, z]: [f32; 3]) -> (Pos2, f32) {
-        let y = y - MAX_HEIGHT * 0.5;
         let (position, depth) =
             camera_gizmo::project_direction(self.yaw, self.elevation, [x, y, z]);
         (self.center + position * self.scale, depth)
@@ -1371,6 +1421,101 @@ mod tests {
                     0,
                     "corner {corner}, above {above}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn isometric_menu_fits_and_selects_every_corner() {
+        for trigger_y in [12.0, 630.0] {
+            for choice in 0..8 {
+                let context = egui::Context::default();
+                let mut waterfall = Waterfall {
+                    auto_orbit: true,
+                    zoom: 2.0,
+                    pan: Vec2::new(0.1, 0.2),
+                    ..Default::default()
+                };
+                let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 700.0));
+                let mut render = |events| {
+                    let mut output = context.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut child =
+                                ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
+                                    Pos2::new(12.0, trigger_y),
+                                    Vec2::new(190.0, 26.0),
+                                )));
+                            child.spacing_mut().interact_size.y = 24.0;
+                            child.style_mut().override_font_id =
+                                Some(egui::FontId::proportional(13.0));
+                            waterfall.isometric_picker(&mut child);
+                            assert!(child.min_rect().width() <= 176.1);
+                        },
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                render(vec![]);
+                let initial = render(vec![]);
+                let trigger = text_position(&initial, "Snap isometric…");
+                let click = |pos, pressed| {
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                };
+                for pressed in [true, false] {
+                    render(click(trigger, pressed));
+                }
+                render(vec![]);
+                let menu = render(vec![]);
+                let entries: Vec<_> = menu
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && ["Front right", "Front left", "Back left", "Back right"]
+                                .contains(&text.galley.job.text.as_str())
+                        {
+                            let rect = Rect::from_min_size(text.pos, text.galley.size());
+                            assert!(
+                                shape.clip_rect.intersect(screen).contains_rect(rect),
+                                "clipped option at trigger y={trigger_y}"
+                            );
+                            Some(rect)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(entries.len(), 8);
+                assert!(
+                    entries
+                        .iter()
+                        .all(|rect| (rect.left() - entries[0].left()).abs() < 0.1)
+                );
+                for pressed in [true, false] {
+                    render(click(entries[choice].center(), pressed));
+                }
+                let closed = render(vec![]);
+                assert!(!closed.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text == "From above")));
+                assert!(
+                    waterfall.matches_view(Waterfall::isometric_angles(choice % 4, choice < 4))
+                );
+                assert!(!waterfall.auto_orbit);
+                assert_eq!(waterfall.zoom, 2.0);
+                assert_eq!(waterfall.pan, Vec2::new(0.1, 0.2));
             }
         }
     }
@@ -1818,6 +1963,55 @@ mod tests {
             assert!(!waterfall.auto_orbit);
             assert_eq!(waterfall.zoom, 2.0);
             assert_eq!(waterfall.pan, Vec2::new(0.1, 0.2));
+        }
+    }
+
+    #[test]
+    fn center_view_places_grid_midpoint_at_viewport_center() {
+        use super::super::SettingsSection;
+        let context = egui::Context::default();
+        let mut waterfall = Waterfall {
+            pan: Vec2::new(0.2, -0.3),
+            yaw: 1.2,
+            elevation: -0.4,
+            zoom: 2.5,
+            length_x: 2.0,
+            length_y: 0.5,
+            auto_orbit: true,
+            ..Waterfall::default()
+        };
+        let section = SettingsSection::Camera;
+        controls_frame(&mut waterfall, &context, section, vec![]);
+        let output = controls_frame(&mut waterfall, &context, section, vec![]);
+        click_control(
+            &mut waterfall,
+            &context,
+            section,
+            text_position(&output, "Center view"),
+        );
+        assert!(!waterfall.auto_orbit);
+        assert_eq!(waterfall.pan, Vec2::ZERO);
+        assert_eq!(
+            (waterfall.yaw, waterfall.elevation, waterfall.zoom),
+            (1.2, -0.4, 2.5)
+        );
+        assert_eq!((waterfall.length_x, waterfall.length_y), (2.0, 0.5));
+        for size in [Vec2::new(1000.0, 500.0), Vec2::new(400.0, 700.0)] {
+            let viewport = Rect::from_min_size(Pos2::new(80.0, 60.0), size);
+            for angles in [
+                (1.2, -0.4),
+                (0.0, 0.0),
+                (-0.35, 0.65),
+                (0.0, std::f32::consts::FRAC_PI_2),
+            ] {
+                waterfall.snap_view(angles);
+                let camera = waterfall.camera(viewport.shrink2(Vec2::new(44.0, 32.0)));
+                let corners = [(-1.4, -1.0), (1.4, -1.0), (1.4, 1.0), (-1.4, 1.0)]
+                    .map(|(x, z)| camera.project(waterfall.geometry_point([x, 0.0, z])).0);
+                let bounds = Rect::from_points(&corners);
+                assert!(bounds.center().distance(viewport.center()) < 0.001);
+                assert_eq!(camera.project([0.0, 0.0, 0.0]).0, viewport.center());
+            }
         }
     }
 
@@ -2462,10 +2656,7 @@ mod tests {
                             length,
                         );
                         assert_eq!(camera.scale, reference.scale);
-                        assert_eq!(
-                            camera.project([0.0, MAX_HEIGHT * 0.5, 0.0]).0,
-                            rect.center()
-                        );
+                        assert_eq!(camera.project([0.0, 0.0, 0.0]).0, rect.center());
                         for x in [-1.4 * length.x, 1.4 * length.x] {
                             for z in [-length.y, length.y] {
                                 for y in [0.0, MAX_HEIGHT] {

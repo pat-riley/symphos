@@ -37,25 +37,29 @@ pub fn toggle(ui: &mut egui::Ui, open: &mut bool) -> Response {
 
 pub trait HoverHelp {
     fn help_text(self, text: impl Into<String>) -> Self;
+    fn help_text_with(self, text: impl FnOnce() -> String) -> Self;
 }
 
 impl HoverHelp for Response {
     fn help_text(self, text: impl Into<String>) -> Self {
+        self.help_text_with(|| text.into())
+    }
+
+    fn help_text_with(self, text: impl FnOnce() -> String) -> Self {
         if self.hovered() || self.dragged() {
             let area = self.interact_rect.area();
-            self.ctx.data_mut(|data| {
+            let preferred = self.ctx.data(|data| {
                 let previous = data.get_temp::<HoveredHelp>(id());
                 // Prefer a specific control over its enclosing panel/viewport.
-                if previous.is_none_or(|previous| area <= previous.area) {
-                    data.insert_temp(
-                        id(),
-                        HoveredHelp {
-                            text: text.into(),
-                            area,
-                        },
-                    );
-                }
+                previous.is_none_or(|previous| area <= previous.area)
             });
+            if preferred {
+                // Evaluate outside the context lock so callers can read UI state.
+                let text = text();
+                self.ctx.data_mut(|data| {
+                    data.insert_temp(id(), HoveredHelp { text, area });
+                });
+            }
         }
         self
     }
@@ -162,6 +166,8 @@ mod tests {
             context.style_mut_of(theme, suppress_tooltips);
         }
         for time in [0.0, 1.0, 10.0] {
+            let specific_calls = std::cell::Cell::new(0);
+            let parent_calls = std::cell::Cell::new(0);
             let mut output = context.run_ui(
                 egui::RawInput {
                     time: Some(time),
@@ -175,12 +181,22 @@ mod tests {
                 |ui| {
                     begin_frame(ui);
                     ui.button("Control")
-                        .help_text("Specific description")
+                        .help_text_with(|| {
+                            specific_calls.set(specific_calls.get() + 1);
+                            // Lazy descriptions may safely inspect context state.
+                            ui.input(|input| assert_eq!(input.time, time));
+                            "Specific description".into()
+                        })
                         .on_hover_text("Built-in popup must not appear");
                     ui.interact(ui.max_rect(), ui.id().with("parent"), egui::Sense::hover())
-                        .help_text("Generic panel description");
+                        .help_text_with(|| {
+                            parent_calls.set(parent_calls.get() + 1);
+                            "Generic panel description".into()
+                        });
                     if time > 0.0 {
                         assert_eq!(description(ui.ctx()), "Specific description");
+                        assert_eq!(specific_calls.get(), 1);
+                        assert_eq!(parent_calls.get(), 0);
                     }
                 },
             );
