@@ -11,7 +11,8 @@ const HIGH_CROSSOVER_HZ: f32 = 2_000.0;
 const MIN_FOLLOW_HZ: f32 = 30.0;
 const MAX_FOLLOW_HZ: f32 = 2_000.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum ScopeChannel {
     Left,
     Right,
@@ -41,7 +42,8 @@ impl ScopeChannel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum SyncMode {
     Pitch,
     Trigger,
@@ -60,7 +62,8 @@ impl SyncMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum CycleMode {
     Single,
     Multi,
@@ -77,7 +80,8 @@ impl CycleMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum ScopeColorMode {
     Static,
     Rgb,
@@ -158,6 +162,30 @@ impl Default for Oscilloscope {
 }
 
 impl Oscilloscope {
+    pub(super) const FACTORY_PRESETS: [&'static str; 3] =
+        ["Pitch Lock", "Single Cycle", "Triggered RGB"];
+
+    pub(super) fn factory_settings(index: usize) -> Option<OscilloscopeSettings> {
+        let mut module = Self::default();
+        match index {
+            0 => {}
+            1 => {
+                module.cycle_mode = CycleMode::Single;
+                module.afterglow_traces = 4;
+                module.afterglow_opacity = 0.22;
+            }
+            2 => {
+                module.channel = ScopeChannel::Left;
+                module.sync_mode = SyncMode::Trigger;
+                module.timebase_ms = 10.0;
+                module.color_mode = ScopeColorMode::Rgb;
+                module.afterglow_traces = 3;
+            }
+            _ => return None,
+        }
+        Some(module.settings_snapshot())
+    }
+
     pub fn clear(&mut self) {}
 
     pub fn reset_settings(&mut self) {

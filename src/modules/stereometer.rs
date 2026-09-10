@@ -7,7 +7,8 @@ use crate::{analysis::AnalysisFrame, theme::AppTheme};
 const LOW_CROSSOVER_HZ: f32 = 200.0;
 const HIGH_CROSSOVER_HZ: f32 = 2_000.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum DisplayMode {
     Scaled,
     Linear,
@@ -26,7 +27,8 @@ impl DisplayMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum ColorMode {
     Static,
     Rgb,
@@ -45,7 +47,8 @@ impl ColorMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum CorrelationMode {
     SingleBand,
     MultiBand,
@@ -106,6 +109,30 @@ impl Default for Stereometer {
 }
 
 impl Stereometer {
+    pub(super) const FACTORY_PRESETS: [&'static str; 3] =
+        ["Balanced Stereo", "Lissajous Focus", "Multiband Phase"];
+
+    pub(super) fn factory_settings(index: usize) -> Option<StereometerSettings> {
+        let mut module = Self::default();
+        match index {
+            0 => {}
+            1 => {
+                module.display_mode = DisplayMode::Lissajous;
+                module.color_mode = ColorMode::Static;
+                module.correlation_mode = CorrelationMode::SingleBand;
+                module.window_ms = 80.0;
+            }
+            2 => {
+                module.display_mode = DisplayMode::Linear;
+                module.color_mode = ColorMode::MultiBand;
+                module.correlation_mode = CorrelationMode::MultiBand;
+                module.window_ms = 180.0;
+            }
+            _ => return None,
+        }
+        Some(module.settings_snapshot())
+    }
+
     pub fn clear(&mut self) {}
 
     pub fn reset_settings(&mut self) {

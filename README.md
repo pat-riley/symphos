@@ -20,9 +20,15 @@ and visual parameter mapping are still on the roadmap.
   this is a rolling analyzer buffer, not an audio recording feature.
 - Copy/Paste settings in the module sidebar (Ctrl+Shift+C / Ctrl+Shift+V) applies
   a settings-only snapshot to a matching module. Audio/history, pause state, and
-  global FFT and footer-meter choices stay outside the destination pane. This is
-  session-only; preset files, saved workspaces, and automatic restoration are not
-  implemented.
+  global FFT and footer-meter choices stay outside the destination pane. The
+  clipboard is session-only; named module presets provide persistent settings,
+  while saved workspaces and automatic layout restoration are not implemented.
+- The first sidebar tab is a Component overview with module selection, a short
+  module description, and module-specific presets. Each module includes three
+  factory presets. Named user presets persist locally and can be imported or
+  exported as versioned `.symphos-preset.json` files. Presets contain controls
+  only—not audio, history, references, measurements, pause state, or global
+  settings—and deleting a user preset always asks for confirmation.
 - **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
   the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;
@@ -54,7 +60,8 @@ and visual parameter mapping are still on the roadmap.
 - Spectrum peak hold and waveform controls for independent L/R/Mid/Side lanes,
   scroll or loop motion, speed, static/multi-band/color-map rendering, multi-band
   peak history, triggering, time/amplitude, and color palettes
-- Module-only settings sidebar with icon tabs that follows the selected pane
+- Module-only settings sidebar whose first icon opens the Component overview,
+  followed by tabs for that module's controls
 - Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Toggleable bottom-left Info View with hover descriptions instead of popup tooltips
 - Shared FFT size, window function, analysis channel, and frame-rate controls
@@ -155,9 +162,14 @@ retained in the shared help system. A capture-status indicator sits beside the
 bottom-right meters; detailed status remains in Shared options. When settings
 are open, Info View docks underneath them; otherwise it
 reserves space below the dashboard. It never covers a visualization.
-The waterfall's icon tabs are ordered **Geometry**, **Frequency Range**,
-**Signal Response**, **Appearance**, then **Camera** at the bottom. Geometry is
-the default tab and includes history duration, so the waterfall no longer needs
+The first icon tab for every module is **Component**. It is the initial screen
+and combines general information, module selection, factory and user presets,
+import/export, and reset. Presets are isolated by module type, so a Waveform
+preset cannot be loaded into a Spectrum component. User presets are stored under
+`$XDG_CONFIG_HOME/symphos/presets` (normally
+`~/.config/symphos/presets`). The remaining waterfall tabs are ordered
+**Geometry**, **Frequency Range**, **Signal Response**, **Appearance**, then
+**Camera**. Geometry includes history duration, so the waterfall no longer needs
 a separate Time & History tab. Other modules show only relevant tabs; the
 spectrogram retains its Time & History tab. One section is visible at a time; the selected tab
 and scroll position are remembered separately for each pane/module/tab during the session. Waveform
@@ -231,7 +243,8 @@ and a compact settings icon remain at the top right; there is no top-left menu b
 The top-right **settings icon**, matched to the source picker's height, opens
 pane-size reset, fullscreen (F11), and the FFT inspector with
 the detailed analyzer metrics and experimental tempo estimate. Pane assignments,
-sizes, module settings, and Info View visibility currently last for the session.
+sizes, active settings, and Info View visibility currently last for the session;
+named module presets persist independently.
 
 ## Requirements
 

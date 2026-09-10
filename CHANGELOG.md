@@ -42,6 +42,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- A first-position Component sidebar tab with module information and selection,
+  three factory presets per module, persistent named user presets, and confirmed
+  deletion. Presets are settings-only, module-specific, and portable through a
+  versioned `.symphos-preset.json` import/export format.
 - Retained peak markers and latched clipping for the footer's independent Left,
   Right, and Mix meters, with an explicit reset action.
 - Live reference capture and comparison overlays in Spectrum panes.

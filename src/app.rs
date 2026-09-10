@@ -9,7 +9,8 @@ use crate::audio::{AudioEngine, AudioEvent, AudioSource, AudioStatus, SourceKind
 use crate::global_bar::{BarInfo, GlobalBar};
 use crate::help::{self, HoverHelp};
 use crate::icons::{self, Icon};
-use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
+use crate::modules::{ModuleKind, ModulePane, ModuleSettings, SettingsSection};
+use crate::presets::{PresetLibrary, suggested_filename};
 use crate::theme::AppTheme;
 
 const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
@@ -28,6 +29,10 @@ pub struct SymphosApp {
     show_issues: bool,
     show_shortcuts: bool,
     settings_clipboard: Option<ModuleSettings>,
+    preset_library: PresetLibrary,
+    preset_names: [String; 6],
+    preset_message: Option<(bool, String)>,
+    confirm_delete_preset: Option<(ModuleKind, String)>,
     display_fps: f32,
     last_frame: Instant,
     panes: [ModulePane; 4],
@@ -60,6 +65,10 @@ impl SymphosApp {
             show_issues: false,
             show_shortcuts: false,
             settings_clipboard: None,
+            preset_library: PresetLibrary::load(),
+            preset_names: std::array::from_fn(|_| String::new()),
+            preset_message: None,
+            confirm_delete_preset: None,
             display_fps: 0.0,
             last_frame: Instant::now(),
             panes: [
@@ -207,7 +216,13 @@ impl SymphosApp {
                             ),
                         )
                     });
-                    self.panes[self.selected_pane].controls(ui, frame)
+                    if self.panes[self.selected_pane].active_section()
+                        == SettingsSection::Component
+                    {
+                        self.component_overview(ui);
+                    } else {
+                        self.panes[self.selected_pane].controls(ui, frame)
+                    }
                 });
                 ui.horizontal(|ui| {
                     if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
@@ -223,6 +238,245 @@ impl SymphosApp {
             });
     }
 
+    fn component_overview(&mut self, ui: &mut egui::Ui) {
+        let pane_index = self.selected_pane;
+        let mut kind = self.panes[pane_index].kind;
+        ui.label(kind.description());
+        ui.weak(format!(
+            "Pane {} · {} configuration tabs · presets contain settings only",
+            pane_index + 1,
+            self.panes[pane_index].sections().len() - 1
+        ));
+
+        crate::modules::settings_group(ui, "Visualization", |ui| {
+            ui.label("Module type");
+            if component_kind_picker(ui, &mut kind).changed() {
+                self.panes[pane_index].kind = kind;
+                self.panes[pane_index].reset();
+                self.preset_message = None;
+            }
+            ui.small(kind.description());
+        });
+
+        let kind = self.panes[pane_index].kind;
+        let factory_names: &'static [&'static str] = self.panes[pane_index].factory_preset_names();
+        let user_presets = self.preset_library.user_presets(kind);
+        let mut action = None;
+
+        crate::modules::settings_group(ui, "Factory presets", |ui| {
+            for (index, &name) in factory_names.iter().enumerate() {
+                ui.push_id(("factory-preset", index), |ui| {
+                    ui.horizontal(|ui| {
+                        let width = (ui.available_width() - 62.0).max(48.0);
+                        if ui
+                            .add_sized([width, 22.0], egui::Button::new(name).truncate())
+                            .help_text(format!("Load the factory preset '{name}'."))
+                            .clicked()
+                            && let Some(settings) = self.panes[pane_index].factory_preset(index)
+                        {
+                            action = Some(PresetAction::Apply(name.into(), settings));
+                        }
+                        if ui.small_button("Export").clicked()
+                            && let Some(settings) = self.panes[pane_index].factory_preset(index)
+                        {
+                            action = Some(PresetAction::Export(name.into(), settings));
+                        }
+                    });
+                });
+            }
+        });
+
+        crate::modules::settings_group(ui, "User presets", |ui| {
+            if user_presets.is_empty() {
+                ui.weak("No saved presets for this module yet.");
+            }
+            for preset in &user_presets {
+                ui.push_id(("user-preset", preset.name()), |ui| {
+                    ui.horizontal(|ui| {
+                        let width = (ui.available_width() - 118.0).max(48.0);
+                        if ui
+                            .add_sized([width, 22.0], egui::Button::new(preset.name()).truncate())
+                            .help_text(format!("Load the user preset '{}'.", preset.name()))
+                            .clicked()
+                        {
+                            action = Some(PresetAction::Apply(
+                                preset.name().into(),
+                                preset.settings().clone(),
+                            ));
+                        }
+                        if ui.small_button("Export").clicked() {
+                            action = Some(PresetAction::Export(
+                                preset.name().into(),
+                                preset.settings().clone(),
+                            ));
+                        }
+                        if ui.small_button("Delete").clicked() {
+                            action = Some(PresetAction::Delete(preset.name().into()));
+                        }
+                    });
+                });
+            }
+
+            ui.add_space(4.0);
+            let name = &mut self.preset_names[kind as usize];
+            ui.add(
+                egui::TextEdit::singleline(name)
+                    .hint_text("Preset name")
+                    .desired_width(f32::INFINITY),
+            );
+            let reserved = factory_names
+                .iter()
+                .any(|factory| factory.eq_ignore_ascii_case(name.trim()));
+            let exists = self.preset_library.contains(kind, name);
+            ui.horizontal(|ui| {
+                let save_label = if exists { "Replace" } else { "Save preset" };
+                if ui
+                    .add_enabled(
+                        !name.trim().is_empty() && !reserved,
+                        egui::Button::new(save_label).small(),
+                    )
+                    .help_text("Save only this module's current controls. Audio, history, references, measurements, and pause state are excluded.")
+                    .clicked()
+                {
+                    action = Some(PresetAction::Save(name.trim().into()));
+                }
+                if ui.small_button("Import…")
+                    .help_text("Import a versioned Symphos JSON preset for this module type.")
+                    .clicked()
+                {
+                    action = Some(PresetAction::Import);
+                }
+            });
+            if reserved {
+                ui.weak("Factory preset names are reserved.");
+            }
+        });
+
+        crate::modules::settings_group(ui, "Component actions", |ui| {
+            if ui
+                .small_button("Reset module settings")
+                .help_text(
+                    "Restore defaults for this module in this pane. Captured history is retained.",
+                )
+                .clicked()
+            {
+                self.panes[pane_index].reset_settings();
+                self.preset_message = Some((false, "Restored module defaults.".into()));
+            }
+        });
+
+        if let Some((error, message)) = &self.preset_message {
+            ui.colored_label(
+                if *error {
+                    self.theme.error
+                } else {
+                    self.theme.accent
+                },
+                message,
+            );
+        }
+        if let Some(warning) = self.preset_library.warnings().first() {
+            ui.colored_label(self.theme.warning, warning);
+        }
+
+        if let Some(action) = action {
+            self.handle_preset_action(action, kind, pane_index);
+        }
+    }
+
+    fn handle_preset_action(&mut self, action: PresetAction, kind: ModuleKind, pane_index: usize) {
+        match action {
+            PresetAction::Apply(name, settings) => {
+                if self.panes[pane_index].paste_settings(&settings) {
+                    self.preset_message = Some((false, format!("Loaded '{name}'.")));
+                }
+            }
+            PresetAction::Save(name) => {
+                let settings = self.panes[pane_index].copy_settings();
+                match self.preset_library.save(&name, settings) {
+                    Ok(name) => {
+                        self.preset_names[kind as usize].clear();
+                        self.preset_message = Some((false, format!("Saved '{name}'.")));
+                    }
+                    Err(error) => self.preset_error("Save preset", error),
+                }
+            }
+            PresetAction::Import => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Symphos preset", &["json"])
+                    .pick_file()
+                {
+                    match self.preset_library.import(&path, kind) {
+                        Ok(name) => {
+                            if let Some(preset) = self
+                                .preset_library
+                                .user_presets(kind)
+                                .into_iter()
+                                .find(|preset| preset.name() == name)
+                            {
+                                self.panes[pane_index].paste_settings(preset.settings());
+                            }
+                            self.preset_message = Some((false, format!("Imported '{name}'.")));
+                        }
+                        Err(error) => self.preset_error("Import preset", error),
+                    }
+                }
+            }
+            PresetAction::Export(name, settings) => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Symphos preset", &["json"])
+                    .set_file_name(suggested_filename(&name))
+                    .save_file()
+                {
+                    match PresetLibrary::export(&path, &name, settings) {
+                        Ok(()) => {
+                            self.preset_message = Some((false, format!("Exported '{name}'.")))
+                        }
+                        Err(error) => self.preset_error("Export preset", error),
+                    }
+                }
+            }
+            PresetAction::Delete(name) => self.confirm_delete_preset = Some((kind, name)),
+        }
+    }
+
+    fn preset_error(&mut self, context: &str, error: anyhow::Error) {
+        let message = format!("{error:#}");
+        crate::issues::record(context, &message);
+        self.preset_message = Some((true, message));
+    }
+
+    fn show_delete_preset_confirmation(&mut self, context: &egui::Context) {
+        let Some((kind, name)) = self.confirm_delete_preset.clone() else {
+            return;
+        };
+        let mut delete = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(egui::Id::new("delete-module-preset")).show(context, |ui| {
+            ui.heading("Delete preset?");
+            ui.label(format!("Delete the {} preset '{name}'?", kind.label()));
+            ui.label("This removes the saved file and cannot be undone.");
+            ui.horizontal(|ui| {
+                delete = ui.button("Delete").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
+        });
+        if delete {
+            match self.preset_library.delete(kind, &name) {
+                Ok(()) => {
+                    self.preset_message = Some((false, format!("Deleted '{name}'.")));
+                    self.confirm_delete_preset = None;
+                }
+                Err(error) => {
+                    self.preset_error("Delete preset", error);
+                    self.confirm_delete_preset = None;
+                }
+            }
+        } else if cancel || modal.should_close() {
+            self.confirm_delete_preset = None;
+        }
+    }
+
     fn toggle_fullscreen(&mut self, context: &egui::Context) {
         self.fullscreen = !self.fullscreen;
         context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
@@ -236,7 +490,10 @@ impl SymphosApp {
             && self.engine.analysis.is_current(frame);
         match crate::shortcuts::take_action(
             ctx,
-            self.show_shortcuts || self.show_issues || self.show_inspector,
+            self.show_shortcuts
+                || self.show_issues
+                || self.show_inspector
+                || self.confirm_delete_preset.is_some(),
         ) {
             Some(Action::Pause) if live || self.panes[self.selected_pane].is_frozen() => {
                 self.panes[self.selected_pane].toggle_freeze(frame, now)
@@ -336,6 +593,7 @@ impl SymphosApp {
             if before != self.panes[index].kind {
                 self.panes[index].reset();
                 self.selected_pane = index;
+                self.preset_message = None;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let focused = self.focused_pane == Some(index);
@@ -636,6 +894,7 @@ impl eframe::App for SymphosApp {
             crate::issues::show(ui.ctx(), &mut self.show_issues, &details);
         }
         crate::shortcuts::show(ui.ctx(), &mut self.show_shortcuts);
+        self.show_delete_preset_confirmation(ui.ctx());
         let target_rate = self
             .engine
             .analysis
@@ -722,6 +981,25 @@ fn module_kind_picker(ui: &mut egui::Ui, kind: &mut ModuleKind) -> egui::Respons
     .help_text("Choose which visualization appears in this pane. Each module has its own settings.")
 }
 
+fn component_kind_picker(ui: &mut egui::Ui, kind: &mut ModuleKind) -> egui::Response {
+    let width = ui.available_width().max(120.0);
+    egui::ComboBox::from_id_salt("component-module-kind")
+        .width(width)
+        .truncate()
+        .selected_text(kind.label())
+        .show_ui(ui, |ui| {
+            ui.set_min_width(width);
+            for value in ModuleKind::ALL {
+                ui.selectable_value(kind, value, value.label())
+                    .help_text(value.description());
+            }
+        })
+        .response
+        .help_text(
+            "Choose the visualization for this pane. Presets remain isolated by module type.",
+        )
+}
+
 fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mut bool) {
     let mut rail = ui.new_child(
         egui::UiBuilder::new()
@@ -760,6 +1038,14 @@ fn settings_rail(ui: &mut egui::Ui, rect: Rect, pane: &mut ModulePane, open: &mu
             });
         }
     });
+}
+
+enum PresetAction {
+    Apply(String, ModuleSettings),
+    Save(String),
+    Import,
+    Export(String, ModuleSettings),
+    Delete(String),
 }
 
 struct WorkspaceLayout {

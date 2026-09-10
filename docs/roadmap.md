@@ -18,8 +18,9 @@ phases below determine their delivery order:
 - **Analysis and metering:** shipped stereo-image/Lissajous and phase-correlation
   views and a pitch-following scope, followed by calibrated VU and
   standards-based loudness.
-- **Projects and workspaces:** persistent module presets, user color maps,
-  detached components, saved layouts, transparency, and desktop-bar behavior.
+- **Projects and workspaces:** shipped persistent module presets, followed by
+  user color maps, detached components, saved layouts, transparency, and
+  desktop-bar behavior.
 - **Capture and distribution:** audio recording, retrospective clips, DAW
   transport/audio bridges, plug-in evaluation, cross-platform builds, and
   platform video-output integrations such as Syphon.
@@ -83,8 +84,8 @@ predictably across quiet and loud material.
 - Save human-readable, versioned project files with a Symphos-specific file
   extension and load them safely. A project should contain its scene,
   component layout, routing, mappings, and references to required assets.
-- Save and load presets for individual component windows independently of the
-  enclosing project.
+- Extend the shipped settings-only component presets only when project-level
+  routing or asset references need a separate, explicit preset contract.
 - Save reusable user-authored color maps and reference-spectrum definitions.
 - Add undo/redo and autosave before the editor becomes complex.
 

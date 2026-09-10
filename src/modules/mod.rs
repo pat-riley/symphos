@@ -2,8 +2,12 @@
 // Clone is deliberate so this schema can grow owned preset fields later.
 macro_rules! module_settings {
     ($module:ident, $settings:ident, { $($field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+        #[serde(default)]
         pub(crate) struct $settings { $( $field: $ty, )* }
+        impl Default for $settings {
+            fn default() -> Self { $module::default().settings_snapshot() }
+        }
         impl $module {
             #[allow(clippy::clone_on_copy)]
             pub(crate) fn settings_snapshot(&self) -> $settings {
@@ -46,7 +50,8 @@ struct ModuleRenderState {
     frozen: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ModuleKind {
     Waterfall,
     Spectrum,
@@ -74,6 +79,17 @@ impl ModuleKind {
             Self::Spectrogram => "Spectrogram",
             Self::Stereometer => "Stereometer",
             Self::Oscilloscope => "Oscilloscope",
+        }
+    }
+
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Waterfall => "waterfall",
+            Self::Spectrum => "spectrum",
+            Self::Waveform => "waveform",
+            Self::Spectrogram => "spectrogram",
+            Self::Stereometer => "stereometer",
+            Self::Oscilloscope => "oscilloscope",
         }
     }
 
@@ -115,7 +131,8 @@ pub struct ModulePane {
     pub last_capture: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "module", content = "settings", rename_all = "snake_case")]
 pub enum ModuleSettings {
     Waterfall(waterfall::WaterfallSettings),
     Spectrum(spectrum::SpectrumSettings),
@@ -146,6 +163,7 @@ struct FrozenFrame {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsSection {
+    Component,
     Camera,
     History,
     Geometry,
@@ -163,6 +181,7 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub fn title(self) -> &'static str {
         match self {
+            Self::Component => "Component",
             Self::Camera => "Camera",
             Self::History => "Time & History",
             Self::Geometry => "Geometry",
@@ -179,6 +198,7 @@ impl SettingsSection {
     }
     pub fn icon(self) -> Icon {
         match self {
+            Self::Component => Icon::Component,
             Self::Camera => Icon::Camera,
             Self::History | Self::TimeWindow => Icon::Time,
             Self::Geometry => Icon::Geometry,
@@ -195,6 +215,36 @@ impl SettingsSection {
 }
 
 impl ModulePane {
+    pub fn factory_preset_names(&self) -> &'static [&'static str] {
+        match self.kind {
+            ModuleKind::Waterfall => &Waterfall::FACTORY_PRESETS,
+            ModuleKind::Spectrum => &Spectrum::FACTORY_PRESETS,
+            ModuleKind::Waveform => &Waveform::FACTORY_PRESETS,
+            ModuleKind::Spectrogram => &Spectrogram::FACTORY_PRESETS,
+            ModuleKind::Stereometer => &Stereometer::FACTORY_PRESETS,
+            ModuleKind::Oscilloscope => &Oscilloscope::FACTORY_PRESETS,
+        }
+    }
+
+    pub fn factory_preset(&self, index: usize) -> Option<ModuleSettings> {
+        match self.kind {
+            ModuleKind::Waterfall => {
+                Waterfall::factory_settings(index).map(ModuleSettings::Waterfall)
+            }
+            ModuleKind::Spectrum => Spectrum::factory_settings(index).map(ModuleSettings::Spectrum),
+            ModuleKind::Waveform => Waveform::factory_settings(index).map(ModuleSettings::Waveform),
+            ModuleKind::Spectrogram => {
+                Spectrogram::factory_settings(index).map(ModuleSettings::Spectrogram)
+            }
+            ModuleKind::Stereometer => {
+                Stereometer::factory_settings(index).map(ModuleSettings::Stereometer)
+            }
+            ModuleKind::Oscilloscope => {
+                Oscilloscope::factory_settings(index).map(ModuleSettings::Oscilloscope)
+            }
+        }
+    }
+
     pub fn copy_settings(&self) -> ModuleSettings {
         match self.kind {
             ModuleKind::Waterfall => ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
@@ -274,7 +324,7 @@ impl ModulePane {
         }
     }
 
-    fn reset_settings(&mut self) {
+    pub fn reset_settings(&mut self) {
         match self.kind {
             ModuleKind::Waterfall => self.waterfall.reset_settings(),
             ModuleKind::Spectrum => self.spectrum.reset_settings(),
@@ -313,12 +363,16 @@ impl ModulePane {
     pub fn sections(&self) -> &'static [SettingsSection] {
         use SettingsSection::*;
         match self.kind {
-            ModuleKind::Waterfall => &[Geometry, Frequency, Response, Appearance, Camera],
-            ModuleKind::Spectrum => &[Frequency, Response, Appearance],
-            ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
-            ModuleKind::Waveform => &[Channels, TimeWindow, Amplitude, Appearance],
-            ModuleKind::Stereometer => &[Display, Appearance, Correlation],
-            ModuleKind::Oscilloscope => &[Channels, Sync, TimeWindow, Amplitude, Appearance],
+            ModuleKind::Waterfall => {
+                &[Component, Geometry, Frequency, Response, Appearance, Camera]
+            }
+            ModuleKind::Spectrum => &[Component, Frequency, Response, Appearance],
+            ModuleKind::Spectrogram => &[Component, History, Frequency, Response, Appearance],
+            ModuleKind::Waveform => &[Component, Channels, TimeWindow, Amplitude, Appearance],
+            ModuleKind::Stereometer => &[Component, Display, Appearance, Correlation],
+            ModuleKind::Oscilloscope => {
+                &[Component, Channels, Sync, TimeWindow, Amplitude, Appearance]
+            }
         }
     }
 
@@ -414,7 +468,8 @@ impl ModulePane {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum TraceStyle {
     Bars,
     Line,
@@ -857,6 +912,7 @@ mod tests {
                 _ => None,
             })
         };
+        pane.select_section(SettingsSection::Geometry);
         let output = render(&mut pane, 0, vec![]);
         assert!(text_rect(&output, "Geometry").is_none());
         let header = text_rect(&output, "Dimensions").unwrap().center();
@@ -891,7 +947,7 @@ mod tests {
     fn icon_tabs_show_one_section_and_preserve_per_module_and_pane_selection() {
         let context = egui::Context::default();
         let mut pane = ModulePane::new(ModuleKind::Waterfall);
-        assert_eq!(pane.active_section(), SettingsSection::Geometry);
+        assert_eq!(pane.active_section(), SettingsSection::Component);
         assert_eq!(pane.sections().last(), Some(&SettingsSection::Camera));
         assert!(!pane.sections().contains(&SettingsSection::History));
         pane.select_section(SettingsSection::Camera);
@@ -923,18 +979,19 @@ mod tests {
                 .any(|label| label == "Camera" || label == "Auto-orbit")
         );
         pane.kind = ModuleKind::Spectrum;
-        assert_eq!(pane.active_section(), SettingsSection::Frequency);
+        assert_eq!(pane.active_section(), SettingsSection::Component);
         pane.select_section(SettingsSection::Appearance);
         pane.kind = ModuleKind::Waterfall;
         assert_eq!(pane.active_section(), SettingsSection::Geometry);
         pane.kind = ModuleKind::Spectrum;
         assert_eq!(pane.active_section(), SettingsSection::Appearance);
         let other = ModulePane::new(ModuleKind::Spectrum);
-        assert_eq!(other.active_section(), SettingsSection::Frequency);
+        assert_eq!(other.active_section(), SettingsSection::Component);
         pane.kind = ModuleKind::Waveform;
         assert_eq!(
             pane.sections(),
             &[
+                SettingsSection::Component,
                 SettingsSection::Channels,
                 SettingsSection::TimeWindow,
                 SettingsSection::Amplitude,
@@ -1007,7 +1064,8 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum Palette {
     #[default]
     Theme,

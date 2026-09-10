@@ -21,7 +21,8 @@ const DEFAULT_HISTORY_SECONDS: f32 = 2.0;
 const MIN_HISTORY_SECONDS: f32 = 0.1;
 const MAX_HISTORY_SECONDS: f32 = 30.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum RenderMode {
     Surface,
     Lines,
@@ -216,6 +217,35 @@ impl Default for Waterfall {
 }
 
 impl Waterfall {
+    pub(super) const FACTORY_PRESETS: [&'static str; 3] =
+        ["Balanced Surface", "Detailed Lines", "Sparse Bars"];
+
+    pub(super) fn factory_settings(index: usize) -> Option<WaterfallSettings> {
+        let mut module = Self::default();
+        match index {
+            0 => {}
+            1 => {
+                module.mode = RenderMode::Lines;
+                module.seconds = 4.0;
+                module.detail = 96;
+                module.palette = Palette::Ocean;
+                module.line_width = 1.4;
+                module.surface_walls = false;
+            }
+            2 => {
+                module.mode = RenderMode::Bars;
+                module.seconds = 3.0;
+                module.detail = 40;
+                module.palette = Palette::Ember;
+                module.bar_bands = 12;
+                module.bar_time_step = 5;
+                module.floor_grid = false;
+            }
+            _ => return None,
+        }
+        Some(module.settings_snapshot())
+    }
+
     pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
         self.history.ingest(frame, now);
     }
