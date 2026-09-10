@@ -138,12 +138,27 @@ impl FrequencySettings {
         }
     }
 
+    pub fn fraction_for_frequency(&self, frequency_hz: f32, sample_rate: u32) -> f32 {
+        let high = self.max_hz.min(sample_rate as f32 / 2.0).max(1.0);
+        let low = self.min_hz.min(high * 0.99).max(0.01);
+        let frequency_hz = frequency_hz.clamp(low, high);
+        if self.logarithmic {
+            (frequency_hz / low).ln() / (high / low).ln()
+        } else {
+            (frequency_hz - low) / (high - low)
+        }
+        .clamp(0.0, 1.0)
+    }
+
     pub fn intensity(&self, db: f32) -> f32 {
         ((db - self.floor) / (self.ceiling - self.floor)).clamp(0.0, 1.0)
     }
 
     pub fn axis_label(&self, fraction: f32, sample_rate: u32) -> String {
-        let hz = self.frequency(fraction, sample_rate);
+        self.label_frequency(self.frequency(fraction, sample_rate))
+    }
+
+    pub fn label_frequency(&self, hz: f32) -> String {
         if self.note_labels {
             note_label(hz, self.tuning_hz)
         } else {
@@ -226,6 +241,44 @@ impl FrequencyData {
             frame.sequence,
             now,
         )
+    }
+
+    pub fn snapshot_levels(
+        settings: &FrequencySettings,
+        magnitudes: &[f32],
+        source_sample_rate: u32,
+        fft_size: usize,
+        display_sample_rate: u32,
+    ) -> [f32; BANDS] {
+        if magnitudes.is_empty() {
+            return [-120.0; BANDS];
+        }
+        let bins_per_hz = fft_size as f32 / source_sample_rate.max(1) as f32;
+        let source_nyquist = source_sample_rate as f32 * 0.5;
+        let mut targets = [-120.0; BANDS];
+        for (index, target) in targets.iter_mut().enumerate() {
+            let low = settings.frequency(index as f32 / BANDS as f32, display_sample_rate);
+            let high = settings
+                .frequency((index + 1) as f32 / BANDS as f32, display_sample_rate)
+                .min(source_nyquist);
+            if low >= source_nyquist {
+                continue;
+            }
+            let start = ((low * bins_per_hz).ceil() as usize).min(magnitudes.len());
+            let end = ((high * bins_per_hz).ceil() as usize).min(magnitudes.len());
+            let magnitude = if start < end {
+                magnitudes[start..end]
+                    .iter()
+                    .copied()
+                    .fold(0.0_f32, f32::max)
+            } else {
+                let bin =
+                    (((low + high) * 0.5 * bins_per_hz).round() as usize).min(magnitudes.len() - 1);
+                magnitudes[bin]
+            };
+            *target = (20.0 * magnitude.max(1.0e-7).log10() + settings.gain).clamp(-120.0, 48.0);
+        }
+        smooth_frequency(&targets, settings.frequency_smoothing)
     }
 
     fn update_magnitudes(
@@ -476,6 +529,35 @@ mod tests {
         assert_eq!(settings.axis_label(0.0, 48000), "440");
         settings.note_labels = true;
         assert_eq!(settings.axis_label(0.0, 48000), "A4");
+    }
+
+    #[test]
+    fn frequency_fraction_round_trips_for_linear_and_log_scales() {
+        let mut settings = FrequencySettings::default();
+        for logarithmic in [false, true] {
+            settings.logarithmic = logarithmic;
+            for fraction in [0.0, 0.1, 0.5, 0.9, 1.0] {
+                let frequency = settings.frequency(fraction, 48_000);
+                assert!(
+                    (settings.fraction_for_frequency(frequency, 48_000) - fraction).abs() < 1.0e-5
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_does_not_repeat_the_nyquist_bin_above_source_bandwidth() {
+        let settings = FrequencySettings {
+            min_hz: 10.0,
+            max_hz: 24_000.0,
+            logarithmic: false,
+            frequency_smoothing: 0,
+            ..FrequencySettings::default()
+        };
+        let magnitudes = vec![1.0; 12_001];
+        let levels = FrequencyData::snapshot_levels(&settings, &magnitudes, 24_000, 24_000, 48_000);
+        assert!(levels[..48].iter().all(|level| *level > -0.01));
+        assert!(levels[48..].iter().all(|level| *level == -120.0));
     }
 
     #[test]

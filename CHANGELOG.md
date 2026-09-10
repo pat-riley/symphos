@@ -42,6 +42,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- Retained peak markers and latched clipping for the footer's independent Left,
+  Right, and Mix meters, with an explicit reset action.
+- Live reference capture and comparison overlays in Spectrum panes.
+- Pinned frequency, note, level, and time measurements in frozen Spectrum and
+  Spectrogram panes.
 - A dedicated Oscilloscope module with local pitch-period locking, threshold
   triggering, free run, single/multiple-cycle views, Left/Right/Mid/Side routing,
   auto/manual scaling, RGB and multi-band traces, and aligned afterglow overlays.

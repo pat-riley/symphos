@@ -3,9 +3,9 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Pos2, Rect, Sense, Stroke, Vec2};
 
 use super::{
-    Palette, TraceStyle,
+    ModuleRenderState, Palette, TraceStyle,
     frequency::{BANDS, FrequencyData, FrequencySettings},
-    frequency_label, label, mix, settings_panel,
+    label, mix, settings_panel,
 };
 use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
@@ -13,6 +13,8 @@ use crate::{analysis::AnalysisFrame, theme::AppTheme};
 pub struct Spectrum {
     data: FrequencyData,
     applied_settings: Option<FrequencySettings>,
+    reference: Option<ReferenceSpectrum>,
+    pinned: Option<FrequencyPin>,
     peak_hold: bool,
     hold_seconds: f32,
     peak_falloff: f32,
@@ -28,6 +30,21 @@ pub struct Spectrum {
     contrast: f32,
     grid: bool,
     labels: bool,
+}
+
+struct ReferenceSpectrum {
+    magnitudes: Vec<f32>,
+    sample_rate: u32,
+    fft_size: usize,
+    levels: [f32; BANDS],
+    processed_settings: FrequencySettings,
+    processed_sample_rate: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FrequencyPin {
+    frequency_hz: f32,
+    dbfs: f32,
 }
 
 module_settings!(Spectrum, SpectrumSettings, {
@@ -51,6 +68,8 @@ impl Default for Spectrum {
         Self {
             data: FrequencyData::default(),
             applied_settings: None,
+            reference: None,
+            pinned: None,
             peak_hold: false,
             hold_seconds: 1.0,
             peak_falloff: 18.0,
@@ -73,9 +92,11 @@ impl Default for Spectrum {
 impl Spectrum {
     pub fn reset_settings(&mut self) {
         let mut data = std::mem::take(&mut self.data);
+        let reference = self.reference.take();
         data.settings = FrequencySettings::default();
         *self = Self {
             data,
+            reference,
             ..Self::default()
         };
     }
@@ -90,14 +111,100 @@ impl Spectrum {
         self.data.clear();
         self.reset_peaks();
         self.applied_settings = None;
+        self.pinned = None;
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
+    pub fn clear_cursor(&mut self) {
+        self.pinned = None;
+    }
+
+    fn capture_reference(&mut self, frame: &AnalysisFrame) {
+        if frame.bins.is_empty() {
+            return;
+        }
+        let magnitudes: Vec<_> = frame.bins.iter().map(|bin| bin.magnitude).collect();
+        let levels = FrequencyData::snapshot_levels(
+            &self.data.settings,
+            &magnitudes,
+            frame.sample_rate,
+            frame.fft_size,
+            frame.sample_rate,
+        );
+        self.reference = Some(ReferenceSpectrum {
+            magnitudes,
+            sample_rate: frame.sample_rate,
+            fft_size: frame.fft_size,
+            levels,
+            processed_settings: self.data.settings.clone(),
+            processed_sample_rate: frame.sample_rate,
+        });
+    }
+
+    fn refresh_reference(&mut self, display_sample_rate: u32) {
+        let Some(reference) = &mut self.reference else {
+            return;
+        };
+        if !reference
+            .processed_settings
+            .same_processing(&self.data.settings)
+            || reference.processed_sample_rate != display_sample_rate
+        {
+            reference.levels = FrequencyData::snapshot_levels(
+                &self.data.settings,
+                &reference.magnitudes,
+                reference.sample_rate,
+                reference.fft_size,
+                display_sample_rate,
+            );
+            reference.processed_settings = self.data.settings.clone();
+            reference.processed_sample_rate = display_sample_rate;
+        }
+    }
+
+    fn measurement_at(
+        settings: &FrequencySettings,
+        levels: &[f32; BANDS],
+        fraction: f32,
+        sample_rate: u32,
+    ) -> FrequencyPin {
+        let fraction = fraction.clamp(0.0, 0.999);
+        let index = (fraction * BANDS as f32) as usize;
+        FrequencyPin {
+            frequency_hz: settings.frequency(fraction, sample_rate),
+            dbfs: levels[index],
+        }
+    }
+
+    pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
         settings_panel(ui, "Frequency Range", |ui| {
             self.data.settings.range_controls(ui)
         });
         settings_panel(ui, "Signal Response", |ui| {
             self.data.settings.response_controls(ui);
+            super::settings_group(ui, "Reference", |ui| {
+                let capture = if self.reference.is_some() {
+                    "Replace live reference"
+                } else {
+                    "Capture live reference"
+                };
+                if ui
+                    .add_enabled(!frame.bins.is_empty(), egui::Button::new(capture))
+                    .help_text("Capture the current spectrum as a fixed comparison while live analysis continues.")
+                    .clicked()
+                {
+                    self.capture_reference(frame);
+                }
+                if ui
+                    .add_enabled(
+                        self.reference.is_some(),
+                        egui::Button::new("Clear reference"),
+                    )
+                    .help_text("Remove only the captured comparison trace.")
+                    .clicked()
+                {
+                    self.reference = None;
+                }
+            });
             super::settings_group(ui, "Peak markers", |ui| {
                 if ui.checkbox(&mut self.peak_hold, "Peak hold")
                 .help_text("Track recent maxima above the live trace. Starts a fresh measurement when enabled.").changed() {
@@ -157,6 +264,16 @@ impl Spectrum {
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
                     "Show dB and frequency labels. Frequency Range can replace Hz with note names.",
                 );
+                if ui
+                    .add_enabled(
+                        self.pinned.is_some(),
+                        egui::Button::new("Clear pinned measurement"),
+                    )
+                    .help_text("Remove the pane-local measurement crosshair.")
+                    .clicked()
+                {
+                    self.pinned = None;
+                }
             });
         });
     }
@@ -187,8 +304,9 @@ impl Spectrum {
         frame: &AnalysisFrame,
         theme: &AppTheme,
         now: Instant,
-        live: bool,
+        render_state: ModuleRenderState,
     ) {
+        let ModuleRenderState { live, frozen } = render_state;
         if live {
             if self
                 .applied_settings
@@ -214,6 +332,7 @@ impl Spectrum {
                 self.update_peaks(now);
             }
         }
+        self.refresh_reference(frame.sample_rate);
         let painter = ui.painter_at(rect);
         let plot = Rect::from_min_max(
             rect.min + Vec2::new(if self.labels { 36.0 } else { 10.0 }, 12.0),
@@ -306,6 +425,23 @@ impl Spectrum {
                 ));
             }
         }
+        if let Some(reference) = &self.reference {
+            let points: Vec<_> = reference
+                .levels
+                .iter()
+                .enumerate()
+                .map(|(index, db)| {
+                    Pos2::new(
+                        plot.left() + (index as f32 + 0.5) * band_width,
+                        plot.bottom() - settings.intensity(*db) * plot.height(),
+                    )
+                })
+                .collect();
+            painter.add(egui::Shape::line(
+                points,
+                Stroke::new(1.5, theme.foreground.gamma_multiply(0.65)),
+            ));
+        }
         if self.labels {
             for step in 0..=4 {
                 let t = step as f32 / 4.0;
@@ -317,13 +453,53 @@ impl Spectrum {
                 );
             }
         }
-        let response = ui.interact(plot, ui.id().with("spectrum-hover"), Sense::hover());
+        if frozen && let Some(pin) = self.pinned {
+            let fraction = settings.fraction_for_frequency(pin.frequency_hz, frame.sample_rate);
+            let x = plot.left() + fraction * plot.width();
+            let y = plot.bottom() - settings.intensity(pin.dbfs) * plot.height();
+            let stroke = Stroke::new(1.0, theme.warning);
+            painter.line_segment(
+                [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)],
+                stroke,
+            );
+            label(
+                &painter,
+                Pos2::new(
+                    (x + 5.0).min(plot.right() - 80.0),
+                    (y - 16.0).max(plot.top()),
+                ),
+                format!(
+                    "{} · {:.1} dBFS",
+                    settings.label_frequency(pin.frequency_hz),
+                    pin.dbfs
+                ),
+                theme.warning,
+            );
+        }
+        let response = ui.interact(plot, ui.id().with("spectrum-measure"), Sense::click());
+        if frozen
+            && response.clicked()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let fraction = ((pointer.x - plot.left()) / plot.width()).clamp(0.0, 0.999);
+            self.pinned = Some(Self::measurement_at(
+                settings,
+                &self.data.levels,
+                fraction,
+                frame.sample_rate,
+            ));
+        }
         if let Some(pointer) = response.hover_pos() {
             let t = ((pointer.x - plot.left()) / plot.width()).clamp(0.0, 0.999);
             let index = (t * BANDS as f32) as usize;
+            let action = if frozen { " · click to pin" } else { "" };
             response.help_text(format!(
-                "{} Hz · {:.1} dBFS",
-                frequency_label(settings.frequency(t, frame.sample_rate)),
+                "{} · {:.1} dBFS{action}",
+                settings.label_frequency(settings.frequency(t, frame.sample_rate)),
                 self.data.levels[index]
             ));
         }
@@ -359,7 +535,10 @@ mod tests {
                     &frame,
                     &AppTheme::default(),
                     now,
-                    true,
+                    ModuleRenderState {
+                        live: true,
+                        frozen: false,
+                    },
                 );
             });
             output.textures_delta.clear();
@@ -396,8 +575,9 @@ mod tests {
                 labels: false,
                 ..Spectrum::default()
             };
-            let mut controls =
-                context.run_ui(egui::RawInput::default(), |ui| spectrum.controls(ui));
+            let mut controls = context.run_ui(egui::RawInput::default(), |ui| {
+                spectrum.controls(ui, &AnalysisFrame::default())
+            });
             controls.textures_delta.clear();
             let labels: Vec<_> = controls
                 .shapes
@@ -420,7 +600,10 @@ mod tests {
                     &AnalysisFrame::default(),
                     &AppTheme::default(),
                     Instant::now(),
-                    false,
+                    ModuleRenderState {
+                        live: false,
+                        frozen: false,
+                    },
                 );
             });
             output.textures_delta.clear();
@@ -474,5 +657,67 @@ mod tests {
         assert_eq!(spectrum.peaks[0], -5.0);
         spectrum.reset_peaks();
         assert!(spectrum.peaks.iter().all(|p| *p == -120.0));
+    }
+
+    #[test]
+    fn live_reference_reprocesses_raw_bins_and_is_not_copied_as_a_setting() {
+        let frame = AnalysisFrame {
+            sequence: 7,
+            fft_size: 512,
+            bins: vec![
+                crate::analysis::FrequencyBin {
+                    magnitude: 0.1,
+                    ..Default::default()
+                };
+                257
+            ],
+            ..AnalysisFrame::default()
+        };
+        let mut source = Spectrum::default();
+        source.capture_reference(&frame);
+        assert!(
+            source
+                .reference
+                .as_ref()
+                .unwrap()
+                .levels
+                .iter()
+                .all(|level| (*level + 20.0).abs() < 0.01)
+        );
+
+        source.data.settings.gain = 6.0;
+        source.refresh_reference(frame.sample_rate);
+        assert!(
+            source
+                .reference
+                .as_ref()
+                .unwrap()
+                .levels
+                .iter()
+                .all(|level| (*level + 14.0).abs() < 0.01)
+        );
+
+        let mut target = Spectrum::default();
+        target.apply_settings(&source.settings_snapshot());
+        assert!(target.reference.is_none());
+        source.reset_settings();
+        assert!(source.reference.is_some());
+    }
+
+    #[test]
+    fn pinned_measurement_uses_the_selected_frequency_band_and_clears() {
+        let mut spectrum = Spectrum::default();
+        spectrum.data.levels[48] = -17.5;
+        spectrum.pinned = Some(Spectrum::measurement_at(
+            &spectrum.data.settings,
+            &spectrum.data.levels,
+            0.5,
+            48_000,
+        ));
+        let pin = spectrum.pinned.unwrap();
+        assert!((pin.frequency_hz - spectrum.data.settings.frequency(0.5, 48_000)).abs() < 0.01);
+        assert_eq!(pin.dbfs, -17.5);
+        spectrum.clear_cursor();
+        assert!(spectrum.pinned.is_none());
     }
 }
