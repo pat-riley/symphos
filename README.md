@@ -226,7 +226,8 @@ maxima are held independently, clipping latches visibly, and both can be reset
 from Shared options or by restarting capture. Mixed levels are measured from the
 summed signal, including phase cancellation. Waveform time
 windows are independent of the FFT capture window. The source selector
-and a compact settings icon remain at the top right; there is no top-left menu button.
+and a compact settings icon remain at the top right, with the Symphos mark at
+the top left.
 
 The top-right **settings icon**, matched to the source picker's height, opens
 pane-size reset, fullscreen (F11), and the FFT inspector with
