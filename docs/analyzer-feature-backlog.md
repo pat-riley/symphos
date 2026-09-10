@@ -59,7 +59,7 @@ Status meanings:
 
 | Capability | Status | Symphos direction |
 | --- | --- | --- |
-| Saved module presets | **Planned** | Persist individual component settings in a versioned format. |
+| Saved module presets | **Shipped** | Each component type has factory and named user settings presets with versioned import/export. |
 | Saved workspace layouts | **Planned** | Restore pane assignments, routing, window positions, and display-aware layouts. |
 | Detached/pop-out components | **Planned** | Support docking, tiling, detaching, fullscreen, and multi-display placement. |
 | Horizontal desktop bar / stick mode | **Evaluate** | Prototype after detached windows work reliably on Wayland. |
@@ -72,7 +72,7 @@ Status meanings:
 1. Finish waveform validation and independent component routing.
 2. Add loudness and calibrated VU modules; stereo-image and phase-correlation
    are shipped.
-3. Add persistent component presets and reference-spectrum workflows.
+3. Add reference-spectrum workflows; persistent component presets are shipped.
 4. Add bounded audio recording and retrospective clips.
 5. Establish detached workspaces and a DAW bridge before evaluating full meter plug-ins.
 6. Expand platform and video-output integrations after the core contracts stabilize.

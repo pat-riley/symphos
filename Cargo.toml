@@ -15,12 +15,16 @@ categories = ["multimedia::audio", "visualization"]
 anyhow = "1.0"
 arc-swap = "1.7"
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wayland", "wgpu", "x11"] }
+egui = { version = "0.36.1", default-features = false, features = ["serde"] }
 env_logger = "0.11"
 log = "0.4"
 # Keep the API baseline compatible with Ubuntu 24.04's PipeWire 1.0 headers.
 pipewire = { version = "0.10.1", features = ["v1_0_0"] }
 realfft = "3.5.0"
+rfd = "0.17.2"
 rtrb = "0.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [profile.release]
 codegen-units = 1

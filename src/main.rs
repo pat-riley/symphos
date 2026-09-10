@@ -8,6 +8,7 @@ mod icons;
 mod issues;
 mod modules;
 mod parameter;
+mod presets;
 mod shortcuts;
 mod theme;
 

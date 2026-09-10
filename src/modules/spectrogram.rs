@@ -83,6 +83,33 @@ impl Default for Spectrogram {
 }
 
 impl Spectrogram {
+    pub(super) const FACTORY_PRESETS: [&'static str; 3] =
+        ["Balanced History", "Fast Detail", "Vertical Long View"];
+
+    pub(super) fn factory_settings(index: usize) -> Option<SpectrogramSettings> {
+        let mut module = Self::default();
+        match index {
+            0 => {}
+            1 => {
+                module.seconds = 2.0;
+                module.time_pixels = 512;
+                module.history.data.settings.smoothing = 0.35;
+                module.palette = Palette::Heatmap;
+                module.contrast = 1.35;
+                module.grid = true;
+            }
+            2 => {
+                module.seconds = 15.0;
+                module.vertical = true;
+                module.time_pixels = 512;
+                module.palette = Palette::Ocean;
+                module.grid = true;
+            }
+            _ => return None,
+        }
+        Some(module.settings_snapshot())
+    }
+
     pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
         self.history.ingest(frame, now);
     }

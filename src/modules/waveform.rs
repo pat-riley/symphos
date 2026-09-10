@@ -6,7 +6,8 @@ use super::{Palette, TraceStyle, label, mix, properties_combo, settings_panel};
 use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum WaveformChannel {
     Left,
     Right,
@@ -36,7 +37,8 @@ impl WaveformChannel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum WaveformColorMode {
     Static,
     MultiBand,
@@ -132,6 +134,33 @@ impl Default for Waveform {
 }
 
 impl Waveform {
+    pub(super) const FACTORY_PRESETS: [&'static str; 3] =
+        ["Stereo Scroll", "Triggered Mid", "Multiband Loop"];
+
+    pub(super) fn factory_settings(index: usize) -> Option<WaveformSettings> {
+        let mut module = Self::default();
+        match index {
+            0 => {}
+            1 => {
+                module.two_channels = false;
+                module.channels[0] = WaveformChannel::Mid;
+                module.speed_ms = 80.0;
+                module.trigger = true;
+                module.auto_scale = true;
+                module.grid = true;
+            }
+            2 => {
+                module.speed_ms = 500.0;
+                module.looped = true;
+                module.color_mode = WaveformColorMode::MultiBand;
+                module.peak_history = true;
+                module.grid = true;
+            }
+            _ => return None,
+        }
+        Some(module.settings_snapshot())
+    }
+
     pub fn reset_settings(&mut self) {
         *self = Self::default();
     }

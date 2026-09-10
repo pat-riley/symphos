@@ -90,6 +90,33 @@ impl Default for Spectrum {
 }
 
 impl Spectrum {
+    pub(super) const FACTORY_PRESETS: [&'static str; 3] =
+        ["Balanced Bars", "Smooth Line", "Peak Inspector"];
+
+    pub(super) fn factory_settings(index: usize) -> Option<SpectrumSettings> {
+        let mut module = Self::default();
+        match index {
+            0 => {}
+            1 => {
+                module.style = TraceStyle::Line;
+                module.data.settings.smoothing = 0.86;
+                module.data.settings.frequency_smoothing = 2;
+                module.peak_hold = true;
+                module.palette = Palette::Ocean;
+            }
+            2 => {
+                module.style = TraceStyle::Filled;
+                module.data.settings.smoothing = 0.35;
+                module.peak_hold = true;
+                module.infinite_hold = true;
+                module.palette = Palette::Heatmap;
+                module.contrast = 1.35;
+            }
+            _ => return None,
+        }
+        Some(module.settings_snapshot())
+    }
+
     pub fn reset_settings(&mut self) {
         let mut data = std::mem::take(&mut self.data);
         let reference = self.reference.take();

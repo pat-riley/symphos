@@ -5,6 +5,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Response, Stroke, Vec2};
 pub enum Icon {
     Pause,
     Play,
+    Component,
     Camera,
     Time,
     Geometry,
@@ -69,6 +70,11 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         );
     };
     match icon {
+        Icon::Component => {
+            for (x, y) in [(3.0, 3.0), (11.0, 3.0), (3.0, 11.0), (11.0, 11.0)] {
+                box_outline(p(x, y), p(x + 6.0, y + 6.0));
+            }
+        }
         Icon::Pause => {
             for x in [5.0, 12.0] {
                 painter.rect_filled(Rect::from_min_max(p(x, 4.0), p(x + 3.0, 16.0)), 0.5, color);

@@ -7,7 +7,8 @@ use crate::help::HoverHelp;
 
 pub const BANDS: usize = 96;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
 pub struct FrequencySettings {
     pub logarithmic: bool,
     pub min_hz: f32,
