@@ -15,7 +15,15 @@ fn main() {
     // SHA alone, this distinguishes installed local edits and works in archives.
     let mut files = Vec::new();
     sources(Path::new("src"), &mut files);
-    files.extend(["Cargo.toml", "Cargo.lock", "build.rs"].map(Into::into));
+    files.extend(
+        [
+            "Cargo.toml",
+            "Cargo.lock",
+            "build.rs",
+            "assets/symphos-logo.svg",
+        ]
+        .map(Into::into),
+    );
     files.sort();
     let mut hash = 0xcbf29ce484222325_u64;
     for file in files {

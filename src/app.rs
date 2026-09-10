@@ -14,6 +14,8 @@ use crate::theme::AppTheme;
 
 const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
+const LOGO_HEIGHT: f32 = 26.0;
+const LOGO_ASPECT_RATIO: f32 = 1197.0 / 761.0;
 
 pub struct SymphosApp {
     engine: AudioEngine,
@@ -43,6 +45,7 @@ pub struct SymphosApp {
 
 impl SymphosApp {
     pub fn new(context: &eframe::CreationContext<'_>) -> Self {
+        egui_extras::install_image_loaders(&context.egui_ctx);
         let theme = AppTheme::load_omarchy();
         apply_style(&context.egui_ctx, &theme);
         let engine = AudioEngine::start();
@@ -471,6 +474,7 @@ impl eframe::App for SymphosApp {
             Pos2::new(rect.right() - 12.0, rect.top() + 48.0),
         );
         let mut nav = ui.new_child(egui::UiBuilder::new().id_salt("navbar").max_rect(header));
+        app_logo(ui, header, self.theme.foreground);
         nav.horizontal_centered(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().interact_size.y = 26.0;
@@ -646,6 +650,26 @@ impl eframe::App for SymphosApp {
         ui.ctx()
             .request_repaint_after(Duration::from_secs_f32(1.0 / target_rate.max(1) as f32));
     }
+}
+
+fn app_logo(ui: &mut egui::Ui, header: Rect, tint: Color32) -> egui::Response {
+    let rect = app_logo_rect(header);
+    ui.put(
+        rect,
+        egui::Image::new(egui::include_image!("../assets/symphos-logo.svg"))
+            .fit_to_exact_size(rect.size())
+            .tint(tint)
+            .sense(Sense::hover()),
+    )
+    .on_hover_text("Symphos")
+}
+
+fn app_logo_rect(header: Rect) -> Rect {
+    let size = Vec2::new(LOGO_HEIGHT * LOGO_ASPECT_RATIO, LOGO_HEIGHT);
+    Rect::from_center_size(
+        Pos2::new(header.left() + size.x * 0.5, header.center().y),
+        size,
+    )
 }
 
 fn settings_header(ui: &mut egui::Ui, kind: ModuleKind) -> egui::Response {
@@ -1112,6 +1136,18 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn logo_uses_its_source_aspect_ratio_and_anchors_to_header_left() {
+        let header = Rect::from_min_max(Pos2::new(12.0, 8.0), Pos2::new(1012.0, 48.0));
+        let logo = app_logo_rect(header);
+
+        assert!((logo.left() - header.left()).abs() < 0.01);
+        assert!((logo.center().y - header.center().y).abs() < 0.01);
+        assert!((logo.height() - LOGO_HEIGHT).abs() < 0.01);
+        assert!((logo.width() / logo.height() - LOGO_ASPECT_RATIO).abs() < 0.01);
+        assert!(header.contains_rect(logo));
+    }
 
     #[test]
     fn narrow_pane_picker_reserves_space_for_both_action_buttons() {
