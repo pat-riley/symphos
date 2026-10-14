@@ -7,6 +7,11 @@ the response, and perform or share the result.
 Live progress is tracked in the
 [GitHub roadmap issue](https://github.com/pat-riley/symphos/issues/19).
 
+The [desktop and plugin plan](cross-platform-plan.md) brings macOS portability
+and plugin feasibility forward as a parallel workstream, while retaining
+Omarchy compatibility. It does not depend on completing the scene editor.
+The [landing page brief](landing-page-brief.md) covers the separate public site.
+
 The complete [analyzer feature backlog](analyzer-feature-backlog.md) records
 the current parity inventory, shipped waveform work, proposed metering modules,
 capture workflows, workspace features, and platform integrations. The roadmap

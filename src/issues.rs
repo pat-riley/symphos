@@ -22,11 +22,18 @@ fn state() -> &'static Mutex<IssueLog> {
 }
 
 pub fn init() {
+    #[cfg(not(target_os = "macos"))]
     let root = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state")));
+    #[cfg(target_os = "macos")]
+    let root = std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Library/Logs"));
     if let Some(root) = root {
-        let dir = root.join("symphos");
+        let dir = root.join(if cfg!(target_os = "macos") {
+            "Symphos"
+        } else {
+            "symphos"
+        });
         if std::fs::create_dir_all(&dir).is_ok() {
             state().lock().unwrap_or_else(|e| e.into_inner()).path = Some(dir.join("issues.log"));
         }

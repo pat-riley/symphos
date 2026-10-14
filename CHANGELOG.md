@@ -42,6 +42,13 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- Initial macOS system-playback capture through a private, nonmuting Core Audio
+  tap, with fresh analysis sessions on reconnect and a manual capture retry.
+- Local macOS `.app` packaging, audio permission metadata, Mac shortcut labels,
+  platform log paths, and macOS CI alongside the pinned Linux PipeWire baseline.
+  The Mac build is a developer preview; plugins and microphone/input selection
+  on Mac are separate milestones.
+
 - Retained peak markers and latched clipping for the footer's independent Left,
   Right, and Mix meters, with an explicit reset action.
 - Live reference capture and comparison overlays in Spectrum panes.

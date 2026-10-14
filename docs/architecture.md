@@ -2,7 +2,7 @@
 
 ## Runtime lanes
 
-1. **PipeWire lane** negotiates native float audio and copies interleaved
+1. **Capture lane** (PipeWire on Linux, Core Audio taps on macOS) negotiates float audio and copies interleaved
    samples into a fixed-size SPSC ring. The callback never locks, allocates,
    logs, or performs FFT work.
 2. **Analysis lane** drains the ring, maintains overlapping windows, computes
@@ -245,3 +245,31 @@ from the analysis-side archive. No audio callback work was added.
 PipeWire disconnects, disappearing devices, format changes, and ring overflow
 are status events. They do not panic the process. Source selection rebuilds the
 capture stream off the real-time callback.
+
+## Platform capture boundary
+
+`src/audio.rs` defines source/status/event types and selects `audio/linux.rs`
+or `audio/macos.rs` at compile time. The Linux implementation retains its
+PipeWire callback, selection rules, native features, and command loop. Source
+fields still use the original `global_id`/`node_name` names for compatibility;
+Mac uses a stable `coreaudio:system` identifier. Generalizing these names can
+follow when more Mac sources or another backend require it.
+
+On Mac, a control worker owns a private Core Audio tap and aggregate device.
+`macos_capture.m` handles native lifetimes and exposes a small C ABI. Its IOProc
+forwards borrowed Float32 pointers and strides to Rust; Rust copies into the
+bounded SPSC ring, counts drops, and sanitizes nonfinite values. No FFT, logging,
+allocation, mutex, or Objective-C messaging occurs in the sample callback.
+
+Each reconnect stops the previous native session and allocates a separate ring
+and analysis runtime. The new runtime shares the existing analysis controls,
+but never inherits samples or history from a previous format. The UI adopts
+that runtime via a control event. Tap format/default-output changes request a
+reconnect; a stalled stream shows a waiting state and can be retried manually.
+Shutdown stops the IOProc and unregisters property listeners before releasing
+the callback context. If Core Audio teardown fails, the context is deliberately
+retained and an error is logged rather than freeing memory still held by the OS.
+
+Omarchy theme lookup runs only on Linux. Mac uses Symphos Dark and writes bounded
+diagnostics under `~/Library/Logs/Symphos`. See [Mac development](macos-development.md)
+for current coverage and unresolved device/permission scenarios.

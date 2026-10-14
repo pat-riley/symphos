@@ -1,5 +1,8 @@
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 use eframe::egui::Color32;
@@ -41,6 +44,9 @@ impl Default for AppTheme {
 
 impl AppTheme {
     pub fn load_omarchy() -> Self {
+        #[cfg(not(target_os = "linux"))]
+        return Self::default();
+        #[cfg(target_os = "linux")]
         Self::load_current_omarchy()
             .or_else(load_legacy_omarchy)
             .unwrap_or_default()
@@ -49,16 +55,22 @@ impl AppTheme {
     /// Load Omarchy's staged active palette. This is intentionally filesystem-only so it is
     /// cheap enough for the UI to poll while running.
     pub fn load_current_omarchy() -> Option<Self> {
-        let current = current_state_path()?;
-        let name = fs::read_to_string(current.join("theme.name"))
-            .ok()
-            .map(|name| display_theme_name(name.trim()))
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "Omarchy".into());
-        let contents = fs::read_to_string(current.join("theme/colors.toml")).ok()?;
-        Some(Self::from_colors(name, &contents))
+        #[cfg(not(target_os = "linux"))]
+        return None;
+        #[cfg(target_os = "linux")]
+        {
+            let current = current_state_path()?;
+            let name = fs::read_to_string(current.join("theme.name"))
+                .ok()
+                .map(|name| display_theme_name(name.trim()))
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "Omarchy".into());
+            let contents = fs::read_to_string(current.join("theme/colors.toml")).ok()?;
+            Some(Self::from_colors(name, &contents))
+        }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn from_colors(name: String, contents: &str) -> Self {
         let mut theme = Self::default();
         let declared_mode = text_value(contents, "mode");
@@ -97,6 +109,7 @@ impl AppTheme {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn load_legacy_omarchy() -> Option<AppTheme> {
     let name = current_theme_name()?;
     let path = theme_path(&name)?;
@@ -104,11 +117,13 @@ fn load_legacy_omarchy() -> Option<AppTheme> {
     Some(AppTheme::from_colors(name, &contents))
 }
 
+#[cfg(target_os = "linux")]
 fn current_state_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(Path::new(&home).join(".local/state/omarchy/current"))
 }
 
+#[cfg(target_os = "linux")]
 fn current_theme_name() -> Option<String> {
     let output = Command::new("omarchy")
         .args(["theme", "current"])
@@ -121,6 +136,7 @@ fn current_theme_name() -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+#[cfg(target_os = "linux")]
 fn theme_path(name: &str) -> Option<PathBuf> {
     let slug = name
         .trim()
@@ -154,10 +170,12 @@ fn theme_path(name: &str) -> Option<PathBuf> {
     stock_path.is_file().then_some(stock_path)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn value(contents: &str, key: &str) -> Option<Color32> {
     text_value(contents, key).and_then(|value| parse_hex(&value))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn text_value(contents: &str, key: &str) -> Option<String> {
     contents.lines().find_map(|line| {
         let line = line.trim();
@@ -181,6 +199,7 @@ fn text_value(contents: &str, key: &str) -> Option<String> {
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn display_theme_name(slug: &str) -> String {
     slug.split('-')
         .filter(|part| !part.is_empty())
@@ -194,6 +213,7 @@ fn display_theme_name(slug: &str) -> String {
         .join(" ")
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_hex(value: &str) -> Option<Color32> {
     let value = value.strip_prefix('#')?;
     if value.len() != 6 {
@@ -205,6 +225,7 @@ fn parse_hex(value: &str) -> Option<Color32> {
     Some(Color32::from_rgb(red, green, blue))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
     let mix_channel = |left: u8, right: u8| {
         (left as f32 + (right as f32 - left as f32) * amount.clamp(0.0, 1.0)) as u8
@@ -216,6 +237,7 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn relative_luminance(color: Color32) -> f32 {
     (0.2126 * color.r() as f32 + 0.7152 * color.g() as f32 + 0.0722 * color.b() as f32) / 255.0
 }

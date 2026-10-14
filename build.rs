@@ -10,7 +10,23 @@ fn sources(path: &Path, files: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+fn build_macos_capture() {
+    cc::Build::new()
+        .file("src/audio/macos_capture.m")
+        .flag("-fobjc-arc")
+        .flag("-std=c11")
+        .flag("-mmacosx-version-min=14.2")
+        .warnings_into_errors(true)
+        .compile("symphos_capture");
+    println!("cargo:rustc-link-lib=framework=CoreAudio");
+    println!("cargo:rustc-link-lib=framework=Foundation");
+}
+
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        build_macos_capture();
+    }
+
     // Fingerprint actual build inputs, including uncommitted code. Unlike a Git
     // SHA alone, this distinguishes installed local edits and works in archives.
     let mut files = Vec::new();
