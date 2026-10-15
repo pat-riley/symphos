@@ -68,22 +68,31 @@ impl<T: Numeric + Display> Parameter<'_, T> {
         let low = self.range.start().to_f64();
         let high = self.range.end().to_f64();
         let mut value = before;
-        let inner = ui.horizontal(|ui| {
+        let inspector = crate::modules::inspector_bounds(ui).is_some();
+        let layout = if inspector {
+            egui::Layout::top_down(egui::Align::Min)
+        } else {
+            egui::Layout::left_to_right(egui::Align::Center)
+        };
+        let mut row_rect = ui.available_rect_before_wrap();
+        if !inspector {
+            row_rect.max.y = row_rect.top() + ui.spacing().interact_size.y.max(22.0);
+        }
+        let inner = ui.scope_builder(egui::UiBuilder::new().layout(layout).max_rect(row_rect), |ui| {
             let width = ui.available_width().min(420.0);
-            let label_width = (width * 0.38).min(104.0);
+            let label_width = if inspector { width } else { (width * 0.38).min(104.0) };
             let height = ui.spacing().interact_size.y.max(22.0);
-            // add_sized centers widgets, even when the label's text is aligned.
-            // Give the label a right-aligned column with a fixed width instead.
+            // Fixed columns align labels and numeric fields throughout the inspector.
             let (label_rect, _) = ui.allocate_exact_size(
-                egui::vec2(label_width, height), egui::Sense::hover(),
+                egui::vec2(label_width, if inspector { 16.0 } else { height }), egui::Sense::hover(),
             );
             let mut label_ui = ui.new_child(egui::UiBuilder::new()
                 .max_rect(label_rect)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)));
+                .layout(egui::Layout::left_to_right(egui::Align::Center)));
             label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
             label_ui.add(egui::Label::new(self.text.as_ref()).truncate());
-            let field_width = (width - label_width - ui.spacing().item_spacing.x)
-                .min(ui.available_width()).max(32.0);
+            let field_width = if inspector { width }
+                else { (width - label_width - ui.spacing().item_spacing.x).min(ui.available_width()).max(32.0) };
             let (rect, mut response) = ui.allocate_exact_size(
                 egui::vec2(field_width, height), egui::Sense::click_and_drag(),
             );
@@ -192,18 +201,20 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                     let painter = ui.painter_at(rect);
                     let radius = egui::CornerRadius::same(3);
                     painter.rect_filled(rect, radius, ui.visuals().extreme_bg_color);
+                    // A slim progress track leaves the value readable at every level.
+                    let track = egui::Rect::from_min_max(rect.left_bottom() + egui::vec2(4.0, -4.0), rect.right_bottom() + egui::vec2(-4.0, -2.0));
+                    painter.rect_filled(track, 1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
                     if fraction > 0.0 {
-                        let fill_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + rect.width() * fraction, rect.bottom()));
-                        let fill_radius = egui::CornerRadius { nw: 3, sw: 3, ne: if fraction == 1.0 { 3 } else { 0 }, se: if fraction == 1.0 { 3 } else { 0 } };
-                        let opacity = if response.dragged() { 0.65 } else if response.hovered() { 0.5 } else { 0.35 };
-                        painter.rect_filled(fill_rect, fill_radius, ui.visuals().selection.bg_fill.gamma_multiply(opacity));
+                        let fill = egui::Rect::from_min_max(track.min, egui::pos2(track.left() + track.width() * fraction, track.bottom()));
+                        painter.rect_filled(fill, 1.0, ui.visuals().selection.bg_fill.gamma_multiply(if response.dragged() { 1.0 } else { 0.8 }));
                     }
+                    painter.rect_stroke(rect, radius, ui.visuals().widgets.inactive.bg_stroke, egui::StrokeKind::Inside);
                     if response.hovered() || response.has_focus() {
                         painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.7)), egui::StrokeKind::Inside);
                     }
                     let formatted = if T::INTEGRAL { format!("{value:.0}") } else { egui::emath::format_with_decimals_in_range(value, 0..=3) };
                     painter.text(rect.center(), egui::Align2::CENTER_CENTER, formatted,
-                        egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color());
+                        egui::FontId::monospace(12.0), ui.visuals().text_color());
                 }
                 response = response.on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
             }
@@ -254,6 +265,7 @@ mod tests {
     ) -> (Response, egui::CursorIcon) {
         let mut response = None;
         let mut output = ctx.run_ui(input, |ui| {
+            ui.data_mut(|data| data.insert_temp(egui::Id::new("inspector-bounds"), ui.max_rect()));
             response = Some(
                 ui.add(
                     Parameter::new(value, 0.25..=10.0, 1.0)

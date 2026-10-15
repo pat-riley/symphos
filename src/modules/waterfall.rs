@@ -21,7 +21,7 @@ const DEFAULT_HISTORY_SECONDS: f32 = 2.0;
 const MIN_HISTORY_SECONDS: f32 = 0.1;
 const MAX_HISTORY_SECONDS: f32 = 30.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum RenderMode {
     Surface,
     Lines,

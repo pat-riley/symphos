@@ -1,0 +1,15 @@
+{
+  "name": "Symphos Dev",
+  "dark_mode": true,
+  "ui_scale": 1.0,
+  "background": "#111210",
+  "panel": "#181916",
+  "card": "#1f211d",
+  "foreground": "#e6e5dd",
+  "muted": "#909187",
+  "accent": "#36a166",
+  "accent_alt": "#5f9182",
+  "selection": "#2b543e",
+  "warning": "#c2b53c",
+  "error": "#d06852"
+}

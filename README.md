@@ -16,19 +16,25 @@ and visual parameter mapping are still on the roadmap.
 
 ## Current features
 
+- Tiled workspace with resizable dividers, draggable pane headers, close-and-fill
+  behavior, and a searchable component library. The first launch uses the default
+  waterfall-on-top view; later launches restore the last workspace.
+- Searchable top preset browser with previous/next navigation, layout-only, full-view,
+  and individual component presets, plus named save, rename, and delete actions.
+
 - Spectrogram/waterfall history continues while panes are hidden or the app window
   is occluded. Returning views catch up from the latest 30 seconds of independently
   captured frequency history. Only explicit pane Pause stops that pane's history;
   this is a rolling analyzer buffer, not an audio recording feature.
 - Copy/Paste settings in the module sidebar (Ctrl+Shift+C / Ctrl+Shift+V) applies
   a settings-only snapshot to a matching module. Audio/history, pause state, and
-  global FFT and footer-meter choices stay outside the destination pane. This is
-  session-only; preset files, saved workspaces, and automatic restoration are not
-  implemented.
+  global FFT and footer-meter choices stay outside the destination pane. The
+  clipboard is session-only; reusable component presets are available in the
+  top preset browser.
 - **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
-  the sidebar; F expands/restores a pane; 1–4 select panes; F1 toggles Info View;
-  F11 toggles fullscreen; Escape restores the dashboard or dismisses a modal/menu.
+  the sidebar; I opens the selected panel’s inspector; F toggles panel fullscreen; 1–4 select panes; F1 toggles Info View;
+  F11 toggles fullscreen; Escape exits panel fullscreen or dismisses a modal/menu.
   Typing, key-repeat events, and open menus/modals do not trigger application actions.
 - Numeric module controls: drag the filled field to adjust, Shift-drag for fine
   adjustment, double-click beside its number to reset, or click the number to type
@@ -56,7 +62,7 @@ and visual parameter mapping are still on the roadmap.
 - Spectrum peak hold and waveform controls for independent L/R/Mid/Side lanes,
   scroll or loop motion, speed, static/multi-band/color-map rendering, multi-band
   peak history, triggering, time/amplitude, and color palettes
-- Module-only settings sidebar with icon tabs that follows the selected pane
+- Right-hand component inspector with a panel eye button and collapsible sections
 - Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Toggleable bottom-left Info View with hover descriptions instead of popup tooltips
 - Shared FFT size, window function, analysis channel, and frame-rate controls
@@ -76,10 +82,19 @@ source types and updates automatically as
 devices are added or removed, without a refresh button. Manual choices are kept for
 the session and are not replaced when other devices appear.
 Click a pane to edit its settings.
-Use the dropdown in any pane header to choose its module. Drag the divider below
-the main pane or between the lower panes to resize them. The small fullscreen
-icon in each pane header fills the workspace with that pane; the inward-corners
-restore icon or Escape returns to the dashboard.
+Use the dropdown in any pane header to choose its module. Drag any divider to
+resize its neighboring sections; double-click a divider to equalize that split.
+Close a pane with its header X and its neighbor fills the space. Use
+**New component** to search or browse visualizations. Click to add beside the
+selected pane, or drag to an edge to split and to the center to replace. Drag a
+pane's dotted header grip to move it, or onto another pane's center to swap them.
+See [workspace layouts and presets](docs/workspace-layouts.md) for preset behavior.
+
+The eye icon in each pane header selects that panel and opens its inspector on the
+right. All parameters appear in one scrollable panel, grouped under collapsible
+section headers. A separate fullscreen icon beside the eye fills the app window
+with that panel. Escape or the restore icon returns to your workspace; a brief
+exit hint fades away. F11 toggles native application fullscreen.
 
 Drag the waterfall to orbit fully around either axis, including over and under
 the grid. Right-drag, middle-drag, or Shift + left-drag pans the view. Rotation
@@ -108,9 +123,10 @@ equal-tempered note. **A4 Hz** changes the tuning reference (440 Hz by default).
 These are axis references, not detected notes or key detection. Both controls also
 work independently in the spectrum and spectrogram.
 Height stretches the surface above its fixed floor.
-The icon rail and settings share one continuous sidebar surface, without a gap
-or separate rounded panels. The header X or active tab closes settings.
-The rail stays visible when closed; clicking a tab reopens its section.
+The inspector runs flush from the navigation bar to the bottom and right edges of
+the app, with a gap only beside the plots. Its header X closes it; any pane’s eye
+button reopens it. Clicking a visualization updates selection without opening a
+hidden inspector. Opening it resizes the visualization area.
 Under **Geometry → Time & detail**, **History s** sets the waterfall's displayed time window.
 Under **Geometry**, **Length X** stretches the frequency axis and **Length Y**
 stretches the time axis independently. Both default to 1× with a 0.25×–10× range.
@@ -231,9 +247,10 @@ windows are independent of the FFT capture window. The source selector
 and a compact settings icon remain at the top right; there is no top-left menu button.
 
 The top-right **settings icon**, matched to the source picker's height, opens
-pane-size reset, fullscreen (F11), and the FFT inspector with
+pane-size balancing, fullscreen (F11), and the FFT inspector with
 the detailed analyzer metrics and experimental tempo estimate. Pane assignments,
-sizes, module settings, and Info View visibility currently last for the session.
+sizes, module settings, and Info View visibility restore automatically at the
+next launch. Capture history and paused frames are not saved.
 
 ## Linux requirements
 
@@ -282,11 +299,12 @@ with a **Copy build info** button. The identifier includes uncommitted source
 changes, so it distinguishes local builds even before a commit. Compare it with
 `symphos --version` when reporting issues or checking what the launcher runs.
 
-The module inspector has a compact title and close X. Click the active tab to
-close it, or another tab to open that section; an accent strip marks the active
-tab. Drag the inspector's right edge to resize, or double-click the edge to
-restore its compact width. Section, width, and per-tab scroll position are
-remembered during the session, not saved as a workspace.
+The right-hand component inspector starts open on first launch and remembers
+your last visibility choice afterward. Use a panel’s eye button or **I** to open it,
+**N** to toggle it, and the header X to close it. Each parameter section has a
+collapsible header. Drag the inspector's left edge to resize, or double-click to
+restore its compact width. Width and visibility restore with the workspace;
+disclosure states and each pane’s scroll position remain independent during the session.
 
 Remove the installation with:
 
@@ -311,6 +329,11 @@ restarted, use **Settings → Retry audio capture**. Microphone/interface input
 selection and DAW plugins are not part of this first Mac milestone. The build
 is locally ad-hoc signed; public downloads will require release signing and
 notarization. See [Mac setup and validation](docs/macos-development.md).
+
+## Live reload development
+
+Run `./scripts/dev.sh` for a separate **Symphos Dev** app with rebuild-on-save,
+restored development settings, generated audio, and live theme editing. See [the rapid development guide](docs/realtime-development.md).
 
 ## Development checks
 

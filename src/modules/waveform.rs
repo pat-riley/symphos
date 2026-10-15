@@ -6,7 +6,7 @@ use super::{Palette, TraceStyle, label, mix, properties_combo, settings_panel};
 use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum WaveformChannel {
     Left,
     Right,
@@ -36,7 +36,7 @@ impl WaveformChannel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum WaveformColorMode {
     Static,
     MultiBand,

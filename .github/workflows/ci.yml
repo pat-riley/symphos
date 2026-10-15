@@ -66,6 +66,12 @@ jobs:
       - name: Run tests
         run: cargo test --all-targets --locked
 
+      - name: Validate development tools
+        run: |
+          cargo clippy --all-targets --features development --locked -- -D warnings
+          cargo test --all-targets --features development --locked
+          python3 -m unittest discover -s scripts/tests
+
       - name: Build release binary
         run: cargo build --release --locked
 

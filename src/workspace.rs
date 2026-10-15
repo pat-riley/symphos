@@ -1,0 +1,971 @@
+//! Tiled geometry and settings-only presets. Runtime audio never enters this schema.
+use crate::analysis::{AnalysisSettings, ChannelMode, FFT_SIZES};
+use crate::modules::{ModuleKind, ModulePane, ModuleSettings, PaneState};
+use eframe::egui::{Pos2, Rect};
+use serde::{Deserialize, Serialize};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+pub const MAX_PANES: usize = 16;
+const GAP: f32 = 8.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Center,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Tile {
+    Pane(usize),
+    Split {
+        axis: Axis,
+        fraction: f32,
+        first: Box<Tile>,
+        second: Box<Tile>,
+    },
+}
+
+pub struct Divider {
+    pub path: Vec<bool>,
+    pub axis: Axis,
+    pub bounds: Rect,
+    pub handle: Rect,
+}
+
+impl Tile {
+    pub fn split(axis: Axis, fraction: f32, first: Self, second: Self) -> Self {
+        Self::Split {
+            axis,
+            fraction,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+    pub fn default_view() -> Self {
+        Self::legacy(0.62, [1.0 / 3.0, 2.0 / 3.0])
+    }
+    fn legacy(top: f32, columns: [f32; 2]) -> Self {
+        Self::split(
+            Axis::Vertical,
+            top,
+            Self::Pane(0),
+            Self::split(
+                Axis::Horizontal,
+                columns[0],
+                Self::Pane(1),
+                Self::split(
+                    Axis::Horizontal,
+                    (columns[1] - columns[0]) / (1.0 - columns[0]),
+                    Self::Pane(2),
+                    Self::Pane(3),
+                ),
+            ),
+        )
+    }
+    pub fn ids(&self) -> Vec<usize> {
+        let mut ids = Vec::new();
+        self.visit(&mut |id| ids.push(id));
+        ids
+    }
+    fn visit(&self, f: &mut impl FnMut(usize)) {
+        match self {
+            Self::Pane(id) => f(*id),
+            Self::Split { first, second, .. } => {
+                first.visit(f);
+                second.visit(f);
+            }
+        }
+    }
+    pub fn valid(&self, slots: usize) -> bool {
+        fn node(tree: &Tile, depth: usize, slots: usize, seen: &mut Vec<usize>) -> bool {
+            if depth > MAX_PANES {
+                return false;
+            }
+            match tree {
+                Tile::Pane(id) => {
+                    if *id >= slots || seen.contains(id) {
+                        return false;
+                    }
+                    seen.push(*id);
+                    seen.len() <= MAX_PANES
+                }
+                Tile::Split {
+                    fraction,
+                    first,
+                    second,
+                    ..
+                } => {
+                    fraction.is_finite()
+                        && (0.1..=0.9).contains(fraction)
+                        && node(first, depth + 1, slots, seen)
+                        && node(second, depth + 1, slots, seen)
+                }
+            }
+        }
+        node(self, 0, slots, &mut Vec::new())
+    }
+    pub fn insert(&mut self, target: usize, added: usize, edge: Edge) -> bool {
+        match self {
+            Self::Pane(id) if *id == target && edge != Edge::Center => {
+                let existing = Self::Pane(*id);
+                let (axis, before) = match edge {
+                    Edge::Left => (Axis::Horizontal, true),
+                    Edge::Right => (Axis::Horizontal, false),
+                    Edge::Top => (Axis::Vertical, true),
+                    Edge::Bottom => (Axis::Vertical, false),
+                    Edge::Center => unreachable!(),
+                };
+                *self = if before {
+                    Self::split(axis, 0.5, Self::Pane(added), existing)
+                } else {
+                    Self::split(axis, 0.5, existing, Self::Pane(added))
+                };
+                true
+            }
+            Self::Split { first, second, .. } => {
+                first.insert(target, added, edge) || second.insert(target, added, edge)
+            }
+            _ => false,
+        }
+    }
+    pub fn remove(self, target: usize) -> Option<Self> {
+        match self {
+            Self::Pane(id) => (id != target).then_some(Self::Pane(id)),
+            Self::Split {
+                axis,
+                fraction,
+                first,
+                second,
+            } => match (first.remove(target), second.remove(target)) {
+                (Some(a), Some(b)) => Some(Self::split(axis, fraction, a, b)),
+                (Some(remaining), None) | (None, Some(remaining)) => Some(remaining),
+                (None, None) => None,
+            },
+        }
+    }
+    pub fn move_pane(&mut self, source: usize, target: usize, edge: Edge) -> bool {
+        let ids = self.ids();
+        if source == target || !ids.contains(&source) || !ids.contains(&target) {
+            return false;
+        }
+        if edge == Edge::Center {
+            self.remap(&|id| {
+                if id == source {
+                    target
+                } else if id == target {
+                    source
+                } else {
+                    id
+                }
+            });
+        } else {
+            let Some(mut next) = self.clone().remove(source) else {
+                return false;
+            };
+            if !next.insert(target, source, edge) {
+                return false;
+            }
+            *self = next;
+        }
+        true
+    }
+    pub fn remap(&mut self, map: &impl Fn(usize) -> usize) {
+        match self {
+            Self::Pane(id) => *id = map(*id),
+            Self::Split { first, second, .. } => {
+                first.remap(map);
+                second.remap(map);
+            }
+        }
+    }
+    pub fn canonical(&self) -> Self {
+        let ids = self.ids();
+        let mut tree = self.clone();
+        tree.remap(&|id| ids.iter().position(|slot| *slot == id).unwrap());
+        tree
+    }
+    pub fn set_fraction(&mut self, path: &[bool], value: f32) {
+        if let Self::Split {
+            fraction,
+            first,
+            second,
+            ..
+        } = self
+        {
+            if let Some((branch, remaining)) = path.split_first() {
+                if *branch {
+                    second.set_fraction(remaining, value);
+                } else {
+                    first.set_fraction(remaining, value);
+                }
+            } else {
+                *fraction = value.clamp(0.1, 0.9);
+            }
+        }
+    }
+    fn minimum_size(&self) -> eframe::egui::Vec2 {
+        match self {
+            Self::Pane(_) => eframe::egui::vec2(140.0, 96.0),
+            Self::Split {
+                axis,
+                first,
+                second,
+                ..
+            } => {
+                let a = first.minimum_size();
+                let b = second.minimum_size();
+                if *axis == Axis::Horizontal {
+                    eframe::egui::vec2(a.x + b.x + GAP, a.y.max(b.y))
+                } else {
+                    eframe::egui::vec2(a.x.max(b.x), a.y + b.y + GAP)
+                }
+            }
+        }
+    }
+    pub fn geometry(&self, rect: Rect) -> (Vec<(usize, Rect)>, Vec<Divider>) {
+        fn walk(
+            tile: &Tile,
+            rect: Rect,
+            path: &mut Vec<bool>,
+            leaves: &mut Vec<(usize, Rect)>,
+            handles: &mut Vec<Divider>,
+        ) {
+            match tile {
+                Tile::Pane(id) => leaves.push((*id, rect)),
+                Tile::Split {
+                    axis,
+                    fraction,
+                    first,
+                    second,
+                } => {
+                    let extent = if *axis == Axis::Horizontal {
+                        rect.width()
+                    } else {
+                        rect.height()
+                    };
+                    let gap = GAP.min(extent * 0.1);
+                    let usable = (extent - gap).max(0.0);
+                    let a = first.minimum_size();
+                    let b = second.minimum_size();
+                    let (a, b) = if *axis == Axis::Horizontal {
+                        (a.x, b.x)
+                    } else {
+                        (a.y, b.y)
+                    };
+                    let actual = if a + b <= usable {
+                        fraction.clamp(a / usable, 1.0 - b / usable)
+                    } else {
+                        a / (a + b)
+                    };
+                    let coordinate = usable * actual;
+                    let (a, b, handle) = if *axis == Axis::Horizontal {
+                        let x = rect.left() + coordinate;
+                        (
+                            Rect::from_min_max(rect.min, Pos2::new(x, rect.bottom())),
+                            Rect::from_min_max(Pos2::new(x + gap, rect.top()), rect.max),
+                            Rect::from_min_max(
+                                Pos2::new(x, rect.top()),
+                                Pos2::new(x + gap, rect.bottom()),
+                            ),
+                        )
+                    } else {
+                        let y = rect.top() + coordinate;
+                        (
+                            Rect::from_min_max(rect.min, Pos2::new(rect.right(), y)),
+                            Rect::from_min_max(Pos2::new(rect.left(), y + gap), rect.max),
+                            Rect::from_min_max(
+                                Pos2::new(rect.left(), y),
+                                Pos2::new(rect.right(), y + gap),
+                            ),
+                        )
+                    };
+                    handles.push(Divider {
+                        path: path.clone(),
+                        axis: *axis,
+                        bounds: rect,
+                        handle,
+                    });
+                    path.push(false);
+                    walk(first, a, path, leaves, handles);
+                    path.pop();
+                    path.push(true);
+                    walk(second, b, path, leaves, handles);
+                    path.pop();
+                }
+            }
+        }
+        let mut leaves = Vec::new();
+        let mut handles = Vec::new();
+        walk(self, rect, &mut Vec::new(), &mut leaves, &mut handles);
+        (leaves, handles)
+    }
+}
+
+pub fn valid_settings(value: &impl Serialize) -> bool {
+    fn bounded(value: &serde_json::Value, name: &str) -> bool {
+        match value {
+            serde_json::Value::Number(value) => value.as_f64().is_some_and(|n| {
+                n.is_finite()
+                    && n.abs() <= 384_000.0
+                    && match name {
+                        "detail" => (1.0..=256.0).contains(&n),
+                        "time_pixels" | "frequency_pixels" => (1.0..=1024.0).contains(&n),
+                        "seconds" => (0.1..=30.0).contains(&n),
+                        "bar_bands" => (1.0..=96.0).contains(&n),
+                        "bar_time_step" | "line_spacing" | "y_line_spacing" | "wire_spacing"
+                        | "dot_spacing" | "stem_spacing" => (1.0..=8.0).contains(&n),
+                        "min_hz" | "max_hz" => n >= 1.0,
+                        "afterglow_traces" => (0.0..=16.0).contains(&n),
+                        "cycles" => (1.0..=8.0).contains(&n),
+                        _ => true,
+                    }
+            }),
+            serde_json::Value::Object(map) => map.iter().all(|(name, value)| bounded(value, name)),
+            serde_json::Value::Array(values) => values.iter().all(|value| bounded(value, name)),
+            _ => true,
+        }
+    }
+    serde_json::to_value(value).is_ok_and(|value| bounded(&value, ""))
+}
+
+fn valid_pane(pane: &PaneState) -> bool {
+    pane.settings.len() == ModuleKind::ALL.len()
+        && ModuleKind::ALL.into_iter().all(|kind| {
+            pane.settings
+                .iter()
+                .filter(|settings| settings.kind() == kind)
+                .count()
+                == 1
+        })
+        && valid_settings(pane)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub version: u32,
+    #[serde(default = "default_demo")]
+    pub demo: bool,
+    pub panes: Vec<PaneState>,
+    pub layout: Option<Tile>,
+    pub selected_pane: usize,
+    // Legacy expanded-pane state is accepted on load; the UI now uses inspection.
+    pub focused_pane: Option<usize>,
+    pub sidebar_open: bool,
+    pub sidebar_width: f32,
+    pub help_open: bool,
+    pub analysis: AnalysisSettings,
+    pub meter_stereo: bool,
+    pub meter_channel: ChannelMode,
+    pub window_size: Option<[f32; 2]>,
+    pub window_position: Option<[f32; 2]>,
+    #[serde(default = "default_preset")]
+    pub active_preset: String,
+}
+fn default_demo() -> bool {
+    true
+}
+fn default_preset() -> String {
+    "factory:default".into()
+}
+impl Session {
+    pub fn validate(&self) -> bool {
+        let ids = self.layout.as_ref().map_or_else(Vec::new, Tile::ids);
+        self.version == 2
+            && !self.panes.is_empty()
+            && self.panes.len() <= MAX_PANES
+            && self.panes.iter().all(valid_pane)
+            && self
+                .layout
+                .as_ref()
+                .is_none_or(|tree| tree.valid(self.panes.len()))
+            && self.selected_pane < self.panes.len()
+            && (ids.is_empty() || ids.contains(&self.selected_pane))
+            && self.focused_pane.is_none_or(|id| ids.contains(&id))
+            && (160.0..=640.0).contains(&self.sidebar_width)
+            && FFT_SIZES.contains(&self.analysis.fft_size)
+            && (1..=240).contains(&self.analysis.analysis_fps)
+            && self.window_size.is_none_or(|size| {
+                (1024.0..=8192.0).contains(&size[0]) && (700.0..=8192.0).contains(&size[1])
+            })
+            && self.active_preset.len() <= 120
+            && valid_settings(self)
+    }
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+        // Preserve development workspaces created by the old four-pane dashboard.
+        if value["version"] == 1 {
+            let top = value["top_fraction"].as_f64()? as f32;
+            let splits = [
+                value["bottom_splits"][0].as_f64()? as f32,
+                value["bottom_splits"][1].as_f64()? as f32,
+            ];
+            if !(0.35..=0.75).contains(&top)
+                || splits[0] < 0.15
+                || splits[1] > 0.85
+                || splits[1] - splits[0] < 0.15
+            {
+                return None;
+            }
+            value["layout"] = serde_json::to_value(Tile::legacy(top, splits)).ok()?;
+            value["version"] = 2.into();
+        }
+        let state: Self = serde_json::from_value(value).ok()?;
+        state.validate().then_some(state)
+    }
+    pub fn load(dir: &Path) -> Option<Self> {
+        let path = dir.join("workspace.json");
+        if !path.exists() {
+            return None;
+        }
+        let state = std::fs::read(&path)
+            .ok()
+            .filter(|b| b.len() <= 4_000_000)
+            .and_then(|bytes| Self::decode(&bytes));
+        if state.is_none() {
+            let _ = std::fs::copy(&path, dir.join("workspace.rejected.json"));
+            crate::issues::record(
+                "Workspace",
+                "Invalid or incompatible workspace; starting with defaults. Original retained as workspace.rejected.json.",
+            );
+        }
+        state
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PresetContent {
+    Layout(Tile),
+    View { layout: Tile, panes: Vec<PaneState> },
+    Component(ModuleSettings),
+}
+impl PresetContent {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Layout(_) => "Layout",
+            Self::View { .. } => "Full view",
+            Self::Component(_) => "Component",
+        }
+    }
+    pub fn tree(&self) -> Option<&Tile> {
+        match self {
+            Self::Layout(tree) | Self::View { layout: tree, .. } => Some(tree),
+            Self::Component(_) => None,
+        }
+    }
+    fn valid(&self) -> bool {
+        match self {
+            Self::Component(settings) => valid_settings(settings),
+            Self::Layout(tree) | Self::View { layout: tree, .. } => {
+                let ids = tree.ids();
+                tree.valid(ids.len())
+                    && ids.iter().enumerate().all(|(i, id)| i == *id)
+                    && match self {
+                        Self::View { panes, .. } => {
+                            panes.len() == ids.len() && panes.iter().all(valid_pane)
+                        }
+                        _ => true,
+                    }
+            }
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Preset {
+    pub id: String,
+    pub name: String,
+    pub content: PresetContent,
+}
+impl Preset {
+    pub fn factory(&self) -> bool {
+        self.id.starts_with("factory:")
+    }
+}
+
+pub fn factory_presets() -> Vec<Preset> {
+    use Axis::{Horizontal as H, Vertical as V};
+    let view = |id: &str, name: &str, layout: Tile, kinds: &[ModuleKind]| Preset {
+        id: format!("factory:{id}"),
+        name: name.into(),
+        content: PresetContent::View {
+            layout,
+            panes: kinds
+                .iter()
+                .map(|kind| ModulePane::new(*kind).snapshot())
+                .collect(),
+        },
+    };
+    let mut presets = vec![
+        view(
+            "default",
+            "Default view",
+            Tile::default_view(),
+            &[
+                ModuleKind::Waterfall,
+                ModuleKind::Spectrum,
+                ModuleKind::Waveform,
+                ModuleKind::Spectrogram,
+            ],
+        ),
+        view(
+            "waterfall",
+            "Waterfall focus",
+            Tile::Pane(0),
+            &[ModuleKind::Waterfall],
+        ),
+        view(
+            "stereo",
+            "Stereo lab",
+            Tile::split(
+                H,
+                0.6,
+                Tile::Pane(0),
+                Tile::split(V, 0.5, Tile::Pane(1), Tile::Pane(2)),
+            ),
+            &[
+                ModuleKind::Stereometer,
+                ModuleKind::Spectrum,
+                ModuleKind::Oscilloscope,
+            ],
+        ),
+    ];
+    for (id, name, layout) in [
+        ("single", "Single pane", Tile::Pane(0)),
+        (
+            "columns",
+            "Two columns",
+            Tile::split(H, 0.5, Tile::Pane(0), Tile::Pane(1)),
+        ),
+        (
+            "rows",
+            "Two rows",
+            Tile::split(V, 0.5, Tile::Pane(0), Tile::Pane(1)),
+        ),
+        (
+            "grid",
+            "Four-pane grid",
+            Tile::split(
+                V,
+                0.5,
+                Tile::split(H, 0.5, Tile::Pane(0), Tile::Pane(1)),
+                Tile::split(H, 0.5, Tile::Pane(2), Tile::Pane(3)),
+            ),
+        ),
+        ("default-layout", "Waterfall layout", Tile::default_view()),
+    ] {
+        presets.push(Preset {
+            id: format!("factory:{id}"),
+            name: name.into(),
+            content: PresetContent::Layout(layout),
+        });
+    }
+    presets
+}
+
+#[derive(Serialize, Deserialize)]
+struct UserLibrary {
+    version: u32,
+    presets: Vec<Preset>,
+}
+pub struct Storage {
+    pub dir: PathBuf,
+    pub presets: Vec<Preset>,
+    pub notice: Option<String>,
+    pub active: String,
+    pub modified: bool,
+    last_save: Instant,
+    last_session: Vec<u8>,
+}
+pub fn normal_directory() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Library/Application Support/Symphos")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join(".config")
+            })
+            .join("symphos")
+    }
+}
+pub fn directory() -> PathBuf {
+    #[cfg(feature = "development")]
+    if let Some(dev) = crate::development::options() {
+        return dev.dir.clone();
+    }
+    normal_directory()
+}
+impl Storage {
+    pub fn new(dir: PathBuf) -> Self {
+        let mut presets = factory_presets();
+        let path = dir.join("presets.json");
+        let notice = if path.exists() {
+            let library = std::fs::read(&path)
+                .ok()
+                .filter(|bytes| bytes.len() <= 8_000_000)
+                .and_then(|bytes| serde_json::from_slice::<UserLibrary>(&bytes).ok())
+                .filter(|lib| {
+                    lib.version == 1
+                        && lib.presets.len() <= 256
+                        && lib.presets.iter().all(|p| {
+                            !p.factory()
+                                && !p.id.is_empty()
+                                && p.id.len() <= 120
+                                && valid_name(&p.name)
+                                && p.content.valid()
+                        })
+                        && {
+                            let mut ids = std::collections::HashSet::new();
+                            lib.presets.iter().all(|p| ids.insert(&p.id))
+                        }
+                });
+            if let Some(lib) = library {
+                presets.extend(lib.presets);
+                None
+            } else {
+                let _ = std::fs::copy(&path, dir.join("presets.rejected.json"));
+                Some("Could not load presets. Original retained as presets.rejected.json.".into())
+            }
+        } else {
+            None
+        };
+        Self {
+            dir,
+            presets,
+            notice,
+            active: default_preset(),
+            modified: false,
+            last_save: Instant::now(),
+            last_session: Vec::new(),
+        }
+    }
+    pub fn save_due(&self) -> bool {
+        self.last_save.elapsed() >= Duration::from_millis(750)
+    }
+    pub fn checkpoint(&mut self, session: &Session) {
+        self.last_save = Instant::now();
+        if let Some(preset) = self.presets.iter().find(|p| p.id == self.active) {
+            self.modified = !session.matches(&preset.content);
+        }
+        if let Ok(bytes) = serde_json::to_vec_pretty(session)
+            && bytes != self.last_session
+        {
+            match atomic_write(&self.dir.join("workspace.json"), &bytes) {
+                Ok(()) => self.last_session = bytes,
+                Err(error) => self.notice = Some(format!("Workspace save failed: {error}")),
+            }
+        }
+    }
+    pub fn save_library(&mut self) {
+        let library = UserLibrary {
+            version: 1,
+            presets: self
+                .presets
+                .iter()
+                .filter(|p| !p.factory())
+                .cloned()
+                .collect(),
+        };
+        match serde_json::to_vec_pretty(&library)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| atomic_write(&self.dir.join("presets.json"), &bytes))
+        {
+            Ok(()) => self.notice = None,
+            Err(error) => self.notice = Some(format!("Preset save failed: {error}")),
+        }
+    }
+}
+pub fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control)
+}
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, bytes)?;
+    std::fs::rename(temp, path)
+}
+impl Session {
+    pub fn matches(&self, preset: &PresetContent) -> bool {
+        match preset {
+            PresetContent::Layout(tree) => self
+                .layout
+                .as_ref()
+                .is_some_and(|current| current.canonical() == *tree),
+            PresetContent::View { layout, panes } => self.layout.as_ref().is_some_and(|current| {
+                current.canonical() == *layout
+                    && current
+                        .ids()
+                        .iter()
+                        .map(|id| self.panes[*id].clone())
+                        .collect::<Vec<_>>()
+                        == *panes
+            }),
+            PresetContent::Component(settings) => {
+                self.panes.get(self.selected_pane).is_some_and(|pane| {
+                    pane.kind == settings.kind()
+                        && pane.settings.iter().any(|current| current == settings)
+                })
+            }
+        }
+    }
+}
+
+pub fn drop_zone(rect: Rect, pos: Pos2) -> (Edge, Rect) {
+    let x = (pos.x - rect.left()) / rect.width().max(1.0);
+    let y = (pos.y - rect.top()) / rect.height().max(1.0);
+    let nearest = x.min(1.0 - x).min(y.min(1.0 - y));
+    if nearest >= 0.25 {
+        return (Edge::Center, rect.shrink(12.0));
+    }
+    if nearest == x {
+        (
+            Edge::Left,
+            Rect::from_min_max(rect.min, Pos2::new(rect.center().x, rect.bottom())),
+        )
+    } else if nearest == 1.0 - x {
+        (
+            Edge::Right,
+            Rect::from_min_max(Pos2::new(rect.center().x, rect.top()), rect.max),
+        )
+    } else if nearest == y {
+        (
+            Edge::Top,
+            Rect::from_min_max(rect.min, Pos2::new(rect.right(), rect.center().y)),
+        )
+    } else {
+        (
+            Edge::Bottom,
+            Rect::from_min_max(Pos2::new(rect.left(), rect.center().y), rect.max),
+        )
+    }
+}
+
+/// Geometry presets retain component instances in visual order. Hidden slots
+/// remain available for a subsequent larger layout without losing settings.
+pub fn apply_layout(panes: &mut Vec<ModulePane>, previous: Option<&Tile>, template: &Tile) -> Tile {
+    let mut slots = previous.map_or_else(Vec::new, Tile::ids);
+    let count = template.ids().len();
+    for id in 0..panes.len() {
+        if !slots.contains(&id) {
+            slots.push(id);
+        }
+    }
+    while slots.len() < count {
+        panes.push(ModulePane::new(ModuleKind::Spectrum));
+        slots.push(panes.len() - 1);
+    }
+    let mut tree = template.clone();
+    tree.remap(&|id| slots[id]);
+    for id in slots.into_iter().skip(count) {
+        panes[id].reset();
+    }
+    tree
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::Vec2;
+    #[test]
+    fn closing_promotes_sibling_without_touching_unrelated_proportions() {
+        let tree = Tile::default_view().remove(2).unwrap();
+        assert_eq!(tree.ids(), [0, 1, 3]);
+        let (rects, _) = tree.geometry(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0)));
+        assert!(rects[2].1.width() > 600.0);
+        assert!(matches!(tree, Tile::Split { fraction: 0.62, .. }));
+        assert_eq!(Tile::Pane(0).remove(0), None);
+    }
+    #[test]
+    fn rearranging_is_atomic_and_keeps_every_pane_once() {
+        let mut tree = Tile::default_view();
+        assert!(tree.move_pane(0, 3, Edge::Right));
+        assert!(tree.valid(4));
+        assert_eq!(tree.ids().len(), 4);
+        let before = tree.clone();
+        assert!(!tree.move_pane(0, 99, Edge::Left));
+        assert_eq!(before, tree);
+        assert!(tree.move_pane(1, 2, Edge::Center));
+        assert!(tree.valid(4));
+    }
+    #[test]
+    fn malformed_geometry_and_duplicate_panes_are_rejected() {
+        assert!(!Tile::split(Axis::Horizontal, 0.5, Tile::Pane(0), Tile::Pane(0)).valid(2));
+        assert!(!Tile::split(Axis::Vertical, f32::NAN, Tile::Pane(0), Tile::Pane(1)).valid(2));
+        assert!(!Tile::Pane(16).valid(16));
+        for preset in factory_presets() {
+            assert!(preset.content.valid(), "{}", preset.name);
+        }
+    }
+    #[test]
+    fn small_window_geometry_stays_positive_and_nonoverlapping() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(48.0, 32.0));
+        let (leaves, _) = Tile::default_view().geometry(rect);
+        for (i, (_, cell)) in leaves.iter().enumerate() {
+            assert!(cell.width() > 0.0 && cell.height() > 0.0 && rect.contains_rect(*cell));
+            for (_, other) in &leaves[i + 1..] {
+                assert!(!cell.intersects(*other));
+            }
+        }
+    }
+    #[test]
+    fn layout_presets_contain_no_component_configuration() {
+        let encoded = serde_json::to_string(&PresetContent::Layout(Tile::default_view())).unwrap();
+        assert!(!encoded.contains("Waterfall"));
+        assert!(!encoded.contains("settings"));
+        let canonical =
+            Tile::split(Axis::Horizontal, 0.3, Tile::Pane(7), Tile::Pane(2)).canonical();
+        assert_eq!(canonical.ids(), [0, 1]);
+    }
+    #[test]
+    fn all_component_snapshots_roundtrip_without_captured_audio() {
+        for kind in ModuleKind::ALL {
+            let state = ModulePane::new(kind).snapshot();
+            let encoded = serde_json::to_string(&state).unwrap();
+            assert!(!encoded.contains("waveform_left"));
+            let restored: PaneState = serde_json::from_str(&encoded).unwrap();
+            let mut pane = ModulePane::new(ModuleKind::Spectrum);
+            pane.restore(&restored);
+            assert_eq!(pane.snapshot(), state);
+            assert!(valid_pane(&state));
+        }
+    }
+
+    fn session() -> Session {
+        Session {
+            version: 2,
+            demo: true,
+            panes: [
+                ModuleKind::Waterfall,
+                ModuleKind::Spectrum,
+                ModuleKind::Waveform,
+                ModuleKind::Spectrogram,
+            ]
+            .into_iter()
+            .map(|kind| ModulePane::new(kind).snapshot())
+            .collect(),
+            layout: Some(Tile::default_view()),
+            selected_pane: 0,
+            focused_pane: None,
+            sidebar_open: true,
+            sidebar_width: 236.0,
+            help_open: false,
+            analysis: AnalysisSettings::default(),
+            meter_stereo: true,
+            meter_channel: ChannelMode::StereoMix,
+            window_size: None,
+            window_position: None,
+            active_preset: default_preset(),
+        }
+    }
+
+    #[test]
+    fn applying_layouts_preserves_custom_settings_and_reopens_hidden_slots() {
+        let mut panes: Vec<_> = session()
+            .panes
+            .iter()
+            .map(|state| {
+                let mut pane = ModulePane::new(state.kind);
+                pane.restore(state);
+                pane
+            })
+            .collect();
+        let mut value = serde_json::to_value(panes[1].copy_settings()).unwrap();
+        value["Spectrum"]["labels"] = false.into();
+        let custom: ModuleSettings = serde_json::from_value(value).unwrap();
+        assert!(panes[1].paste_settings(&custom));
+        let original: Vec<_> = panes.iter().map(ModulePane::snapshot).collect();
+        let one = apply_layout(&mut panes, Some(&Tile::default_view()), &Tile::Pane(0));
+        assert_eq!(one.ids(), [0]);
+        let four = apply_layout(&mut panes, Some(&one), &Tile::default_view());
+        assert_eq!(four.ids(), [0, 1, 2, 3]);
+        assert_eq!(
+            panes.iter().map(ModulePane::snapshot).collect::<Vec<_>>(),
+            original
+        );
+    }
+
+    #[test]
+    fn legacy_dev_workspace_migrates_and_invalid_sessions_are_rejected() {
+        let original = session();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        legacy.as_object_mut().unwrap().remove("layout");
+        legacy["version"] = 1.into();
+        legacy["top_fraction"] = 0.62.into();
+        legacy["bottom_splits"] = serde_json::json!([1.0 / 3.0, 2.0 / 3.0]);
+        let restored = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(restored.version, 2);
+        assert_eq!(restored.layout, original.layout);
+        for (key, value) in [
+            ("version", serde_json::json!(99)),
+            ("selected_pane", serde_json::json!(99)),
+            ("sidebar_width", serde_json::json!(-1)),
+        ] {
+            let mut bad = serde_json::to_value(&original).unwrap();
+            bad[key] = value;
+            assert!(Session::decode(&serde_json::to_vec(&bad).unwrap()).is_none());
+        }
+        let mut bad = original;
+        bad.panes[0].settings.pop();
+        assert!(!bad.validate());
+    }
+
+    #[test]
+    fn user_presets_and_last_view_survive_storage_reload() {
+        let dir = std::env::temp_dir().join(format!(
+            "symphos-workspace-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut storage = Storage::new(dir.clone());
+        storage.presets.push(Preset {
+            id: "user:test".into(),
+            name: "My layout".into(),
+            content: PresetContent::Layout(Tile::Pane(0)),
+        });
+        storage.save_library();
+        assert!(storage.notice.is_none());
+        let mut state = session();
+        state.layout = Some(Tile::Pane(0));
+        state.active_preset = "user:test".into();
+        storage.checkpoint(&state);
+        assert!(storage.notice.is_none());
+        assert_eq!(
+            Storage::new(dir.clone()).presets.last().unwrap().name,
+            "My layout"
+        );
+        let restored = Session::load(&dir).unwrap();
+        assert_eq!(restored.layout, state.layout);
+        assert_eq!(restored.active_preset, state.active_preset);
+        std::fs::write(dir.join("presets.json"), b"invalid").unwrap();
+        let recovered = Storage::new(dir.clone());
+        assert!(recovered.notice.is_some());
+        assert!(dir.join("presets.rejected.json").exists());
+        assert_eq!(recovered.presets.len(), factory_presets().len());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

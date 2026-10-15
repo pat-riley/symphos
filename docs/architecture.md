@@ -49,7 +49,10 @@ compact top-right selector preserves full device names in its dropdown/Info View
 
 Each dashboard pane owns independent waterfall, spectrum, waveform,
 spectrogram, and stereometer state in `src/modules/`. Selecting a pane directs
-the compact sidebar to its active module. Pane assignment and sizing live in
+the right-hand inspector to its active module without opening it automatically.
+The inspector reserves space on the right and resizes from its left edge. A pane’s
+eye button opens it; its header X closes it. Parameter sections are independent
+collapsible headers in one scrollable surface that meets the navbar and window edges. Pane assignment and sizing live in
 the UI; capture and analysis remain independent of layout and rendering.
 
 Per-pane freeze holds a cloned analysis snapshot and a fixed virtual timestamp.
@@ -273,3 +276,23 @@ retained and an error is logged rather than freeing memory still held by the OS.
 Omarchy theme lookup runs only on Linux. Mac uses Symphos Dark and writes bounded
 diagnostics under `~/Library/Logs/Symphos`. See [Mac development](macos-development.md)
 for current coverage and unresolved device/permission scenarios.
+
+## Tiled workspace and preset state
+
+`workspace.rs` models pane placement as a binary split tree with stable component
+slot IDs. Closing a leaf promotes its sibling; moves keep the same component
+instance and its settings. Open panes ingest the shared capture stream even while
+another pane is expanded. Closed slots retain settings and discard histories.
+
+Layout-only presets contain canonical geometry without module configuration.
+Full-view presets add explicit settings-only pane snapshots. Component presets
+apply a matching module snapshot without changing geometry or shared analysis.
+`workspace_ui.rs` provides the component library, drag payloads, preset browser,
+and save/manage dialogs; pane mutations occur after dashboard rendering.
+
+Versioned session and preset JSON files are stored separately and replaced
+atomically. Collection, tree, and allocation bounds are checked before restoring
+state. Normal app data uses the platform configuration directory; live reload
+data remains under `target/dev`. Session version 2 migrates the earlier four-pane
+development checkpoint. See [workspace layouts and presets](workspace-layouts.md)
+for the user-facing behavior and file locations.

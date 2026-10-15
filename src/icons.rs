@@ -1,17 +1,19 @@
 use crate::help::HoverHelp;
-use eframe::egui::{self, Color32, Pos2, Rect, Response, Stroke, Vec2};
+use eframe::egui::{self, Color32, Rect, Response, Stroke, Vec2};
 
 #[derive(Clone, Copy)]
 pub enum Icon {
     Pause,
     Play,
-    Camera,
-    Time,
-    Geometry,
-    Frequency,
-    Response,
-    Appearance,
     Waveform,
+    Waterfall,
+    Spectrogram,
+    Oscilloscope,
+    Eye,
+    Inspector,
+    Plus,
+    Fullscreen,
+    Restore,
     Close,
     Stereo,
     Mix,
@@ -24,8 +26,6 @@ pub enum Icon {
     Dots,
     Stems,
     Bars,
-    Fullscreen,
-    Restore,
 }
 
 pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool, description: &str) -> Response {
@@ -60,15 +60,79 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             stroke,
         ));
     };
-    let box_outline = |a: Pos2, b: Pos2| {
-        painter.rect_stroke(
-            Rect::from_min_max(a, b),
-            2.0,
-            stroke,
-            egui::StrokeKind::Inside,
-        );
-    };
     match icon {
+        Icon::Plus => {
+            line(&[(10.0, 3.0), (10.0, 17.0)]);
+            line(&[(3.0, 10.0), (17.0, 10.0)]);
+        }
+        Icon::Inspector => {
+            painter.rect_stroke(
+                Rect::from_min_max(p(1.0, 3.0), p(19.0, 17.0)),
+                2.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            line(&[(12.0, 3.0), (12.0, 17.0)]);
+            for y in [7.0, 10.0, 13.0] {
+                line(&[(14.0, y), (17.0, y)]);
+            }
+        }
+        Icon::Waterfall => {
+            line(&[
+                (1.0, 7.0),
+                (10.0, 2.0),
+                (19.0, 7.0),
+                (19.0, 15.0),
+                (10.0, 20.0),
+                (1.0, 15.0),
+                (1.0, 7.0),
+                (10.0, 12.0),
+                (19.0, 7.0),
+            ]);
+            line(&[(10.0, 12.0), (10.0, 20.0)]);
+            line(&[(3.0, 12.0), (5.0, 9.0), (7.0, 13.0)]);
+        }
+        Icon::Spectrogram => {
+            for x in 0..4 {
+                for y in 0..4 {
+                    let cell = Rect::from_min_size(
+                        p(1.0 + x as f32 * 5.0, 1.0 + y as f32 * 5.0),
+                        Vec2::splat(3.0),
+                    );
+                    painter.rect_filled(
+                        cell,
+                        0.5,
+                        color.gamma_multiply(if (x + y) % 3 == 0 { 0.4 } else { 1.0 }),
+                    );
+                }
+            }
+        }
+        Icon::Oscilloscope => {
+            painter.circle_stroke(p(10.0, 10.0), 9.0, stroke);
+            line(&[
+                (2.0, 10.0),
+                (5.0, 10.0),
+                (7.0, 4.0),
+                (10.0, 16.0),
+                (13.0, 4.0),
+                (15.0, 10.0),
+                (18.0, 10.0),
+            ]);
+        }
+        Icon::Fullscreen | Icon::Restore => {
+            for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                let (outer, inner) = if matches!(icon, Icon::Fullscreen) {
+                    (7.0, 3.0)
+                } else {
+                    (3.0, 7.0)
+                };
+                line(&[
+                    (10.0 + x * inner, 10.0 + y * outer),
+                    (10.0 + x * outer, 10.0 + y * outer),
+                    (10.0 + x * outer, 10.0 + y * inner),
+                ]);
+            }
+        }
         Icon::Pause => {
             for x in [5.0, 12.0] {
                 painter.rect_filled(Rect::from_min_max(p(x, 4.0), p(x + 3.0, 16.0)), 0.5, color);
@@ -80,25 +144,6 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
                 color,
                 Stroke::NONE,
             ));
-        }
-        Icon::Fullscreen | Icon::Restore => {
-            for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                let outer = if matches!(icon, Icon::Fullscreen) {
-                    7.0
-                } else {
-                    3.0
-                };
-                let inner = if matches!(icon, Icon::Fullscreen) {
-                    3.0
-                } else {
-                    7.0
-                };
-                line(&[
-                    (10.0 + x * inner, 10.0 + y * outer),
-                    (10.0 + x * outer, 10.0 + y * outer),
-                    (10.0 + x * outer, 10.0 + y * inner),
-                ]);
-            }
         }
         Icon::Bars => {
             for (x, height) in [(2.0, 7.0), (8.0, 15.0), (14.0, 11.0)] {
@@ -156,69 +201,6 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
                 painter.circle_filled(p(x, y), 2.0, color);
             }
         }
-        Icon::Camera => {
-            // Side-profile movie camera: twin reels, body, and projecting lens.
-            for x in [4.0, 10.5] {
-                painter.circle_stroke(p(x, 4.0), 2.7, stroke);
-            }
-            box_outline(p(1.0, 8.0), p(13.0, 18.0));
-            line(&[(13.0, 11.0), (19.0, 8.0), (19.0, 18.0), (13.0, 15.0)]);
-        }
-        Icon::Time => {
-            painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
-            line(&[(10.0, 4.0), (10.0, 10.0), (14.0, 12.0)]);
-        }
-        Icon::Geometry => {
-            line(&[
-                (10.0, 1.0),
-                (19.0, 6.0),
-                (19.0, 15.0),
-                (10.0, 19.0),
-                (1.0, 15.0),
-                (1.0, 6.0),
-                (10.0, 1.0),
-            ]);
-            line(&[(1.0, 6.0), (10.0, 11.0), (19.0, 6.0)]);
-            line(&[(10.0, 11.0), (10.0, 19.0)]);
-        }
-        Icon::Frequency => {
-            for (x, height) in [(3.0, 5.0), (7.5, 13.0), (12.0, 9.0), (16.5, 16.0)] {
-                line(&[(x, 18.0), (x, 18.0 - height)]);
-            }
-        }
-        Icon::Response => {
-            line(&[
-                (1.0, 17.0),
-                (5.0, 17.0),
-                (9.0, 3.0),
-                (12.0, 9.0),
-                (16.0, 14.0),
-                (19.0, 15.0),
-            ]);
-        }
-        Icon::Appearance => {
-            // Diagonal paintbrush: outlined handle, solid bristles, and a small
-            // paint stroke. Recognizable at toolbar size without tiny dots.
-            line(&[
-                (7.0, 10.0),
-                (16.0, 1.0),
-                (19.0, 4.0),
-                (10.0, 13.0),
-                (7.0, 10.0),
-            ]);
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    p(2.0, 18.0),
-                    p(3.0, 13.0),
-                    p(7.0, 10.0),
-                    p(10.0, 13.0),
-                    p(7.0, 17.0),
-                ],
-                color,
-                Stroke::NONE,
-            ));
-            line(&[(10.0, 18.0), (17.0, 18.0)]);
-        }
         Icon::Waveform => line(&[
             (1.0, 10.0),
             (4.0, 10.0),
@@ -228,6 +210,20 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             (15.0, 10.0),
             (19.0, 10.0),
         ]),
+        Icon::Eye => {
+            line(&[
+                (1.0, 10.0),
+                (5.0, 5.0),
+                (10.0, 3.0),
+                (15.0, 5.0),
+                (19.0, 10.0),
+                (15.0, 15.0),
+                (10.0, 17.0),
+                (5.0, 15.0),
+                (1.0, 10.0),
+            ]);
+            painter.circle_stroke(p(10.0, 10.0), 3.0, stroke);
+        }
         Icon::Close => {
             line(&[(5.0, 5.0), (15.0, 15.0)]);
             line(&[(15.0, 5.0), (5.0, 15.0)]);
@@ -265,9 +261,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_focus_icons_are_compact_distinct_and_clickable() {
-        let mut glyphs = Vec::new();
-        for icon in [Icon::Fullscreen, Icon::Restore] {
+    fn pane_inspect_icon_is_compact_and_clickable() {
+        for icon in [Icon::Eye] {
             let context = egui::Context::default();
             let render = |events| {
                 let mut clicked = false;
@@ -280,7 +275,7 @@ mod tests {
                     |ui| {
                         ui.spacing_mut().interact_size.y = 24.0;
                         ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
-                        let response = sized_button(ui, icon, false, 24.0, "Toggle expanded pane");
+                        let response = sized_button(ui, icon, false, 24.0, "Inspect panel");
                         rect = response.rect;
                         clicked = response.clicked();
                     },
@@ -307,14 +302,19 @@ mod tests {
                     }
                 })
                 .collect();
-            assert_eq!(paths.len(), 4);
+            assert!(!paths.is_empty());
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|shape| matches!(&shape.shape, egui::Shape::Circle(_)))
+            );
             assert!(
                 paths
                     .iter()
                     .flatten()
                     .all(|point| rect.shrink(3.0).contains(*point))
             );
-            glyphs.push(paths);
             let pos = rect.center();
             for pressed in [true, false] {
                 let (_, _, clicked) = render(vec![
@@ -331,7 +331,6 @@ mod tests {
                 }
             }
         }
-        assert_ne!(glyphs[0], glyphs[1]);
     }
 
     #[test]
