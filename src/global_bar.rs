@@ -74,6 +74,7 @@ impl GlobalBar {
         ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
         ui.spacing_mut().interact_size.y = 26.0;
         ui.style_mut().override_font_id = Some(FontId::proportional(12.0));
+        let compact = ui.available_width() < 900.0;
         ui.horizontal_centered(|ui| {
             help::toggle(ui, help_open);
             ui.separator();
@@ -131,18 +132,20 @@ impl GlobalBar {
                 }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.meters(ui, &info);
+                self.meters(ui, &info, if compact { 160.0 } else { 220.0 });
+                if !compact {
                 ui.label(RichText::new(format!("{:.1} kHz", info.frame.sample_rate as f32 / 1000.0)).small().color(info.theme.muted))
                     .help_text("Sample rate of the selected audio source.");
                 ui.label(RichText::new(format!("{:.0} FPS", info.fps)).small().color(info.theme.muted))
                     .help_text("Measured display frame rate.");
+                }
             });
         });
         before != (settings.fft_size, settings.window, settings.channel_mode)
     }
 
-    fn meters(&self, ui: &mut egui::Ui, info: &BarInfo<'_>) {
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(220.0, 30.0), Sense::hover());
+    fn meters(&self, ui: &mut egui::Ui, info: &BarInfo<'_>, width: f32) {
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 30.0), Sense::hover());
         let live = matches!(info.status, AudioStatus::Streaming);
         let indicator = match info.status {
             AudioStatus::Streaming => info.theme.accent,
@@ -194,7 +197,7 @@ impl GlobalBar {
             );
             let track = Rect::from_min_size(
                 Pos2::new(rect.left() + 28.0, center_y - 3.0),
-                Vec2::new(137.0, 6.0),
+                Vec2::new(rect.width() - 83.0, 6.0),
             );
             painter.rect_filled(track, 2.0, info.theme.card);
             let level_db = |amplitude: f32| 20.0 * amplitude.max(1.0e-7).log10();
@@ -276,7 +279,7 @@ mod tests {
 
     #[test]
     fn compact_bar_fits_minimum_width_and_keeps_help_left_and_levels_right() {
-        for width in [1000.0, 1416.0] {
+        for width in [540.0, 740.0, 1000.0, 1416.0] {
             let context = egui::Context::default();
             let mut bar = GlobalBar::default();
             let mut settings = AnalysisSettings::default();

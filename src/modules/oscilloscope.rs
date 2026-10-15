@@ -11,7 +11,7 @@ const HIGH_CROSSOVER_HZ: f32 = 2_000.0;
 const MIN_FOLLOW_HZ: f32 = 30.0;
 const MAX_FOLLOW_HZ: f32 = 2_000.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ScopeChannel {
     Left,
     Right,
@@ -41,7 +41,7 @@ impl ScopeChannel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum SyncMode {
     Pitch,
     Trigger,
@@ -60,7 +60,7 @@ impl SyncMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum CycleMode {
     Single,
     Multi,
@@ -77,7 +77,7 @@ impl CycleMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ScopeColorMode {
     Static,
     Rgb,

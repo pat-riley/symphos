@@ -2,6 +2,8 @@ mod analysis;
 mod app;
 mod audio;
 mod capture_history;
+#[cfg(feature = "development")]
+mod development;
 mod global_bar;
 mod help;
 mod icons;
@@ -10,6 +12,8 @@ mod modules;
 mod parameter;
 mod shortcuts;
 mod theme;
+mod workspace;
+mod workspace_ui;
 
 use eframe::egui;
 
@@ -25,12 +29,17 @@ fn main() -> eframe::Result {
         );
         return Ok(());
     }
+    #[cfg(not(feature = "development"))]
+    if std::env::args().any(|arg| arg == "--dev") {
+        eprintln!("Development mode requires --features development; run ./scripts/dev.sh.");
+        return Ok(());
+    }
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("symphos=info,wgpu_core=warn"),
     )
     .init();
     issues::init();
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("Symphos")
@@ -40,6 +49,21 @@ fn main() -> eframe::Result {
             .with_icon(app_icon()),
         ..Default::default()
     };
+    if let Some(workspace) = workspace::Session::load(&workspace::directory()) {
+        if let Some(size) = workspace.window_size {
+            options.viewport = options.viewport.with_inner_size(size);
+        }
+        if let Some(position) = workspace.window_position {
+            options.viewport = options.viewport.with_position(position);
+        }
+    }
+    #[cfg(feature = "development")]
+    if development::options().is_some() {
+        options.viewport = options
+            .viewport
+            .with_title("Symphos Dev")
+            .with_app_id("io.github.riley.Symphos.Dev");
+    }
     eframe::run_native(
         "Symphos",
         options,

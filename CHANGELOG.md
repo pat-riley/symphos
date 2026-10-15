@@ -7,8 +7,29 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Changed
 
+- Replace the top-left branding with a New component button. Give its browser
+  a flush left sidebar with shared inspector styling and component icon rows.
+
+- Center the preset controls on the full navbar and reduce the audio selector
+  width, while retaining full device names in its menu.
+
+- Add a far-right navbar button to show or hide the component inspector, with
+  an active state while it is open.
+
+- Give visualization panes one continuous background, with header controls
+  floating above the same surface as the visualization.
+
+- Unify inspector styling with edge-to-edge section dividers, full-width
+  disclosure rows, quieter group labels, and consistent numeric fields. Add a
+  pinned component header with its icon, visualization type, panel, status, and
+  sample rate.
+
+- Add a separate eye button beside panel fullscreen that opens the selected
+  panel’s inspector. Show all parameter sections in one scrollable panel with
+  collapsible headers, flush to the navbar and right/bottom window edges.
+
 - Constrain visualization dropdown labels so narrow pane headers keep pause and
-  expand controls unobstructed.
+  inspect controls unobstructed.
 
 - Avoid allocating sample lists and cloning themes on waterfall mesh cache hits;
   borrow numeric labels and format dynamic help only for the hovered control.
@@ -23,24 +44,35 @@ All notable changes to Symphos will be documented here. The project follows
 - Standardize compact properties dropdowns and show all eight isometric views
   with aligned entries and automatic closing after selection.
 
-- Right-align property labels against their numeric fields for consistent scanning.
+- Place inspector parameter labels above full-width numeric fields.
 - Keep the horizontal resize cursor while hovering or dragging numeric fields;
   show the text cursor only during inline editing.
-- Use transparent collapsible properties headings separated by thin lines,
-  keeping darker backgrounds on editable controls.
-- Replace narrow module sliders and separate value boxes with wide filled fields,
-  centered editable values, and relative dragging inspired by Blender's controls.
+- Replace narrow module sliders and separate value boxes with full-width fields,
+  slim range indicators, centered editable values, and relative dragging.
 - Restyle module properties with compact recessed controls, aligned numeric
   labels, and collapsible section headers inspired by Blender's Properties editor.
-- Show each properties tab's sections directly, with independent collapsible
-  groups and no redundant dropdown that hides the entire tab.
-- Use a side-profile film camera icon for the camera properties tab.
 - Remove the properties close button's background, using an accent-colored X
   on hover and press.
-- Simplify the settings toolbar to unboxed icons, using the accent color for
-  the open tab and hover feedback instead of a side marker or separators.
+
+- Soften selected pane outlines to a muted accent tint.
+- Dock the component inspector on the right, with an inspect
+  button and a resize handle on its left.
+  Selecting a component keeps a hidden inspector closed.
+- Match the dark Mac navigation surface to the native title bar, with contrasting
+  dropdown fields and visible hover, selection, and border states.
+- Give the top navigation a uniform full-width surface and clear lower edge;
+  remove the development toolbar while keeping live reload and CLI audio modes.
 
 ### Added
+
+- Tiled workspace manager with close-and-fill behavior, resizable nested splits,
+  pane rearrangement, and a searchable component library with edge/center drops.
+- Persistent last workspace and a top preset browser for layout-only, full-view,
+  and matching-component presets, including save, rename, and delete.
+
+- Opt-in development app with rebuild-on-save, last-working-build retention,
+  settings-only workspace restoration, generated stereo audio, and live palette
+  and UI-scale editing.
 
 - Initial macOS system-playback capture through a private, nonmuting Core Audio
   tap, with fresh analysis sessions on reconnect and a manual capture retry.

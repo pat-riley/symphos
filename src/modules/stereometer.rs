@@ -7,7 +7,7 @@ use crate::{analysis::AnalysisFrame, theme::AppTheme};
 const LOW_CROSSOVER_HZ: f32 = 200.0;
 const HIGH_CROSSOVER_HZ: f32 = 2_000.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum DisplayMode {
     Scaled,
     Linear,
@@ -26,7 +26,7 @@ impl DisplayMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ColorMode {
     Static,
     Rgb,
@@ -45,7 +45,7 @@ impl ColorMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum CorrelationMode {
     SingleBand,
     MultiBand,

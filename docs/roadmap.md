@@ -88,8 +88,8 @@ predictably across quiet and loud material.
 - Save human-readable, versioned project files with a Symphos-specific file
   extension and load them safely. A project should contain its scene,
   component layout, routing, mappings, and references to required assets.
-- Save and load presets for individual component windows independently of the
-  enclosing project.
+- Extend the shipped individual-component presets into the enclosing scene
+  project workflow. Analyzer presets already save independently of layouts.
 - Save reusable user-authored color maps and reference-spectrum definitions.
 - Add undo/redo and autosave before the editor becomes complex.
 
@@ -122,15 +122,17 @@ writing code.
 - **Perform:** fullscreen output, scene switching, and a compact set of live
   controls.
 
-Add templates and a small preset library only after scene files and mappings
-have stable versioning.
+Add scene templates and a scene preset library after scene files and mappings
+have stable versioning. Analyzer workspace and component presets are available
+in the current app.
 
-- Support multiple component windows with intentional docking, tiling,
-  detaching, resizing, fullscreen, and multi-display behavior.
+- Extend the shipped tiled workspace, resizing, and pane expansion into
+  multi-display workflows when required. Detached/floating panes are outside the
+  current workspace design.
 - Evaluate transparent component backgrounds and a Wayland desktop-bar mode
   after detached windows have stable sizing and input behavior.
-- Save named workspace layouts and restore them reliably across display and
-  resolution changes.
+- Extend the shipped named tiled layouts and last-session restoration with
+  display-aware placement when multi-display workflows arrive.
 - Rework the UI around the Analyze, Create, and Perform workflows once their
   core tasks and window model are validated.
 

@@ -2,6 +2,7 @@
 // Clone is deliberate so this schema can grow owned preset fields later.
 macro_rules! module_settings {
     ($module:ident, $settings:ident, { $($field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
+        #[derive(serde::Serialize, serde::Deserialize)]
         #[derive(Clone, Debug, PartialEq)]
         pub(crate) struct $settings { $( $field: $ty, )* }
         impl $module {
@@ -46,7 +47,7 @@ struct ModuleRenderState {
     frozen: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ModuleKind {
     Waterfall,
     Spectrum,
@@ -74,6 +75,28 @@ impl ModuleKind {
             Self::Spectrogram => "Spectrogram",
             Self::Stereometer => "Stereometer",
             Self::Oscilloscope => "Oscilloscope",
+        }
+    }
+
+    pub fn icon(self) -> Icon {
+        match self {
+            Self::Waterfall => Icon::Waterfall,
+            Self::Spectrum => Icon::Bars,
+            Self::Waveform => Icon::Waveform,
+            Self::Spectrogram => Icon::Spectrogram,
+            Self::Stereometer => Icon::Stereo,
+            Self::Oscilloscope => Icon::Oscilloscope,
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Waterfall => "3D frequency history",
+            Self::Spectrum => "Frequency levels",
+            Self::Waveform => "Audio over time",
+            Self::Spectrogram => "Frequency over time",
+            Self::Stereometer => "Stereo image & phase",
+            Self::Oscilloscope => "Signal shape & cycle",
         }
     }
 
@@ -115,7 +138,7 @@ pub struct ModulePane {
     pub last_capture: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ModuleSettings {
     Waterfall(waterfall::WaterfallSettings),
     Spectrum(spectrum::SpectrumSettings),
@@ -136,6 +159,13 @@ impl ModuleSettings {
             Self::Oscilloscope(_) => ModuleKind::Oscilloscope,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PaneState {
+    pub kind: ModuleKind,
+    pub sections: [usize; 6],
+    pub settings: Vec<ModuleSettings>,
 }
 
 struct FrozenFrame {
@@ -177,21 +207,6 @@ impl SettingsSection {
             Self::Sync => "Synchronization",
         }
     }
-    pub fn icon(self) -> Icon {
-        match self {
-            Self::Camera => Icon::Camera,
-            Self::History | Self::TimeWindow => Icon::Time,
-            Self::Geometry => Icon::Geometry,
-            Self::Frequency => Icon::Frequency,
-            Self::Response => Icon::Response,
-            Self::Appearance => Icon::Appearance,
-            Self::Channels => Icon::Stereo,
-            Self::Amplitude => Icon::Waveform,
-            Self::Display => Icon::Geometry,
-            Self::Correlation => Icon::Stereo,
-            Self::Sync => Icon::Response,
-        }
-    }
 }
 
 impl ModulePane {
@@ -225,6 +240,34 @@ impl ModulePane {
             ModuleSettings::Oscilloscope(settings) => self.oscilloscope.apply_settings(settings),
         }
         true
+    }
+
+    pub fn snapshot(&self) -> PaneState {
+        PaneState {
+            kind: self.kind,
+            sections: self.active_sections,
+            settings: vec![
+                ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
+                ModuleSettings::Spectrum(self.spectrum.settings_snapshot()),
+                ModuleSettings::Waveform(self.waveform.settings_snapshot()),
+                ModuleSettings::Spectrogram(self.spectrogram.settings_snapshot()),
+                ModuleSettings::Stereometer(self.stereometer.settings_snapshot()),
+                ModuleSettings::Oscilloscope(self.oscilloscope.settings_snapshot()),
+            ],
+        }
+    }
+
+    pub fn restore(&mut self, state: &PaneState) {
+        for settings in &state.settings {
+            self.kind = settings.kind();
+            self.paste_settings(settings);
+        }
+        for (index, kind) in ModuleKind::ALL.into_iter().enumerate() {
+            self.kind = kind;
+            self.active_sections[index] = state.sections[index].min(self.sections().len() - 1);
+        }
+        self.kind = state.kind;
+        self.reset();
     }
 
     pub fn new(kind: ModuleKind) -> Self {
@@ -285,20 +328,13 @@ impl ModulePane {
         }
     }
 
+    #[cfg(test)]
     pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
-        let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         ui.spacing_mut().slider_width = ui.spacing().slider_width.min(78.0);
         let section = self.active_section();
         let reset = ui.push_id(self.kind.label(), |ui| {
             ui.data_mut(|data| data.insert_temp(ui.id().with("active-module-section"), section));
-            match self.kind {
-                ModuleKind::Waterfall => self.waterfall.controls(ui),
-                ModuleKind::Spectrum => self.spectrum.controls(ui, frame),
-                ModuleKind::Waveform => self.waveform.controls(ui),
-                ModuleKind::Spectrogram => self.spectrogram.controls(ui),
-                ModuleKind::Stereometer => self.stereometer.controls(ui),
-                ModuleKind::Oscilloscope => self.oscilloscope.controls(ui),
-            }
+            self.section_controls(ui, frame);
             ui.add_space(12.0);
             ui.separator();
             ui.small_button("Reset module settings")
@@ -308,6 +344,48 @@ impl ModulePane {
         if reset {
             self.reset_settings();
         }
+    }
+
+    fn section_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
+        match self.kind {
+            ModuleKind::Waterfall => self.waterfall.controls(ui),
+            ModuleKind::Spectrum => self.spectrum.controls(ui, frame),
+            ModuleKind::Waveform => self.waveform.controls(ui),
+            ModuleKind::Spectrogram => self.spectrogram.controls(ui),
+            ModuleKind::Stereometer => self.stereometer.controls(ui),
+            ModuleKind::Oscilloscope => self.oscilloscope.controls(ui),
+        }
+    }
+
+    pub fn inspector_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        ui.push_id(self.kind.label(), |ui| {
+            for &section in self.sections() {
+                inspector_rule(ui);
+                ui.scope(|ui| {
+                    ui.spacing_mut().interact_size.y = 30.0;
+                    ui.spacing_mut().button_padding = egui::vec2(10.0, 7.0);
+                    ui.visuals_mut().collapsing_header_frame = true;
+                    let section_fill = ui.visuals().widgets.noninteractive.bg_fill;
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = section_fill;
+                    egui::CollapsingHeader::new(egui::RichText::new(section.title()).strong())
+                        .id_salt(("inspector-section", section.title()))
+                        .default_open(true)
+                        .show_unindented(ui, |ui| {
+                            egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                                ui.data_mut(|data| data.insert_temp(ui.id().with("active-module-section"), section));
+                                self.section_controls(ui, frame);
+                            });
+                        });
+                });
+            }
+            inspector_rule(ui);
+            egui::Frame::new().inner_margin(12).show(ui, |ui| {
+                if ui.button("Reset module settings")
+                    .help_text("Restore all settings for this module only. Keep captured history and other panes unchanged.")
+                    .clicked() { self.reset_settings(); }
+            });
+        });
     }
 
     pub fn sections(&self) -> &'static [SettingsSection] {
@@ -322,10 +400,12 @@ impl ModulePane {
         }
     }
 
+    #[cfg(test)]
     pub fn active_section(&self) -> SettingsSection {
         self.sections()[self.active_sections[self.kind as usize]]
     }
 
+    #[cfg(test)]
     pub fn select_section(&mut self, section: SettingsSection) {
         if let Some(index) = self
             .sections()
@@ -414,7 +494,7 @@ impl ModulePane {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum TraceStyle {
     Bars,
     Line,
@@ -537,12 +617,33 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
     if selected.is_some_and(|section| section.title() != title) {
         return;
     }
-    // The toolbar selects the tab; only the groups inside it are collapsible.
+    // Render the requested section inside its inspector disclosure.
     ui.push_id(title, body);
+}
+
+/// The inspector's outer bounds allow rules to span padding and the scroll gutter.
+pub(crate) fn inspector_bounds(ui: &egui::Ui) -> Option<Rect> {
+    ui.data(|data| data.get_temp::<Rect>(egui::Id::new("inspector-bounds")))
+}
+
+pub(crate) fn inspector_rule(ui: &mut egui::Ui) {
+    crate::workspace_ui::sidebar_rule(ui, inspector_bounds(ui).unwrap_or(ui.max_rect()));
 }
 
 /// Compact disclosure rows, with state scoped to the pane, module, and section.
 pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    if inspector_bounds(ui).is_some() {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(title)
+                .size(11.0)
+                .color(ui.visuals().weak_text_color()),
+        );
+        ui.add_space(2.0);
+        ui.push_id(title, body);
+        ui.add_space(4.0);
+        return;
+    }
     ui.separator();
     ui.scope(|ui| {
         let widgets = ui.visuals().widgets.clone();
@@ -781,6 +882,92 @@ mod tests {
     }
 
     #[test]
+    fn inspector_lists_all_sections_and_collapsing_one_keeps_the_others_visible() {
+        for kind in ModuleKind::ALL {
+            let context = egui::Context::default();
+            for theme in [egui::Theme::Dark, egui::Theme::Light] {
+                context.style_mut_of(theme, |style| style.animation_time = 0.0);
+            }
+            let mut pane = ModulePane::new(kind);
+            let render = |pane: &mut ModulePane, pane_id, events| {
+                let mut height = 0.0;
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(300.0, 8000.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.push_id(pane_id, |ui| {
+                            pane.inspector_controls(ui, &AnalysisFrame::default())
+                        });
+                        height = ui.min_rect().height();
+                        assert!(
+                            ui.min_rect().width() <= 300.0,
+                            "{kind:?} inspector must fit its width"
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                (output, height)
+            };
+            let (output, expanded_height) = render(&mut pane, 0, vec![]);
+            for section in pane.sections() {
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text == section.title())),
+                    "{kind:?} includes {section:?}"
+                );
+            }
+            let first_title = pane.sections()[0].title();
+            let header = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == first_title => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            for pressed in [true, false] {
+                render(
+                    &mut pane,
+                    0,
+                    vec![
+                        egui::Event::PointerMoved(header),
+                        egui::Event::PointerButton {
+                            pos: header,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            let (collapsed, collapsed_height) = render(&mut pane, 0, vec![]);
+            assert!(
+                collapsed_height < expanded_height,
+                "{kind:?} disclosure hides its parameters"
+            );
+            for section in pane.sections() {
+                assert!(collapsed.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text == section.title())));
+            }
+            let (_, other_height) = render(&mut pane, 1, vec![]);
+            assert_eq!(
+                other_height, expanded_height,
+                "another pane has independent disclosures"
+            );
+            let (_, restored_height) = render(&mut pane, 0, vec![]);
+            assert_eq!(restored_height, collapsed_height);
+        }
+    }
+
+    #[test]
     fn module_controls_fit_the_compact_sidebar_and_reset_is_always_available() {
         for kind in ModuleKind::ALL {
             let context = egui::Context::default();
@@ -1007,7 +1194,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Palette {
     #[default]
     Theme,

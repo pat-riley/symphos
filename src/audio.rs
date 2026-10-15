@@ -55,12 +55,66 @@ pub enum AudioEvent {
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::AudioEngine;
+use linux::AudioEngine as NativeAudioEngine;
 
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::AudioEngine;
+use macos::AudioEngine as NativeAudioEngine;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("Symphos currently supports Linux and macOS; Windows capture is planned.");
+
+#[cfg(feature = "development")]
+mod demo;
+
+pub enum AudioEngine {
+    Native(NativeAudioEngine),
+    #[cfg(feature = "development")]
+    Demo(demo::DemoEngine),
+}
+impl AudioEngine {
+    pub fn start() -> Self {
+        #[cfg(feature = "development")]
+        if crate::development::options().is_some_and(|options| options.demo) {
+            return Self::Demo(demo::DemoEngine::start());
+        }
+        Self::Native(NativeAudioEngine::start())
+    }
+    #[cfg(all(feature = "development", test))]
+    pub fn development_mode(demo: bool) -> Self {
+        if demo {
+            Self::Demo(self::demo::DemoEngine::start())
+        } else {
+            Self::Native(NativeAudioEngine::start())
+        }
+    }
+    pub fn analysis(&self) -> &crate::analysis::AnalysisRuntime {
+        match self {
+            Self::Native(engine) => &engine.analysis,
+            #[cfg(feature = "development")]
+            Self::Demo(engine) => &engine.analysis,
+        }
+    }
+    pub fn refresh_sources(&self) {
+        match self {
+            Self::Native(engine) => engine.refresh_sources(),
+            #[cfg(feature = "development")]
+            Self::Demo(engine) => engine.refresh_sources(),
+        }
+    }
+    pub fn select_source(&self, source: AudioSource) {
+        match self {
+            Self::Native(engine) => engine.select_source(source),
+            #[cfg(feature = "development")]
+            Self::Demo(engine) => engine.select_source(),
+        }
+    }
+    pub fn drain_events(&mut self) -> std::vec::IntoIter<AudioEvent> {
+        match self {
+            Self::Native(engine) => engine.drain_events().collect::<Vec<_>>().into_iter(),
+            #[cfg(feature = "development")]
+            Self::Demo(engine) => engine.drain_events(),
+        }
+    }
+}

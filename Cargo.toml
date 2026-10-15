@@ -11,6 +11,9 @@ homepage = "https://github.com/pat-riley/symphos"
 keywords = ["audio", "visualizer", "pipewire", "wgpu", "omarchy"]
 categories = ["multimedia::audio", "visualization"]
 
+[features]
+development = []
+
 [dependencies]
 anyhow = "1.0"
 arc-swap = "1.7"
@@ -19,6 +22,9 @@ env_logger = "0.11"
 log = "0.4"
 realfft = "3.5.0"
 rtrb = "0.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+egui = { version = "0.36.1", features = ["serde"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Keep the API baseline compatible with Ubuntu 24.04's PipeWire 1.0 headers.

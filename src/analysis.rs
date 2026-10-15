@@ -21,7 +21,7 @@ fn capture_capacity(sample_rate: u32) -> usize {
     (sample_rate.clamp(1, 384_000) as usize / 2).max(FFT_SIZES[FFT_SIZES.len() - 1])
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WindowFunction {
     Hann,
     Hamming,
@@ -47,7 +47,7 @@ impl WindowFunction {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChannelMode {
     StereoMix,
     Left,
@@ -66,7 +66,7 @@ impl ChannelMode {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AnalysisSettings {
     pub fft_size: usize,
     pub window: WindowFunction,
