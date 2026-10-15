@@ -479,13 +479,25 @@ impl eframe::App for SymphosApp {
                 let source = self.source_selector(ui);
                 let options = icons::sized_button(ui, Icon::Gear, false, source.rect.height(), "View settings: dashboard layout, fullscreen, and detailed diagnostics.");
                 egui::Popup::menu(&options).show(|ui| {
-                    if ui.button("Keyboard shortcuts · Ctrl+K").clicked() {
+                    if ui.button(crate::shortcuts::platform_label("Keyboard shortcuts · Ctrl+K")).clicked() {
                         self.show_shortcuts = true;
                         ui.close();
                     }
                     if ui.button(format!("Issue log ({})", crate::issues::count())).clicked() {
                         self.show_issues = true;
                         ui.close();
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        if ui.button("Retry audio capture").clicked() {
+                            if let Some(source) = self.sources.iter().find(|source| Some(source.node_name.as_str()) == self.selected_node.as_deref()).cloned() {
+                                self.engine.select_source(source);
+                                self.status = AudioStatus::Connecting;
+                                self.reset_modules();
+                            }
+                            ui.close();
+                        }
+                        ui.label("Allow system audio recording in macOS Privacy & Security.");
                     }
                     if ui.button("Reset pane sizes").help_text("Restore the default dashboard proportions and leave expanded-pane mode.").clicked() {
                         self.top_fraction = 0.62;

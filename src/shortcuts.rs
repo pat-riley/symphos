@@ -146,6 +146,14 @@ pub fn take_action(ctx: &egui::Context, modal_open: bool) -> Option<Action> {
     })
 }
 
+pub fn platform_label(label: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(target_os = "macos") {
+        std::borrow::Cow::Owned(label.replace("Ctrl", "Cmd"))
+    } else {
+        std::borrow::Cow::Borrowed(label)
+    }
+}
+
 pub fn show(ctx: &egui::Context, open: &mut bool) {
     if !*open {
         return;
@@ -156,7 +164,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
         ui.label("Application shortcuts are disabled while typing or using a modal/menu. Bindings are currently fixed.");
         egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
             egui::Grid::new("bindings-list").striped(true).spacing([18.0, 8.0]).show(ui, |ui| {
-                for binding in BINDINGS { ui.monospace(binding.label); ui.label(binding.description); ui.end_row(); }
+                for binding in BINDINGS { ui.monospace(platform_label(binding.label)); ui.label(binding.description); ui.end_row(); }
             });
             ui.separator();
             ui.strong("Parameter editing");

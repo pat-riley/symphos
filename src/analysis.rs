@@ -183,8 +183,24 @@ impl AnalysisRuntime {
         channels: Arc<std::sync::atomic::AtomicU32>,
         dropped_samples: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
+        Self::start_with_settings(
+            consumer,
+            sample_rate,
+            channels,
+            dropped_samples,
+            Arc::new(Mutex::new(AnalysisSettings::default())),
+        )
+    }
+
+    // New capture sessions can share controls without reusing old-rate samples.
+    pub fn start_with_settings(
+        consumer: Consumer<StereoSample>,
+        sample_rate: Arc<std::sync::atomic::AtomicU32>,
+        channels: Arc<std::sync::atomic::AtomicU32>,
+        dropped_samples: Arc<std::sync::atomic::AtomicU64>,
+        settings: Arc<Mutex<AnalysisSettings>>,
+    ) -> Self {
         let snapshot = Arc::new(ArcSwap::from_pointee(AnalysisFrame::default()));
-        let settings = Arc::new(Mutex::new(AnalysisSettings::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let capture_history =
             Arc::new(Mutex::new(crate::capture_history::CaptureHistory::default()));

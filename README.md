@@ -4,8 +4,10 @@
 
 # Symphos
 
-Symphos is a native, GPU-rendered audio analyzer and visualizer for Omarchy.
-It captures microphones and system output through PipeWire, displays the signal
+Symphos is a native, GPU-rendered audio analyzer and visualizer, developed for Omarchy
+and now available as a local macOS developer build. On Linux it captures microphones
+and system output through PipeWire; on macOS it captures system playback through
+Core Audio taps. It displays the signal
 in real time, and is being built toward a visual scene editor where audio
 signals can control shapes, particles, effects, and shaders.
 
@@ -233,9 +235,9 @@ pane-size reset, fullscreen (F11), and the FFT inspector with
 the detailed analyzer metrics and experimental tempo estimate. Pane assignments,
 sizes, module settings, and Info View visibility currently last for the session.
 
-## Requirements
+## Linux requirements
 
-Symphos currently targets Linux desktops using PipeWire. Development is focused
+Symphos supports Linux desktops using PipeWire. Development is focused
 on Omarchy and tested on ARM64 Apple Silicon with the Asahi graphics stack.
 
 You need:
@@ -253,7 +255,7 @@ omarchy pkg add base-devel pipewire libxkbcommon wayland
 
 Install Rust with your distribution package or the official `rustup` installer.
 
-## Build and run
+## Build and run on Linux
 
 ```sh
 git clone https://github.com/pat-riley/symphos.git
@@ -292,6 +294,24 @@ Remove the installation with:
 ./scripts/uninstall-dev.sh
 ```
 
+## Build and run on macOS
+
+The initial Mac backend visualizes system playback on macOS 14.2 or newer,
+without a virtual audio driver. Apple Silicon has been tested locally; Intel,
+additional input devices, and public distribution are still pending validation.
+Install Rust 1.95 or newer and Xcode command line tools, then run:
+
+```sh
+./scripts/build-macos.sh
+open target/macos/Symphos.app
+```
+
+Allow system audio recording when macOS requests it. If capture needs to be
+restarted, use **Settings → Retry audio capture**. Microphone/interface input
+selection and DAW plugins are not part of this first Mac milestone. The build
+is locally ad-hoc signed; public downloads will require release signing and
+notarization. See [Mac setup and validation](docs/macos-development.md).
+
 ## Development checks
 
 ```sh
@@ -311,6 +331,12 @@ The [project roadmap](docs/roadmap.md) describes the path from the current
 analyzer to editable scenes, audio-to-visual mappings, effects, shaders, and
 Arch packaging. The [analyzer feature backlog](docs/analyzer-feature-backlog.md)
 tracks metering, capture, DAW, workspace, and platform gaps in more detail.
+
+The [desktop and plugin plan](docs/cross-platform-plan.md) proposes macOS system
+audio capture, preservation of Omarchy support, VST3/AU investigation, and later
+Windows support. The first Mac system-audio developer build is implemented; plugins, Windows,
+and public downloadable releases remain planned.
+The [landing page brief](docs/landing-page-brief.md) outlines the separate website.
 
 ## Contributing
 
