@@ -5,6 +5,24 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Add Flux, a music-reactive 3D particle cloud with moving attraction points,
+  bass bursts, swirling currents, trails, four palettes and color mappings,
+  42 controls, and orbit/roll/zoom/perspective camera controls. Add the Flux
+  currents preset and preserve customized settings from older workspaces.
+
+- Add Strata, an audio-reactive layered wire sculpture inspired by suspended
+  membranes and granular fields. Include drifting dust, tumbling wire grains,
+  39 controls, four palettes, drag/scroll camera controls, automatic orbit, and
+  the Strata chamber preset. Preserve customized Veroni and older workspaces.
+
+- Add Veroni, an audio-reactive Voronoi visualizer with flowing cells, luminous
+  points, and fine connections. Include 30 inspector controls for geometry,
+  motion, audio response, and appearance; a Visual browser category and Veroni
+  flow preset; pause/fullscreen and saved settings. Upgrade existing six-module
+  workspaces and view presets without losing their configuration.
+
 ### Changed
 
 - Replace the top-left branding with a New component button. Give its browser

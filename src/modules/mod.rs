@@ -19,11 +19,15 @@ macro_rules! module_settings {
 }
 
 mod camera_gizmo;
+mod flux;
 mod frequency;
 mod oscilloscope;
+mod reactive;
 mod spectrogram;
 mod spectrum;
 mod stereometer;
+mod strata;
+mod veroni;
 mod waterfall;
 mod waveform;
 
@@ -34,10 +38,13 @@ use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 use crate::help::HoverHelp;
 use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
+use flux::Flux;
 use oscilloscope::Oscilloscope;
 use spectrogram::Spectrogram;
 use spectrum::Spectrum;
 use stereometer::Stereometer;
+use strata::Strata;
+use veroni::Veroni;
 use waterfall::Waterfall;
 use waveform::Waveform;
 
@@ -55,16 +62,22 @@ pub enum ModuleKind {
     Spectrogram,
     Stereometer,
     Oscilloscope,
+    Veroni,
+    Strata,
+    Flux,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
         Self::Spectrogram,
         Self::Stereometer,
         Self::Oscilloscope,
+        Self::Veroni,
+        Self::Strata,
+        Self::Flux,
     ];
 
     pub fn label(self) -> &'static str {
@@ -75,6 +88,9 @@ impl ModuleKind {
             Self::Spectrogram => "Spectrogram",
             Self::Stereometer => "Stereometer",
             Self::Oscilloscope => "Oscilloscope",
+            Self::Veroni => "Veroni",
+            Self::Strata => "Strata",
+            Self::Flux => "Flux",
         }
     }
 
@@ -86,6 +102,9 @@ impl ModuleKind {
             Self::Spectrogram => Icon::Spectrogram,
             Self::Stereometer => Icon::Stereo,
             Self::Oscilloscope => Icon::Oscilloscope,
+            Self::Veroni => Icon::Veroni,
+            Self::Strata => Icon::Strata,
+            Self::Flux => Icon::Flux,
         }
     }
 
@@ -97,6 +116,9 @@ impl ModuleKind {
             Self::Spectrogram => "Frequency over time",
             Self::Stereometer => "Stereo image & phase",
             Self::Oscilloscope => "Signal shape & cycle",
+            Self::Strata => "Audio-reactive layered sculpture",
+            Self::Flux => "3D particle currents",
+            Self::Veroni => "Audio-reactive cellular flow",
         }
     }
 
@@ -117,6 +139,15 @@ impl ModuleKind {
             Self::Stereometer => {
                 "Stereo width, balance, and phase correlation. The vectorscope plots the relationship between the left and right channels."
             }
+            Self::Flux => {
+                "A dancing 3D particle cloud pulled into colorful currents by moving attraction points. Bass expands the cloud, mids drive swirl, and highs add scatter. Drag to orbit; Shift-drag to roll; scroll to zoom."
+            }
+            Self::Strata => {
+                "Suspended wire membranes, drifting dust and tumbling grains. Bass bends the layers, mids drive ripples, and highs illuminate the particles. Drag to orbit; scroll to zoom; double-click to reset the view."
+            }
+            Self::Veroni => {
+                "A flowing Voronoi mesh with luminous sites. Bass expands the cells, mids bend the flow, and highs animate fine detail. Open the inspector to shape its motion and appearance."
+            }
             Self::Oscilloscope => {
                 "A short, stabilized amplitude view for inspecting the repeating cycle, symmetry, and shape of a sound."
             }
@@ -132,7 +163,10 @@ pub struct ModulePane {
     spectrogram: Spectrogram,
     stereometer: Stereometer,
     oscilloscope: Oscilloscope,
-    active_sections: [usize; 6],
+    veroni: Veroni,
+    strata: Strata,
+    flux: Flux,
+    active_sections: [usize; 9],
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
     pub last_capture: u64,
@@ -146,6 +180,9 @@ pub enum ModuleSettings {
     Spectrogram(spectrogram::SpectrogramSettings),
     Stereometer(stereometer::StereometerSettings),
     Oscilloscope(oscilloscope::OscilloscopeSettings),
+    Veroni(veroni::VeroniSettings),
+    Strata(strata::StrataSettings),
+    Flux(flux::FluxSettings),
 }
 
 impl ModuleSettings {
@@ -157,6 +194,9 @@ impl ModuleSettings {
             Self::Spectrogram(_) => ModuleKind::Spectrogram,
             Self::Stereometer(_) => ModuleKind::Stereometer,
             Self::Oscilloscope(_) => ModuleKind::Oscilloscope,
+            Self::Veroni(_) => ModuleKind::Veroni,
+            Self::Strata(_) => ModuleKind::Strata,
+            Self::Flux(_) => ModuleKind::Flux,
         }
     }
 }
@@ -164,8 +204,54 @@ impl ModuleSettings {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PaneState {
     pub kind: ModuleKind,
-    pub sections: [usize; 6],
+    #[serde(deserialize_with = "decode_sections")]
+    pub sections: [usize; 9],
+    #[serde(deserialize_with = "decode_module_settings")]
     pub settings: Vec<ModuleSettings>,
+}
+
+// Upgrade workspaces and view presets from the six-, seven-, and eight-component schemas.
+// Only complete known legacy sets are upgraded; malformed sets still fail validation.
+fn decode_sections<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[usize; 9], D::Error> {
+    let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
+    if !(6..=9).contains(&values.len()) {
+        return Err(serde::de::Error::custom(
+            "expected six to nine module sections",
+        ));
+    }
+    let mut sections = [0; 9];
+    sections[..values.len()].copy_from_slice(&values);
+    Ok(sections)
+}
+fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<ModuleSettings>, D::Error> {
+    let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
+    let legacy_len = settings.len();
+    if (6..=8).contains(&legacy_len)
+        && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
+            settings
+                .iter()
+                .filter(|entry| entry.kind() == *kind)
+                .count()
+                == 1
+        })
+    {
+        if legacy_len == 6 {
+            settings.push(ModuleSettings::Veroni(
+                Veroni::default().settings_snapshot(),
+            ));
+        }
+        if legacy_len <= 7 {
+            settings.push(ModuleSettings::Strata(
+                Strata::default().settings_snapshot(),
+            ));
+        }
+        settings.push(ModuleSettings::Flux(Flux::default().settings_snapshot()));
+    }
+    Ok(settings)
 }
 
 struct FrozenFrame {
@@ -188,6 +274,8 @@ pub enum SettingsSection {
     Display,
     Correlation,
     Sync,
+    Flow,
+    Particles,
 }
 
 impl SettingsSection {
@@ -205,6 +293,8 @@ impl SettingsSection {
             Self::Display => "Display",
             Self::Correlation => "Correlation",
             Self::Sync => "Synchronization",
+            Self::Flow => "Flow & Motion",
+            Self::Particles => "Particles",
         }
     }
 }
@@ -212,6 +302,9 @@ impl SettingsSection {
 impl ModulePane {
     pub fn copy_settings(&self) -> ModuleSettings {
         match self.kind {
+            ModuleKind::Veroni => ModuleSettings::Veroni(self.veroni.settings_snapshot()),
+            ModuleKind::Strata => ModuleSettings::Strata(self.strata.settings_snapshot()),
+            ModuleKind::Flux => ModuleSettings::Flux(self.flux.settings_snapshot()),
             ModuleKind::Waterfall => ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
             ModuleKind::Spectrum => ModuleSettings::Spectrum(self.spectrum.settings_snapshot()),
             ModuleKind::Waveform => ModuleSettings::Waveform(self.waveform.settings_snapshot()),
@@ -232,6 +325,9 @@ impl ModulePane {
             return false;
         }
         match settings {
+            ModuleSettings::Veroni(settings) => self.veroni.apply_settings(settings),
+            ModuleSettings::Strata(settings) => self.strata.apply_settings(settings),
+            ModuleSettings::Flux(settings) => self.flux.apply_settings(settings),
             ModuleSettings::Waterfall(settings) => self.waterfall.apply_settings(settings),
             ModuleSettings::Spectrum(settings) => self.spectrum.apply_settings(settings),
             ModuleSettings::Waveform(settings) => self.waveform.apply_settings(settings),
@@ -253,6 +349,9 @@ impl ModulePane {
                 ModuleSettings::Spectrogram(self.spectrogram.settings_snapshot()),
                 ModuleSettings::Stereometer(self.stereometer.settings_snapshot()),
                 ModuleSettings::Oscilloscope(self.oscilloscope.settings_snapshot()),
+                ModuleSettings::Veroni(self.veroni.settings_snapshot()),
+                ModuleSettings::Strata(self.strata.settings_snapshot()),
+                ModuleSettings::Flux(self.flux.settings_snapshot()),
             ],
         }
     }
@@ -279,7 +378,10 @@ impl ModulePane {
             spectrogram: Spectrogram::default(),
             stereometer: Stereometer::default(),
             oscilloscope: Oscilloscope::default(),
-            active_sections: [0; 6],
+            veroni: Veroni::default(),
+            strata: Strata::default(),
+            flux: Flux::default(),
+            active_sections: [0; 9],
             frozen: None,
             paused_duration: Duration::ZERO,
             last_capture: 0,
@@ -296,6 +398,9 @@ impl ModulePane {
         self.spectrogram.clear();
         self.stereometer.clear();
         self.oscilloscope.clear();
+        self.veroni.clear();
+        self.strata.clear();
+        self.flux.clear();
     }
 
     pub fn is_frozen(&self) -> bool {
@@ -325,6 +430,9 @@ impl ModulePane {
             ModuleKind::Spectrogram => self.spectrogram.reset_settings(),
             ModuleKind::Stereometer => self.stereometer.reset_settings(),
             ModuleKind::Oscilloscope => self.oscilloscope.reset_settings(),
+            ModuleKind::Veroni => self.veroni.reset_settings(),
+            ModuleKind::Strata => self.strata.reset_settings(),
+            ModuleKind::Flux => self.flux.reset_settings(),
         }
     }
 
@@ -355,6 +463,9 @@ impl ModulePane {
             ModuleKind::Spectrogram => self.spectrogram.controls(ui),
             ModuleKind::Stereometer => self.stereometer.controls(ui),
             ModuleKind::Oscilloscope => self.oscilloscope.controls(ui),
+            ModuleKind::Veroni => self.veroni.controls(ui),
+            ModuleKind::Strata => self.strata.controls(ui),
+            ModuleKind::Flux => self.flux.controls(ui),
         }
     }
 
@@ -397,6 +508,10 @@ impl ModulePane {
             ModuleKind::Waveform => &[Channels, TimeWindow, Amplitude, Appearance],
             ModuleKind::Stereometer => &[Display, Appearance, Correlation],
             ModuleKind::Oscilloscope => &[Channels, Sync, TimeWindow, Amplitude, Appearance],
+            ModuleKind::Veroni => &[Geometry, Flow, Response, Appearance],
+            ModuleKind::Strata | ModuleKind::Flux => {
+                &[Geometry, Flow, Response, Particles, Appearance, Camera]
+            }
         }
     }
 
@@ -472,6 +587,9 @@ impl ModulePane {
             ),
             ModuleKind::Stereometer => self.stereometer.draw(ui, rect, frame, theme, live),
             ModuleKind::Oscilloscope => self.oscilloscope.draw(ui, rect, frame, theme, live),
+            ModuleKind::Veroni => self.veroni.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Strata => self.strata.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Flux => self.flux.draw(ui, rect, frame, theme, now, live),
         }
         if self.frozen.is_some() {
             ui.painter().text(

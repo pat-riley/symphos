@@ -525,6 +525,19 @@ pub fn factory_presets() -> Vec<Preset> {
             &[ModuleKind::Waterfall],
         ),
         view(
+            "veroni",
+            "Veroni flow",
+            Tile::Pane(0),
+            &[ModuleKind::Veroni],
+        ),
+        view(
+            "strata",
+            "Strata chamber",
+            Tile::Pane(0),
+            &[ModuleKind::Strata],
+        ),
+        view("flux", "Flux currents", Tile::Pane(0), &[ModuleKind::Flux]),
+        view(
             "stereo",
             "Stereo lab",
             Tile::split(
@@ -838,6 +851,82 @@ mod tests {
             Tile::split(Axis::Horizontal, 0.3, Tile::Pane(7), Tile::Pane(2)).canonical();
         assert_eq!(canonical.ids(), [0, 1]);
     }
+    #[test]
+    fn six_component_workspaces_and_view_presets_upgrade_without_losing_settings() {
+        let mut original = session();
+        original.panes[0].sections[0] = 2;
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(6);
+            pane["settings"].as_array_mut().unwrap().retain(|entry| {
+                entry.get("Veroni").is_none()
+                    && entry.get("Strata").is_none()
+                    && entry.get("Flux").is_none()
+            });
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.panes, original.panes);
+        assert_eq!(decoded.layout, original.layout);
+        let preset =
+            serde_json::json!({"View": {"layout": legacy["layout"], "panes": legacy["panes"]}});
+        let restored: PresetContent = serde_json::from_value(preset).unwrap();
+        assert!(restored.valid());
+        assert!(decoded.matches(&restored));
+        // Adding the new default must not mask a missing or duplicated old component.
+        legacy["panes"][0]["settings"][1] = legacy["panes"][0]["settings"][0].clone();
+        assert!(Session::decode(&serde_json::to_vec(&legacy).unwrap()).is_none());
+    }
+
+    #[test]
+    fn seven_component_workspace_upgrade_preserves_custom_veroni() {
+        let mut original = session();
+        let mut pane = ModulePane::new(ModuleKind::Veroni);
+        let mut value = serde_json::to_value(pane.copy_settings()).unwrap();
+        value["Veroni"]["cells"] = 213.into();
+        value["Veroni"]["edge_opacity"] = 0.2.into();
+        pane.paste_settings(&serde_json::from_value(value).unwrap());
+        original.panes[0] = pane.snapshot();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(7);
+            pane["settings"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|entry| entry.get("Strata").is_none() && entry.get("Flux").is_none());
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.panes, original.panes);
+        let preset =
+            serde_json::json!({"View": {"layout": legacy["layout"], "panes": legacy["panes"]}});
+        let restored: PresetContent = serde_json::from_value(preset).unwrap();
+        assert!(restored.valid() && decoded.matches(&restored));
+    }
+
+    #[test]
+    fn eight_component_workspace_upgrade_preserves_custom_strata() {
+        let mut original = session();
+        let mut pane = ModulePane::new(ModuleKind::Strata);
+        let mut value = serde_json::to_value(pane.copy_settings()).unwrap();
+        value["Strata"]["layers"] = 11.into();
+        value["Strata"]["yaw"] = 65.0.into();
+        pane.paste_settings(&serde_json::from_value(value).unwrap());
+        original.panes[0] = pane.snapshot();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(8);
+            pane["settings"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|entry| entry.get("Flux").is_none());
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.panes, original.panes);
+        let preset =
+            serde_json::json!({"View": {"layout": legacy["layout"], "panes": legacy["panes"]}});
+        let restored: PresetContent = serde_json::from_value(preset).unwrap();
+        assert!(restored.valid() && decoded.matches(&restored));
+    }
+
     #[test]
     fn all_component_snapshots_roundtrip_without_captured_audio() {
         for kind in ModuleKind::ALL {
