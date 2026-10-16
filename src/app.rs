@@ -834,7 +834,7 @@ impl SymphosApp {
             Pos2::new(rect.right(), rect.top() + workspace_ui::NAV_HEIGHT),
         );
         workspace_ui::navigation_surface(ui, navigation, &self.theme);
-        let header = navigation.shrink2(Vec2::new(16.0, 10.0));
+        let header = navigation.shrink(workspace_ui::NAV_PADDING);
         let left = Rect::from_min_max(
             header.min,
             Pos2::new(header.left() + 160.0, header.bottom()),
@@ -864,15 +864,12 @@ impl SymphosApp {
         let mut nav = workspace_ui::navigation_region(ui, right, "navbar", &self.theme);
         nav.horizontal_centered(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().interact_size.y = 26.0;
-                ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
-                ui.style_mut().override_font_id = Some(FontId::proportional(13.0));
                 ui.add_enabled_ui(self.tiles.is_some(), |ui| {
                     let toggle = icons::sized_button(
                         ui,
                         Icon::Inspector,
                         self.sidebar_open && self.tiles.is_some(),
-                        28.0,
+                        workspace_ui::NAV_CONTROL_HEIGHT,
                         if self.sidebar_open {
                             "Hide component inspector · N"
                         } else {
@@ -1272,9 +1269,7 @@ mod workspace_interaction_tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text)
-                    if text.galley.job.text.contains("Frequency · Live levels") =>
-                {
+                egui::Shape::Text(text) if text.galley.job.text == ModuleKind::Spectrum.label() => {
                     Some(text.pos + text.galley.size() * 0.5)
                 }
                 _ => None,

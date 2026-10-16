@@ -51,13 +51,15 @@ and the drag grip first, keeping fullscreen, inspect, and close accessible.
 
 ## Add components
 
-Open **New component** in the top bar. The browser docks flush on the left, using the inspector’s header, field styling,
-component icons, and full-width dividers. It has text search and Frequency,
-Time, Stereo, and Visual categories, with room for additional components in future builds.
+Click the white **Symphos logo** at the top left to open or close **New component**.
+The browser docks flush on the left with a compact header and one list of components.
+Each single-line row shows an icon, name, and six-dot drag grip, with full-width
+dividers. Descriptions remain available on hover; search and category tabs are
+currently omitted.
 
-- Click a library card to add that visualization beside the selected pane.
-- Drag a card to a pane edge to add a new split there.
-- Drag a card to a pane center to replace its visualization.
+- Click a component row to add that visualization beside the selected pane.
+- Drag a row to a pane edge to add a new split there.
+- Drag a row to a pane center to replace its visualization.
 
 An overlay previews the target split or replacement during dragging. Adding and
 rearranging components never starts another audio capture device; each open
@@ -67,7 +69,7 @@ histories.
 
 ## Veroni visualizer
 
-**Veroni** is under **New component → Visual**, or choose **Veroni flow** in the
+**Veroni** is under **New component**, or choose **Veroni flow** in the
 preset browser for a single-panel view. It uses moving Voronoi sites to create
 rounded cells, pale outlines, luminous points, and fine connections inspired by
 the reference image. The points define the geometry, so their movement actually
@@ -103,7 +105,7 @@ settings without changing their existing layout or component settings.
 
 ## Strata visualizer
 
-**Strata** is under **New component → Visual**, or choose **Strata chamber** in the
+**Strata** is under **New component**, or choose **Strata chamber** in the
 preset browser. It turns audio into a suspended sculpture: ivory-to-coral wire
 membranes, drifting luminous dust, and slowly tumbling faceted grains inside a
 faint volume frame. The reference's layered mesh and granular structure inspire
@@ -158,7 +160,7 @@ including those containing customized Veroni components.
 
 ## Flux particle cloud
 
-**Flux** is under **New component → Visual**, or select **Flux currents** from the
+**Flux** is under **New component**, or select **Flux currents** from the
 preset browser. It creates a 3D cloud of thousands of colored points, drawn into
 flowing streams around moving attraction points. It starts at 6,000 particles
 and supports 200–20,000. The reference's multicolored filaments and luminous cores
