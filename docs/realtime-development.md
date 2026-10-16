@@ -29,7 +29,7 @@ Incremental build times depend on the changes and the machine; small source
 changes were observed in roughly 2–8 seconds on the development Mac after warming
 the build cache. Initial builds and dependency changes take longer.
 
-The saved development workspace includes all six modules' settings in each
+The saved development workspace includes all component settings in each
 pane, pane assignments, selected pane, inspector visibility and width, divider
 positions, shared analysis and meter controls, audio mode, and window size and
 position. It deliberately excludes samples, histories, frozen frames, textures,
@@ -101,8 +101,8 @@ elsewhere first. The ordinary issue log remains available inside the app.
 ## Verification
 
 Mac normal and development builds pass formatting, Clippy, and tests. The
-normal suite passes 135 tests and the development suite passes 142 tests; both
-retain two existing ignored manual benchmarks. Four Python supervisor tests
+normal suite passes 152 tests and the development suite passes 159 tests; both
+retain five ignored manual timing probes (including Veroni, Strata, and Flux). Four Python supervisor tests
 cover source watching, successful publishing, atomic control writes, and failed
 builds retaining the current app.
 
@@ -111,6 +111,28 @@ running build was retained, restored the source, and verified that the successfu
 relaunch restored pane/global settings. A live palette check changed the accent
 and selection colors to amber while the build status/generation stayed unchanged.
 The generated signal was exercised in the running app.
+
+The Veroni timing probe can be run with:
+
+```sh
+cargo test --features development modules::veroni::tests::render_timing -- --ignored --nocapture
+```
+
+On the development Mac it measured approximately 0.49 ms/frame at 128 cells and
+1.13 ms/frame at 240 cells for UI drawing and tessellation at 1600×900 points.
+These are local CPU measurements, not end-to-end GPU frame times or Linux results.
+
+Strata's corresponding probe is
+`cargo test --features development modules::strata::tests::render_timing -- --ignored --nocapture`.
+On the same Mac, it measured 1.09 ms/frame at default settings and 5.73 ms/frame
+at maximum layers, grid detail, dust, and grain counts. It includes geometry,
+depth sorting, UI drawing, and tessellation; GPU presentation is excluded.
+
+Flux's corresponding probe is
+`cargo test --features development modules::flux::tests::render_timing -- --ignored --nocapture`.
+On the same Mac, it measured 2.12 ms/frame at the default 6,000 particles and
+9.34 ms/frame at 20,000 particles. It includes fixed-step simulation, depth
+sorting, UI drawing, and tessellation; GPU presentation is excluded.
 
 CI includes the development feature and supervisor tests on Mac and Linux.
 A real Omarchy session is still required for desktop-device and graphics

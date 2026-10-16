@@ -50,8 +50,17 @@ and visual parameter mapping are still on the roadmap.
   messages, and a preview of the selected module/current capture configuration.
   Review before sharing; no automatic uploads.
 - Compact top-right PipeWire source selector, defaulting to system-output speakers
-- Four resizable panes with interchangeable waterfall, spectrum, waveform,
-  spectrogram, stereometer, and oscilloscope modules
+- Resizable panes with interchangeable waterfall, spectrum, waveform,
+  spectrogram, stereometer, oscilloscope, Veroni, Strata, and Flux components
+- [Flux particle cloud](docs/workspace-layouts.md#flux-particle-cloud) with
+  music-driven 3D currents, 200–20,000 particles, trails, and 42 controls including
+  orbit, roll, perspective, and color mapping
+- [Strata layered sculpture](docs/workspace-layouts.md#strata-visualizer) with
+  rippling wire membranes, drifting dust, tumbling grains, an orbitable camera,
+  and 39 controls for structure, motion, audio response, and appearance
+- [Veroni cellular visualizer](docs/workspace-layouts.md#veroni-visualizer) with
+  audio-reactive Voronoi cells, flowing lime points, and 30 controls for geometry,
+  movement, audio response, and appearance
 - A live 3D waterfall with Surface, Lines, Y Lines, Wireframe, Dots, Stems, and Bars render styles,
   fully hideable guides, rotation, zoom, and 0.1–30 second history (2 seconds by default)
 - Independent waterfall X/Y lengths (0.25×–10×, default 1× each) without changing frequency range or history duration

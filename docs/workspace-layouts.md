@@ -53,7 +53,7 @@ and the drag grip first, keeping fullscreen, inspect, and close accessible.
 
 Open **New component** in the top bar. The browser docks flush on the left, using the inspector’s header, field styling,
 component icons, and full-width dividers. It has text search and Frequency,
-Time, and Stereo categories, with room for additional components in future builds.
+Time, Stereo, and Visual categories, with room for additional components in future builds.
 
 - Click a library card to add that visualization beside the selected pane.
 - Drag a card to a pane edge to add a new split there.
@@ -64,6 +64,134 @@ rearranging components never starts another audio capture device; each open
 component uses the existing shared analysis stream. Components hidden temporarily
 by pane expansion keep ingesting capture. Closed components release their
 histories.
+
+## Veroni visualizer
+
+**Veroni** is under **New component → Visual**, or choose **Veroni flow** in the
+preset browser for a single-panel view. It uses moving Voronoi sites to create
+rounded cells, pale outlines, luminous points, and fine connections inspired by
+the reference image. The points define the geometry, so their movement actually
+reshapes the cells.
+
+The right inspector has four sections with 30 controls:
+
+| Section | Controls |
+| --- | --- |
+| Geometry | 12–240 cells, repeatable pattern seed, clustering, corner softness |
+| Flow & Motion | Speed, drift, turbulence, swirl, breathing |
+| Signal Response | Sensitivity, noise floor, attack/release, bass/mid/high movement, stereo influence |
+| Appearance | Four palettes, cell outlines/tint, edge width/opacity/response, point size/response, glow, connections and reach |
+
+Bass (20–250 Hz) expands clusters and changes the flow speed. Mids (250 Hz–4 kHz)
+bend the currents and swirl; highs (4–20 kHz) add fine motion. Band energy also
+changes point size and border strength. Attack and release soften these changes;
+stereo balance gently steers the field. This is energy-driven motion, not a
+BPM-locked animation. It uses the same shared analysis and audio source as the
+other components, with no new device, driver, or permission requirements.
+
+For a calmer result, reduce **Flow speed** and **Turbulence**, then increase
+**Release ms**. For stronger musical movement, increase **Sensitivity** and the
+individual band influences. **Sensitivity = 0** keeps only ambient flow.
+**Flow speed = 0** stops the flow clock while audio can still deform the cells;
+use the pane's **Pause** button to hold the entire visual still. Colors include
+Electric lime (default), Glacial blue, Ember, and the current theme accent.
+
+Settings save in component presets, full-view presets, and the last workspace.
+Animation time, current energy envelopes, and point positions are transient.
+Older six-component workspaces and full-view presets acquire default Veroni
+settings without changing their existing layout or component settings.
+
+## Strata visualizer
+
+**Strata** is under **New component → Visual**, or choose **Strata chamber** in the
+preset browser. It turns audio into a suspended sculpture: ivory-to-coral wire
+membranes, drifting luminous dust, and slowly tumbling faceted grains inside a
+faint volume frame. The reference's layered mesh and granular structure inspire
+the design; it is an artistic energy-driven field, not a physical filter model.
+
+Its 39 inspector controls are organized into six sections:
+
+| Section | Controls |
+| --- | --- |
+| Geometry | 2–12 layers, mesh detail, width, depth, stack height, sag, edge tension |
+| Flow & Motion | Motion speed, ripple frequency, turbulence, layer twist |
+| Signal Response | Sensitivity, noise floor, attack/release, bass bend, mid ripples, high shimmer |
+| Particles | Dust count, wire grains, repeatable seed, lift, spread, grain radius, dust size, trails |
+| Appearance | Kiln/Glacier/Pearl/theme palettes, wire width, mesh/particle opacity, glow, membrane/frame/hint toggles |
+| Camera | Rotation, elevation, zoom, auto orbit, orbit speed |
+
+Bass deepens the hanging surfaces and accelerates their motion. Mids increase
+traveling ripples; highs illuminate the dust and expand the wire grains. Mesh
+highlights move toward the palette's warm color as deformation and energy rise.
+Each layer stays within its own vertical space, even at maximum response.
+Particles fade before wrapping at the top or bottom of the volume.
+
+Drag inside the scene to orbit (this stops auto orbit at its current angle).
+Scroll to zoom; double-click to reset the view. **Pause** freezes the wave clock,
+particles, and automatic camera rotation together. Manual camera controls remain
+available while paused. Auto orbit runs independently of **Motion speed**; set
+**Sensitivity** to zero for ambient motion alone. Presets contain settings only;
+animation clocks and captured audio are never serialized.
+
+For a quieter composition, reduce Dust count and Wire grains, lower Mesh opacity,
+and use a long Release. For a dense architectural look, increase Mesh detail;
+more layers and finer grids cost more to render. The default seven layers and
+24 grid divisions keep the structure readable without filling every gap.
+
+Strata uses the existing analysis stream and native renderer on Mac and Linux.
+It adds no audio devices or platform dependencies. Existing six- and seven-module
+workspaces and full-view presets acquire its default settings automatically,
+including those containing customized Veroni components.
+
+## Flux particle cloud
+
+**Flux** is under **New component → Visual**, or select **Flux currents** from the
+preset browser. It creates a 3D cloud of thousands of colored points, drawn into
+flowing streams around moving attraction points. It starts at 6,000 particles
+and supports 200–20,000. The reference's multicolored filaments and luminous cores
+inspire the cloud; forces, damping, and turbulence animate individual particles.
+
+There are 42 inspector controls:
+
+| Section | Controls |
+| --- | --- |
+| Geometry | Particle count, 1–8 attraction points, seed, cloud spread, depth stretch |
+| Flow & Motion | Simulation speed, attraction, swirl, turbulence, damping, diffusion, core movement, vertical pull |
+| Signal Response | Sensitivity, noise floor, attack/release, bass expansion, mid currents, high scatter, transient bursts, stereo steering |
+| Particles | Point size, size variation, opacity, trails, glow, sparkle, core visibility and size |
+| Appearance | Spectrum/Solar/Ion/theme palettes, color by current/velocity/audio band/depth, saturation, depth fade, navigation hints |
+| Camera | Rotation, elevation, roll, zoom, perspective, auto orbit, orbit speed |
+
+Bass pushes particles away from the cores, with extra bursts on rising low-band
+energy. Mids strengthen swirl; highs increase scatter and sparkle. Stereo RMS
+balance steers the cloud horizontally. Attack/release smooth these forces.
+Particles dim between passages and brighten with broadband and per-core band
+energy. Rising bass adds a brightness accent and a small size bloom, making
+musical peaks visible in both motion and light; core markers also follow audio.
+Transient response compares fast and slow bass envelopes; it does not claim BPM
+synchronization. Sensitivity zero leaves only ambient movement.
+
+Drag to orbit; **Shift-drag** to roll; scroll to zoom; double-click to reset the
+view. Manual dragging stops auto orbit at the current angle. Perspective zero
+uses orthographic projection. **Pause** freezes the particles, response, and
+automatic camera together, while still allowing manual rotation of the frozen
+cloud. Simulation speed zero stops particles but leaves automatic camera motion
+and audio-driven brightness active.
+
+For long, bright streams, increase Swirl and Trails, lower Damping, and add some
+Mid currents. For a soft nebula, lower Attraction, raise Diffusion, and increase
+Depth fade. Lower particle count and Glow when using several visualizer panes.
+Changing the seed or attraction-point count reseeds the cloud; adding particles
+preserves those already present. Presets save settings only, not particle
+positions, velocities, animation time, or captured audio.
+
+Simulation uses bounded 120 Hz steps and limits catch-up after hidden/stalled
+frames. Forces and velocities are constrained to keep even extreme settings
+finite. Rendering sorts particles by depth and batches them into a native mesh.
+The same shared analysis stream feeds Flux on Mac and Linux, with no new audio
+capture or platform dependencies. Existing workspaces and full-view presets
+from the six-, seven-, and eight-component versions retain their settings and
+receive default Flux settings.
 
 ## Browse and save presets
 

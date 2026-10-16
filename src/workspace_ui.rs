@@ -379,7 +379,7 @@ impl Manager {
                     .desired_width(f32::INFINITY),
             );
             ui.horizontal_wrapped(|ui| {
-                for (i, label) in ["All", "Frequency", "Time", "Stereo"]
+                for (i, label) in ["All", "Frequency", "Time", "Stereo", "Visual"]
                     .into_iter()
                     .enumerate()
                 {
@@ -392,10 +392,10 @@ impl Manager {
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             for kind in ModuleKind::ALL {
                 let category = match kind { ModuleKind::Waterfall | ModuleKind::Spectrum | ModuleKind::Spectrogram => 1,
-                    ModuleKind::Waveform | ModuleKind::Oscilloscope => 2, ModuleKind::Stereometer => 3 };
+                    ModuleKind::Waveform | ModuleKind::Oscilloscope => 2, ModuleKind::Stereometer => 3, ModuleKind::Veroni | ModuleKind::Strata | ModuleKind::Flux => 4 };
                 let caption = match kind { ModuleKind::Waterfall => "Frequency · 3D history", ModuleKind::Spectrum => "Frequency · Live levels",
                     ModuleKind::Spectrogram => "Frequency · Color history", ModuleKind::Waveform => "Time · Amplitude history",
-                    ModuleKind::Oscilloscope => "Time · Stabilized cycles", ModuleKind::Stereometer => "Stereo · Width and phase" };
+                    ModuleKind::Oscilloscope => "Time · Stabilized cycles", ModuleKind::Stereometer => "Stereo · Width and phase", ModuleKind::Veroni => "Visual · Voronoi flow", ModuleKind::Strata => "Visual · Resonant layers", ModuleKind::Flux => "Visual · Particle currents" };
                 if (self.category != 0 && self.category != category)
                     || !format!("{} {caption}", kind.label()).to_lowercase().contains(&query) { continue; }
                 count += 1;
