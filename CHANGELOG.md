@@ -25,6 +25,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Changed
 
+- Map Strata membranes to separate logarithmic bands from bass at the bottom
+  to treble at the top. Automatically redistribute bands when layer count
+  changes, with independent response envelopes, motion, and highlights.
+
 - Replace the top-left branding with a New component button. Give its browser
   a flush left sidebar with shared inspector styling and component icon rows.
 

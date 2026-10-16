@@ -120,9 +120,22 @@ Its 39 inspector controls are organized into six sections:
 | Appearance | Kiln/Glacier/Pearl/theme palettes, wire width, mesh/particle opacity, glow, membrane/frame/hint toggles |
 | Camera | Rotation, elevation, zoom, auto orbit, orbit speed |
 
-Bass deepens the hanging surfaces and accelerates their motion. Mids increase
-traveling ripples; highs illuminate the dust and expand the wire grains. Mesh
-highlights move toward the palette's warm color as deformation and energy rise.
+Each membrane owns a distinct logarithmic frequency range across 20 Hz–20 kHz:
+bass at the bottom, midrange in the middle, and treble at the top. Changing the
+layer count automatically redistributes all ranges across the complete spectrum.
+Hover the frequency caption under **Layers** to see each layer's assignment.
+
+Each layer has its own attack/release envelope and motion clock. Low-band layers
+deepen and accelerate with bass, mid-band layers develop traveling ripples, and
+high-band layers develop fine waves and highlights. The Bass bend, Mid ripples,
+and High shimmer controls blend according to how much of a layer's range falls
+in each region, including when only two layers are used. Energy in another
+layer's band does not change this layer's motion or illumination; ambient flow
+continues between sounds. Remapping clears old band envelopes to avoid carrying
+the previous frequency response into a newly assigned layer.
+
+High frequencies also illuminate dust and expand wire grains. Mesh highlights
+move toward the palette's warm color as the layer's deformation and energy rise.
 Each layer stays within its own vertical space, even at maximum response.
 Particles fade before wrapping at the top or bottom of the volume.
 

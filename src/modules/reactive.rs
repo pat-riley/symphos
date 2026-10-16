@@ -16,23 +16,24 @@ pub(super) fn energy(frame: &AnalysisFrame, sensitivity: f32, gate_db: f32) -> [
         };
         powers[band] += bin.magnitude.powi(2);
     }
-    let response = |amplitude: f32| {
-        if !amplitude.is_finite() || amplitude <= 0.0 {
-            return 0.0;
-        }
-        let db = 20.0 * amplitude.log10();
-        if db <= gate_db {
-            return 0.0;
-        }
-        // dB mapping retains response to quiet music; multiplying by distance
-        // above the gate avoids a visible step when the gate opens.
-        let level = ((db - gate_db) / (-6.0 - gate_db)).clamp(0.0, 1.0);
-        (level * level * sensitivity).clamp(0.0, 1.0)
-    };
+    let response = |amplitude| amplitude_response(amplitude, sensitivity, gate_db);
     [
         response(powers[0].sqrt()),
         response(powers[1].sqrt()),
         response(powers[2].sqrt()),
         response(frame.mix_rms),
     ]
+}
+
+pub(super) fn amplitude_response(amplitude: f32, sensitivity: f32, gate_db: f32) -> f32 {
+    if !amplitude.is_finite() || amplitude <= 0.0 {
+        return 0.0;
+    }
+    let db = 20.0 * amplitude.log10();
+    if db <= gate_db {
+        return 0.0;
+    }
+    // dB mapping retains response to quiet music and opens smoothly above the gate.
+    let level = ((db - gate_db) / (-6.0 - gate_db)).clamp(0.0, 1.0);
+    (level * level * sensitivity).clamp(0.0, 1.0)
 }
