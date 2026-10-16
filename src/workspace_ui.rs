@@ -8,7 +8,9 @@ use crate::{
 };
 use eframe::egui::{self, Align, Color32, FontId, Layout, Rect, RichText, Sense, Stroke, Vec2};
 
-pub const NAV_HEIGHT: f32 = 56.0;
+pub const NAV_CONTROL_HEIGHT: f32 = 26.0;
+pub const NAV_PADDING: f32 = 8.0;
+pub const NAV_HEIGHT: f32 = NAV_CONTROL_HEIGHT + 2.0 * NAV_PADDING;
 
 pub const LIBRARY_WIDTH: f32 = 236.0;
 
@@ -146,8 +148,10 @@ pub fn navigation_region(ui: &mut egui::Ui, rect: Rect, id: &str, theme: &AppThe
     } else {
         theme.background
     };
-    child.spacing_mut().interact_size.y = 28.0;
-    child.spacing_mut().button_padding = Vec2::new(8.0, 5.0);
+    child.spacing_mut().interact_size.y = NAV_CONTROL_HEIGHT;
+    child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+    child.spacing_mut().item_spacing.x = 6.0;
+    child.style_mut().override_font_id = Some(FontId::proportional(13.0));
     let visuals = child.visuals_mut();
     visuals.widgets.inactive.bg_fill = field;
     visuals.widgets.inactive.weak_bg_fill = field;
@@ -209,8 +213,7 @@ struct SaveDialog {
 #[derive(Default)]
 pub struct Manager {
     pub library_open: bool,
-    component_search: String,
-    category: usize,
+    logo: Option<egui::TextureHandle>,
     preset_search: String,
     scope: Option<Scope>,
     save: Option<SaveDialog>,
@@ -222,9 +225,38 @@ impl Manager {
         self.save.is_some() || self.rename.is_some() || self.delete.is_some()
     }
     pub fn left_toolbar(&mut self, ui: &mut egui::Ui) {
+        let logo = self.logo.get_or_insert_with(|| {
+            // Rasterized from assets/symphos-logo.svg at ample resolution for HiDPI displays.
+            let image =
+                eframe::icon_data::from_png_bytes(include_bytes!("../assets/symphos-logo.png"))
+                    .expect("embedded Symphos logo is a valid PNG");
+            ui.ctx().load_texture(
+                "symphos-logo",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width as usize, image.height as usize],
+                    &image.rgba,
+                ),
+                egui::TextureOptions::LINEAR,
+            )
+        });
         ui.horizontal_centered(|ui| {
-            if ui.add(egui::Button::new("New component").selected(self.library_open))
-                .help_text("Browse, search, and drag visualizations into the workspace. Click a component to add beside the selected pane.").clicked() {
+            let image = egui::Image::new((logo.id(), Vec2::new(20.0 * 1197.0 / 761.0, 20.0)));
+            let response = ui
+                .add(
+                    egui::Button::image(image)
+                        .min_size(Vec2::new(0.0, NAV_CONTROL_HEIGHT))
+                        .frame(false)
+                        .selected(self.library_open),
+                )
+                .help_text("Show or hide the component browser.");
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    "Toggle component browser",
+                )
+            });
+            if response.clicked() {
                 self.library_open = !self.library_open;
             }
         });
@@ -270,8 +302,10 @@ impl Manager {
             + 2.0 * ui.spacing().button_padding.x;
         let save_width = save_width.max(45.0);
         let spacing = 3.0 * ui.spacing().item_spacing.x;
-        let picker_width = (ui.available_width() - 56.0 - save_width - spacing).clamp(110.0, 340.0);
-        let row_width = picker_width + 56.0 + save_width + spacing;
+        let arrows_width = 2.0 * NAV_CONTROL_HEIGHT;
+        let picker_width =
+            (ui.available_width() - arrows_width - save_width - spacing).clamp(110.0, 340.0);
+        let row_width = picker_width + arrows_width + save_width + spacing;
         // Center the actual visible controls, rather than their wider container.
         let row = Rect::from_center_size(
             ui.max_rect().center(),
@@ -283,11 +317,11 @@ impl Manager {
                 .max_rect(row),
         );
         row_ui.horizontal_centered(|ui| {
-            if ui.add_enabled(!cycling.is_empty(), egui::Button::new("‹").min_size(Vec2::splat(28.0))).help_text("Previous preset in this category.").clicked() {
+            if ui.add_enabled(!cycling.is_empty(), egui::Button::new("‹").min_size(Vec2::splat(NAV_CONTROL_HEIGHT))).help_text("Previous preset in this category.").clicked() {
                 actions.push(Action::Apply(cycle(&cycling, &storage.active, -1)));
             }
             let label = format!("{}{}", current.map_or("Custom view", |p| p.name.as_str()), if storage.modified { " *" } else { "" });
-            let button = ui.add_sized([picker_width, 28.0], egui::Button::new(label).truncate()).help_text("Browse full views, layouts, and component presets. * means the current view has edits.");
+            let button = ui.add_sized([picker_width, NAV_CONTROL_HEIGHT], egui::Button::new(label).truncate()).help_text("Browse full views, layouts, and component presets. * means the current view has edits.");
             let arrow = button.rect.right_center() - Vec2::new(11.0, 0.0);
             ui.painter().add(egui::Shape::convex_polygon(vec![arrow + Vec2::new(-3.5, -2.0), arrow + Vec2::new(3.5, -2.0), arrow + Vec2::new(0.0, 2.5)], ui.visuals().text_color(), Stroke::NONE));
             if button.clicked() { self.scope = Some(current_scope); }
@@ -329,10 +363,10 @@ impl Manager {
                     Scope::Component => "Settings for the selected component. Keeps the layout.",
                 });
             });
-            if ui.add_enabled(!cycling.is_empty(), egui::Button::new("›").min_size(Vec2::splat(28.0))).help_text("Next preset in this category.").clicked() {
+            if ui.add_enabled(!cycling.is_empty(), egui::Button::new("›").min_size(Vec2::splat(NAV_CONTROL_HEIGHT))).help_text("Next preset in this category.").clicked() {
                 actions.push(Action::Apply(cycle(&cycling, &storage.active, 1)));
             }
-            if ui.add_enabled(has_panes, egui::Button::new("Save").min_size(Vec2::new(save_width, 28.0))).clicked() {
+            if ui.add_enabled(has_panes, egui::Button::new("Save").min_size(Vec2::new(save_width, NAV_CONTROL_HEIGHT))).clicked() {
                 self.save = Some(SaveDialog { name: String::new(), scope: Scope::Layout });
             }
         });
@@ -359,65 +393,51 @@ impl Manager {
         );
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         sidebar_style(&mut child, theme);
-        if sidebar_header(
-            &mut child,
-            Icon::Plus,
-            "New component",
-            "Audio visualizations",
-            "Click to add · Drag to arrange",
-            "Close the component browser",
-        )
-        .clicked()
-        {
+        let close = egui::Frame::new()
+            .inner_margin(12)
+            .show(&mut child, |ui| {
+                ui.horizontal(|ui| {
+                    let (icon, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
+                    icons::paint(ui, icon, Icon::Plus, theme.foreground);
+                    ui.label(RichText::new("New component").strong());
+                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                        ui.visuals_mut().button_frame = false;
+                        icons::sized_button(
+                            ui,
+                            Icon::Close,
+                            false,
+                            24.0,
+                            "Close the component browser",
+                        )
+                    })
+                    .inner
+                })
+                .inner
+            })
+            .inner;
+        if close.clicked() {
             self.library_open = false;
         }
-        sidebar_rule(&mut child, rect);
-        egui::Frame::new().inner_margin(12).show(&mut child, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.component_search)
-                    .hint_text("Search components…")
-                    .desired_width(f32::INFINITY),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (i, label) in ["All", "Frequency", "Time", "Stereo", "Visual"]
-                    .into_iter()
-                    .enumerate()
-                {
-                    ui.selectable_value(&mut self.category, i, label);
-                }
-            });
-        });
-        let query = self.component_search.trim().to_lowercase();
-        let mut count = 0;
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             for kind in ModuleKind::ALL {
-                let category = match kind { ModuleKind::Waterfall | ModuleKind::Spectrum | ModuleKind::Spectrogram => 1,
-                    ModuleKind::Waveform | ModuleKind::Oscilloscope => 2, ModuleKind::Stereometer => 3, ModuleKind::Veroni | ModuleKind::Strata | ModuleKind::Flux => 4 };
-                let caption = match kind { ModuleKind::Waterfall => "Frequency · 3D history", ModuleKind::Spectrum => "Frequency · Live levels",
-                    ModuleKind::Spectrogram => "Frequency · Color history", ModuleKind::Waveform => "Time · Amplitude history",
-                    ModuleKind::Oscilloscope => "Time · Stabilized cycles", ModuleKind::Stereometer => "Stereo · Width and phase", ModuleKind::Veroni => "Visual · Voronoi flow", ModuleKind::Strata => "Visual · Resonant layers", ModuleKind::Flux => "Visual · Particle currents" };
-                if (self.category != 0 && self.category != category)
-                    || !format!("{} {caption}", kind.label()).to_lowercase().contains(&query) { continue; }
-                count += 1;
                 ui.push_id(kind.label(), |ui| {
                     sidebar_rule(ui, rect);
-                    let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 68.0), Sense::click_and_drag());
+                    let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click_and_drag());
+                    let response = response.on_hover_cursor(egui::CursorIcon::Grab);
                     if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, theme.card); }
-                    let badge = Rect::from_center_size(egui::pos2(row.left() + 28.0, row.center().y), Vec2::splat(32.0));
-                    ui.painter().rect_filled(badge, 5.0, theme.card);
+                    let badge = Rect::from_center_size(egui::pos2(row.left() + 24.0, row.center().y), Vec2::splat(22.0));
                     icons::paint(ui, badge, kind.icon(), theme.foreground);
-                    let labels = Rect::from_min_max(egui::pos2(badge.right() + 8.0, row.top() + 14.0),
-                        egui::pos2(row.right() - 30.0, row.bottom() - 10.0));
+                    let labels = Rect::from_min_max(egui::pos2(badge.right() + 9.0, row.top()),
+                        egui::pos2(row.right() - 32.0, row.bottom()));
                     // Paint labels without child widgets so the whole row keeps
                     // its click/drag interaction, including directly over text.
-                    for (label, size, color, offset) in [(kind.label(), 13.0, theme.foreground, 0.0),
-                        (caption, 11.0, theme.muted, 23.0)] {
-                        let mut job = egui::text::LayoutJob::simple(label.into(), FontId::proportional(size), color, labels.width());
-                        job.wrap.max_rows = 1;
-                        let galley = ui.painter().layout_job(job);
-                        ui.painter_at(labels).galley(labels.min + Vec2::new(0.0, offset), galley, color);
-                    }
-                    icons::paint(ui, Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), Vec2::splat(20.0)), Icon::Plus, theme.muted);
+                    let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(13.0), theme.foreground, labels.width());
+                    job.wrap.max_rows = 1;
+                    let galley = ui.painter().layout_job(job);
+                    let position = egui::pos2(labels.left(), labels.center().y - galley.size().y * 0.5);
+                    ui.painter_at(labels).galley(position, galley, theme.foreground);
+                    paint_drag_grip(ui, Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), Vec2::splat(16.0)), theme.muted);
                     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Add {}", kind.label())));
                     response.dnd_set_drag_payload(DragPayload::Component(kind));
                     if response.clicked() && can_add { actions.push(Action::Add(kind)); }
@@ -426,7 +446,6 @@ impl Manager {
             }
             sidebar_rule(ui, rect);
             egui::Frame::new().inner_margin(12).show(ui, |ui| {
-                if count == 0 { ui.weak("No components match your search."); }
                 ui.small(if can_add { "Drag to a pane edge to split, or its center to replace." }
                     else { "16 panes are open. Close one to add, or drag to replace." });
             });
@@ -589,16 +608,20 @@ fn thumbnail(ui: &egui::Ui, tree: &workspace::Tile, rect: Rect, color: Color32) 
 pub fn drag_grip(ui: &mut egui::Ui, id: usize) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(18.0, 24.0), Sense::drag());
     let color = ui.visuals().weak_text_color();
+    paint_drag_grip(ui, rect, color);
+    response.dnd_set_drag_payload(DragPayload::Pane(id));
+    response.on_hover_cursor(egui::CursorIcon::Grab).help_text(
+        "Drag this pane to an edge to move it, or onto another pane's center to swap positions.",
+    )
+}
+
+fn paint_drag_grip(ui: &egui::Ui, rect: Rect, color: Color32) {
     for x in [-2.5, 2.5] {
         for y in [-5.0, 0.0, 5.0] {
             ui.painter()
                 .circle_filled(rect.center() + Vec2::new(x, y), 1.1, color);
         }
     }
-    response.dnd_set_drag_payload(DragPayload::Pane(id));
-    response.on_hover_cursor(egui::CursorIcon::Grab).help_text(
-        "Drag this pane to an edge to move it, or onto another pane's center to swap positions.",
-    )
 }
 pub fn drop_hint(ui: &egui::Ui, rect: Rect, message: &str, accent: Color32) {
     let painter = ui.painter_at(ui.clip_rect());

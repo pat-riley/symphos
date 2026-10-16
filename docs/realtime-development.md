@@ -101,7 +101,7 @@ elsewhere first. The ordinary issue log remains available inside the app.
 ## Verification
 
 Mac normal and development builds pass formatting, Clippy, and tests. The
-normal suite passes 152 tests and the development suite passes 159 tests; both
+normal suite passes 154 tests and the development suite passes 161 tests; both
 retain five ignored manual timing probes (including Veroni, Strata, and Flux). Four Python supervisor tests
 cover source watching, successful publishing, atomic control writes, and failed
 builds retaining the current app.
@@ -124,7 +124,7 @@ These are local CPU measurements, not end-to-end GPU frame times or Linux result
 
 Strata's corresponding probe is
 `cargo test --features development modules::strata::tests::render_timing -- --ignored --nocapture`.
-On the same Mac, it measured 1.09 ms/frame at default settings and 5.73 ms/frame
+After adding per-layer frequency mapping, it measured 0.94 ms/frame at default settings and 5.14 ms/frame
 at maximum layers, grid detail, dust, and grain counts. It includes geometry,
 depth sorting, UI drawing, and tessellation; GPU presentation is excluded.
 

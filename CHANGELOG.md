@@ -19,13 +19,23 @@ All notable changes to Symphos will be documented here. The project follows
 
 - Add Veroni, an audio-reactive Voronoi visualizer with flowing cells, luminous
   points, and fine connections. Include 30 inspector controls for geometry,
-  motion, audio response, and appearance; a Visual browser category and Veroni
+  motion, audio response, and appearance; component browser integration and Veroni
   flow preset; pause/fullscreen and saved settings. Upgrade existing six-module
   workspaces and view presets without losing their configuration.
 
 ### Changed
 
-- Replace the top-left branding with a New component button. Give its browser
+- Tighten the top bar to a 42-pixel height with equal 8-pixel outer padding,
+  uniform 26-pixel controls, and a smaller logo aligned with the toolbar icons.
+
+- Compact the New component browser into single-line icon/name rows with six-dot
+  drag grips. Remove visible descriptions, search, and category tabs, and simplify its header.
+
+- Map Strata membranes to separate logarithmic bands from bass at the bottom
+  to treble at the top. Automatically redistribute bands when layer count
+  changes, with independent response envelopes, motion, and highlights.
+
+- Use the white Symphos logo as the top-left component browser toggle. Give its browser
   a flush left sidebar with shared inspector styling and component icon rows.
 
 - Center the preset controls on the full navbar and reduce the audio selector

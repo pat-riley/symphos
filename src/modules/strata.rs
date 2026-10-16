@@ -5,6 +5,54 @@ use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, them
 use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::{f32::consts::TAU, time::Instant};
 
+const MAX_LAYERS: usize = 12;
+const LOW_HZ: f32 = 20.0;
+const HIGH_HZ: f32 = 20_000.0;
+
+fn layer_range(layer: u32, layers: u32) -> (f32, f32) {
+    let edge = |index: u32| LOW_HZ * (HIGH_HZ / LOW_HZ).powf(index as f32 / layers as f32);
+    (edge(layer), edge(layer + 1))
+}
+
+// Each layer owns a nonoverlapping logarithmic band. Summed bin power keeps the
+// response independent of the number of FFT bins in a band (no bin-count average).
+fn layer_targets(frame: &AnalysisFrame, settings: &StrataSettings) -> [f32; MAX_LAYERS] {
+    let mut powers = [0.0_f32; MAX_LAYERS];
+    let edges: Vec<_> = (0..settings.layers)
+        .map(|i| layer_range(i, settings.layers).1)
+        .collect();
+    for bin in &frame.bins {
+        if !bin.frequency_hz.is_finite()
+            || !(LOW_HZ..=HIGH_HZ).contains(&bin.frequency_hz)
+            || !bin.magnitude.is_finite()
+            || bin.magnitude <= 0.0
+        {
+            continue;
+        }
+        let layer = edges
+            .partition_point(|edge| bin.frequency_hz >= *edge)
+            .min(settings.layers as usize - 1);
+        powers[layer] += bin.magnitude.powi(2);
+    }
+    powers.map(|power| {
+        super::reactive::amplitude_response(power.sqrt(), settings.sensitivity, settings.gate_db)
+    })
+}
+
+// Blend the existing bass/mid/high controls by overlap, including broad bands
+// when only two layers are present. Their weights always sum to one.
+fn layer_weights(layer: u32, layers: u32) -> [f32; 3] {
+    let (low, high) = layer_range(layer, layers);
+    let width = (high / low).ln();
+    [(LOW_HZ, 250.0_f32), (250.0, 4000.0), (4000.0, HIGH_HZ)]
+        .map(|(a, b)| (high.min(b) / low.max(a)).ln().max(0.0) / width)
+}
+
+fn range_label(layer: u32, layers: u32) -> String {
+    let (low, high) = layer_range(layer, layers);
+    format!("Layer {}: {:.0}–{:.0} Hz", layer + 1, low, high)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Palette {
     Kiln,
@@ -158,6 +206,9 @@ pub struct Strata {
     phase: f64,
     orbit: f64,
     energy: [f32; 4],
+    layer_energy: [f32; MAX_LAYERS],
+    layer_phase: [f64; MAX_LAYERS],
+    mapped_layers: u32,
 }
 impl Strata {
     pub(crate) fn settings_snapshot(&self) -> StrataSettings {
@@ -172,6 +223,9 @@ impl Strata {
         self.phase = 0.0;
         self.orbit = 0.0;
         self.energy = [0.0; 4];
+        self.layer_energy = [0.0; MAX_LAYERS];
+        self.layer_phase = [0.0; MAX_LAYERS];
+        self.mapped_layers = 0;
     }
     pub fn reset_settings(&mut self) {
         self.settings = StrataSettings::default();
@@ -201,7 +255,13 @@ impl Strata {
                 layers,
                 2..=12,
                 "Layers",
-                "Number of suspended membranes. Movement stays within each layer's space."
+                "One logarithmic frequency band per layer, from 20 Hz at the bottom to 20 kHz at the top. Bands redistribute automatically. Movement stays within each layer's space."
+            );
+            ui.small("20 Hz → 20 kHz · bottom to top").on_hover_text(
+                (0..s.layers)
+                    .map(|layer| range_label(layer, s.layers))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             );
             p!(
                 ui,
@@ -310,21 +370,21 @@ impl Strata {
                 bass_bend,
                 0.0..=2.0,
                 "Bass bend",
-                "20–250 Hz deepens the membranes and accelerates their flow."
+                "Strength of low-frequency deformation and flow in layers covering 20–250 Hz. Each layer listens only to its assigned band."
             );
             p!(
                 ui,
                 mid_ripple,
                 0.0..=2.0,
                 "Mid ripples",
-                "250 Hz–4 kHz increases the traveling surface waves."
+                "Strength of traveling waves in layers covering 250 Hz–4 kHz, driven by each layer's assigned band."
             );
             p!(
                 ui,
                 high_shimmer,
                 0.0..=2.0,
                 "High shimmer",
-                "Above 4 kHz energizes the particles and wire grains."
+                "Fine waves and highlights in layers covering 4–20 kHz; also energizes particles and wire grains."
             );
         });
         settings_panel(ui, "Particles", |ui| {
@@ -467,6 +527,12 @@ impl Strata {
         });
     }
     fn advance(&mut self, now: Instant, frame: &AnalysisFrame, live: bool) {
+        if self.mapped_layers != self.settings.layers {
+            // Don't carry bass energy into a newly treble-mapped layer after a count change.
+            self.layer_energy = [0.0; MAX_LAYERS];
+            self.layer_phase = [self.phase; MAX_LAYERS];
+            self.mapped_layers = self.settings.layers;
+        }
         let dt = self.last_time.map_or(0.0, |last| {
             now.saturating_duration_since(last).as_secs_f32().min(0.05)
         });
@@ -487,17 +553,61 @@ impl Strata {
             };
             *energy += (target - *energy) * (1.0 - (-dt * 1000.0 / ms).exp());
         }
-        self.phase += f64::from(
-            dt * self.settings.speed * (0.65 + self.energy[0] * self.settings.bass_bend * 0.4),
-        );
+        let targets = if live {
+            layer_targets(frame, &self.settings)
+        } else {
+            [0.0; MAX_LAYERS]
+        };
+        for (layer, target) in targets
+            .iter()
+            .enumerate()
+            .take(self.settings.layers as usize)
+        {
+            let energy = &mut self.layer_energy[layer];
+            let ms = if target > energy {
+                self.settings.attack_ms
+            } else {
+                self.settings.release_ms
+            };
+            *energy += (target - *energy) * (1.0 - (-dt * 1000.0 / ms).exp());
+            let weights = layer_weights(layer as u32, self.settings.layers);
+            let gain = weights[0] * self.settings.bass_bend
+                + weights[1] * self.settings.mid_ripple
+                + weights[2] * self.settings.high_shimmer;
+            self.layer_phase[layer] +=
+                f64::from(dt * self.settings.speed * (0.65 + *energy * gain * 0.4));
+        }
+        self.phase += f64::from(dt * self.settings.speed * 0.65);
         if self.settings.auto_orbit {
             self.orbit = (self.orbit + f64::from(dt * self.settings.orbit_speed)).rem_euclid(360.0);
         }
     }
 
-    fn surface(&self, layer: u32, u: f32, v: f32) -> ([f32; 3], f32) {
+    fn layer_response(&self, layer: u32) -> [f32; 3] {
         let s = &self.settings;
-        let t = self.phase;
+        let energy = self.layer_energy[layer as usize];
+        let weights = layer_weights(layer, s.layers);
+        [
+            energy * weights[0] * s.bass_bend,
+            energy * weights[1] * s.mid_ripple,
+            energy * weights[2] * s.high_shimmer,
+        ]
+    }
+
+    #[cfg(test)]
+    fn surface(&self, layer: u32, u: f32, v: f32) -> ([f32; 3], f32) {
+        self.surface_with_response(layer, u, v, self.layer_response(layer))
+    }
+
+    fn surface_with_response(
+        &self,
+        layer: u32,
+        u: f32,
+        v: f32,
+        [bass, mid, high]: [f32; 3],
+    ) -> ([f32; 3], f32) {
+        let s = &self.settings;
+        let t = self.layer_phase[layer as usize];
         let l = layer as f32 / (s.layers - 1) as f32;
         let spacing = s.height / (s.layers - 1) as f32;
         let envelope = ((1.0 - u * u) * (1.0 - v * v))
@@ -506,9 +616,10 @@ impl Strata {
         let wave = (f64::from(u * s.ripple_scale + v * 1.8 + l * 2.4) - t * 1.7).sin() as f32;
         let cross =
             (f64::from(v * s.ripple_scale * 1.4 - u * 2.7 + l * 3.5) + t * 1.2).sin() as f32;
-        let bend = s.sag * (0.3 + self.energy[0] * s.bass_bend * 0.25);
+        let shimmer = (f64::from((u + v) * s.ripple_scale * 2.5) - t * 3.1).sin() as f32;
+        let bend = s.sag * (0.3 + bass * 0.25);
         let ripple =
-            wave * (0.08 + self.energy[1] * s.mid_ripple * 0.18) + cross * s.turbulence * 0.13;
+            wave * (0.08 + mid * 0.18) + cross * s.turbulence * 0.13 + shimmer * high * 0.12;
         // A strict fraction of layer spacing bounds motion even at maximum gain.
         let displacement = (ripple - bend).tanh() * envelope * spacing * 0.44;
         let angle = s.twist * 0.35 * (t * 0.3 + f64::from(l * 3.0)).sin() as f32;
@@ -526,8 +637,8 @@ impl Strata {
             (envelope
                 * (0.25
                     + displacement.abs() / spacing * 1.7
-                    + self.energy[0] * 0.4
-                    + self.energy[1] * wave.abs() * 0.2))
+                    + (bass + mid + high) * 0.4
+                    + (mid * wave.abs() + high * shimmer.abs()) * 0.2))
                 .clamp(0.0, 1.0),
         )
     }
@@ -665,13 +776,16 @@ impl Strata {
         }
         if s.show_layers {
             for layer in 0..s.layers {
+                // Frequency overlap/gain is constant across this entire membrane.
+                let response = self.layer_response(layer);
                 let points: Vec<_> = (0..=n)
                     .flat_map(|z| (0..=n).map(move |x| (x, z)))
                     .map(|(x, z)| {
-                        self.surface(
+                        self.surface_with_response(
                             layer,
                             x as f32 / n as f32 * 2.0 - 1.0,
                             z as f32 / n as f32 * 2.0 - 1.0,
+                            response,
                         )
                     })
                     .collect();
@@ -913,11 +1027,14 @@ mod tests {
         let mut strata = Strata {
             phase: 8.2,
             energy: [1.0; 4],
+            layer_phase: [8.2; MAX_LAYERS],
+            layer_energy: [1.0; MAX_LAYERS],
             ..Default::default()
         };
         strata.settings.sag = 1.0;
         strata.settings.bass_bend = 2.0;
         strata.settings.mid_ripple = 2.0;
+        strata.settings.high_shimmer = 2.0;
         strata.settings.turbulence = 1.0;
         strata.settings.twist = 1.0;
         for layers in [2, 7, 12] {
@@ -962,6 +1079,8 @@ mod tests {
         assert_ne!(active, silent);
         let particle = strata.particle(6, 0.0);
         let orbit = strata.orbit;
+        let layers = strata.layer_energy;
+        let phases = strata.layer_phase;
         for _ in 0..120 {
             strata.advance(
                 start + Duration::from_millis(60 * 16),
@@ -972,10 +1091,120 @@ mod tests {
         assert_eq!(strata.surface(3, 0.2, 0.3), active);
         assert_eq!(strata.particle(6, 0.0), particle);
         assert_eq!(strata.orbit, orbit);
+        assert_eq!(strata.layer_energy, layers);
+        assert_eq!(strata.layer_phase, phases);
         for i in 61..=500 {
             strata.advance(start + Duration::from_millis(i * 16), &signal(), false);
         }
         assert!(strata.energy.iter().all(|e| *e < 0.001));
+        assert!(strata.layer_energy.iter().all(|e| *e < 0.001));
+    }
+
+    #[test]
+    fn logarithmic_bands_cover_spectrum_and_each_tone_moves_only_its_layer() {
+        let start = Instant::now();
+        for count in 2..=12 {
+            let mut previous_high = LOW_HZ;
+            for layer in 0..count {
+                let (low, high) = layer_range(layer, count);
+                assert!((low - previous_high).abs() < 0.01);
+                assert!(high > low);
+                previous_high = high;
+                let weights = layer_weights(layer, count);
+                assert!((weights.iter().sum::<f32>() - 1.0).abs() < 0.0001);
+                let frame = AnalysisFrame {
+                    bins: vec![FrequencyBin {
+                        frequency_hz: (low * high).sqrt(),
+                        magnitude: 0.3,
+                        dbfs: -10.0,
+                    }],
+                    mix_rms: 0.3,
+                    ..Default::default()
+                };
+                let mut active = Strata::default();
+                active.settings.layers = count;
+                let mut silent = Strata::default();
+                silent.settings.layers = count;
+                for i in 0..=40 {
+                    let now = start + Duration::from_millis(i * 16);
+                    active.advance(now, &frame, true);
+                    silent.advance(now, &AnalysisFrame::default(), true);
+                }
+                for other in 0..count {
+                    if other == layer {
+                        assert!(active.layer_energy[other as usize] > 0.5);
+                        assert_ne!(
+                            active.surface(other, 0.2, 0.3),
+                            silent.surface(other, 0.2, 0.3)
+                        );
+                    } else {
+                        assert_eq!(active.layer_energy[other as usize], 0.0);
+                        assert_eq!(
+                            active.surface(other, 0.2, 0.3),
+                            silent.surface(other, 0.2, 0.3)
+                        );
+                    }
+                }
+            }
+            assert!((previous_high - HIGH_HZ).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn frequency_boundaries_are_unique_and_count_changes_remap_without_stale_energy() {
+        let start = Instant::now();
+        let mut strata = Strata::default();
+        let tone = |frequency_hz| AnalysisFrame {
+            bins: vec![FrequencyBin {
+                frequency_hz,
+                magnitude: 0.3,
+                dbfs: -10.0,
+            }],
+            ..Default::default()
+        };
+        for count in [2, 7, 12] {
+            strata.settings.layers = count;
+            for layer in 0..count {
+                let (low, high) = layer_range(layer, count);
+                let targets = layer_targets(&tone(low), &strata.settings);
+                assert!(targets[layer as usize] > 0.5);
+                assert_eq!(targets.iter().filter(|e| **e > 0.0).count(), 1);
+                if layer == count - 1 {
+                    assert!(layer_targets(&tone(high), &strata.settings)[layer as usize] > 0.5);
+                }
+            }
+        }
+        strata.settings.layers = 7;
+        for i in 0..=40 {
+            strata.advance(start + Duration::from_millis(i * 16), &tone(80.0), true);
+        }
+        assert!(strata.layer_energy[1] > 0.5);
+        strata.settings.layers = 12;
+        // Count changes also remap safely while paused, without advancing clocks.
+        strata.advance(start + Duration::from_millis(40 * 16), &tone(80.0), true);
+        assert_eq!(strata.layer_energy, [0.0; MAX_LAYERS]);
+        for i in 41..=80 {
+            strata.advance(start + Duration::from_millis(i * 16), &tone(80.0), true);
+        }
+        assert!(strata.layer_energy[2] > 0.5);
+        assert_eq!(strata.layer_energy[1], 0.0);
+        for frequency in [0.0, 19.0, 20_001.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                layer_targets(&tone(frequency), &strata.settings),
+                [0.0; MAX_LAYERS]
+            );
+        }
+        let mut invalid = tone(80.0);
+        invalid.bins[0].magnitude = f32::NAN;
+        assert_eq!(layer_targets(&invalid, &strata.settings), [0.0; MAX_LAYERS]);
+        strata.settings.sensitivity = 0.0;
+        assert_eq!(
+            layer_targets(&tone(80.0), &strata.settings),
+            [0.0; MAX_LAYERS]
+        );
+        strata.clear();
+        assert_eq!(strata.layer_energy, [0.0; MAX_LAYERS]);
+        assert_eq!(strata.layer_phase, [0.0; MAX_LAYERS]);
     }
 
     #[test]
@@ -1022,6 +1251,7 @@ mod tests {
         assert_eq!(edges.len(), 30);
         let mut strata = Strata {
             energy: [1.0; 4],
+            layer_energy: [1.0; MAX_LAYERS],
             ..Default::default()
         };
         strata.settings.layers = 12;
