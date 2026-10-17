@@ -5,6 +5,7 @@
   "background": "#111210",
   "panel": "#181916",
   "card": "#1f211d",
+  "navigation": "#1f1f1f",
   "foreground": "#e6e5dd",
   "muted": "#909187",
   "accent": "#36a166",

@@ -1,3 +1,4 @@
+use crate::colors::Palette;
 use std::ops::Range;
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2};
@@ -106,6 +107,7 @@ pub struct Oscilloscope {
     rising: bool,
     auto_scale: bool,
     amplitude: f32,
+    palette: Palette,
     color_mode: ScopeColorMode,
     thickness: f32,
     afterglow_traces: u32,
@@ -125,6 +127,8 @@ trigger_level: f32 => trigger_level,
 rising: bool => rising,
 auto_scale: bool => auto_scale,
 amplitude: f32 => amplitude,
+#[serde(default)]
+palette: Palette => palette,
 color_mode: ScopeColorMode => color_mode,
 thickness: f32 => thickness,
 afterglow_traces: u32 => afterglow_traces,
@@ -146,6 +150,7 @@ impl Default for Oscilloscope {
             rising: true,
             auto_scale: true,
             amplitude: 1.0,
+            palette: Palette::Theme,
             color_mode: ScopeColorMode::Static,
             thickness: 1.4,
             afterglow_traces: 2,
@@ -289,6 +294,12 @@ impl Oscilloscope {
         });
 
         settings_panel(ui, "Appearance", |ui| {
+            if self.color_mode == ScopeColorMode::Static {
+                self.palette.controls(ui);
+            } else {
+                ui.small("RGB and band overlays retain their frequency colors. Choose Static to use a palette.");
+            }
+
             super::settings_group(ui, "Trace", |ui| {
                 ui.add(
                     crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.4)
@@ -306,7 +317,7 @@ impl Oscilloscope {
                     for mode in ScopeColorMode::ALL {
                         ui.selectable_value(&mut self.color_mode, mode, mode.label())
                             .help_text(match mode {
-                                ScopeColorMode::Static => "Use the current theme accent for the complete trace.",
+                                ScopeColorMode::Static => "Use the selected palette; default colors follow the platform palette, independently of the GUI skin.",
                                 ScopeColorMode::Rgb => "Blend red, green, and blue from local low-, mid-, and high-frequency energy.",
                                 ScopeColorMode::MultiBand => "Overlay separate low, mid, and high wave shapes in red, green, and blue.",
                             });
@@ -435,6 +446,7 @@ impl Oscilloscope {
                     gain,
                     self.thickness,
                     opacity,
+                    self.palette,
                     theme,
                 );
             }
@@ -448,6 +460,7 @@ impl Oscilloscope {
                 gain,
                 self.thickness,
                 opacity,
+                self.palette,
                 theme,
             );
         }
@@ -719,6 +732,7 @@ fn paint_trace(
     gain: f32,
     thickness: f32,
     opacity: f32,
+    palette: Palette,
     theme: &AppTheme,
 ) {
     if range.len() < 2 {
@@ -732,7 +746,13 @@ fn paint_trace(
                 + (index - range.start) as f32 / (range.len() - 1) as f32 * plot.width();
             let y = plot.center().y - (sample * gain).clamp(-1.0, 1.0) * plot.height() * 0.46;
             let color = match layer {
-                PlotLayer::Static => theme.accent,
+                PlotLayer::Static => {
+                    if palette == Palette::Theme {
+                        theme.accent
+                    } else {
+                        palette.gradient(theme).color((sample * gain).abs())
+                    }
+                }
                 PlotLayer::Rgb => rgb_color(samples[index].envelopes, theme),
                 PlotLayer::Band(band) => band_colors()[band],
             }
@@ -740,20 +760,19 @@ fn paint_trace(
             (Pos2::new(x, y), color)
         })
         .collect();
-    match layer {
-        PlotLayer::Static | PlotLayer::Band(_) => {
-            painter.add(egui::Shape::line(
-                points.iter().map(|(point, _)| *point).collect(),
-                Stroke::new(thickness, points[0].1),
-            ));
-        }
-        PlotLayer::Rgb => {
-            for pair in points.windows(2) {
-                painter.line_segment(
-                    [pair[0].0, pair[1].0],
-                    Stroke::new(thickness, mix(pair[0].1, pair[1].1, 0.5)),
-                );
-            }
+    if matches!(layer, PlotLayer::Band(_))
+        || (matches!(layer, PlotLayer::Static) && palette == Palette::Theme)
+    {
+        painter.add(egui::Shape::line(
+            points.iter().map(|(point, _)| *point).collect(),
+            Stroke::new(thickness, points[0].1),
+        ));
+    } else {
+        for pair in points.windows(2) {
+            painter.line_segment(
+                [pair[0].0, pair[1].0],
+                Stroke::new(thickness, mix(pair[0].1, pair[1].1, 0.5)),
+            );
         }
     }
 }

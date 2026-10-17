@@ -11,13 +11,15 @@ Core Audio taps. It displays the signal
 in real time, and is being built toward a visual scene editor where audio
 signals can control shapes, particles, effects, and shaders.
 
-Symphos is currently a proof of concept. The analyzer works, but scene creation
-and visual parameter mapping are still on the roadmap.
+Symphos is currently a proof of concept with scientific analyzers, artistic
+visualizers, editable audio mappings, and performance controls. Named musical
+signal sources and reusable projects are the next planned milestone; see the
+[implementation handoff prompt](docs/signal-sources-implementation-prompt.md).
 
 ## Current features
 
 - Tiled workspace with resizable dividers, draggable pane headers, close-and-fill
-  behavior, and a searchable component library. The first launch uses the default
+  behavior, and a compact component library. The first launch uses the default
   waterfall-on-top view; later launches restore the last workspace.
 - Searchable top preset browser with previous/next navigation, layout-only, full-view,
   and individual component presets, plus named save, rename, and delete actions.
@@ -31,11 +33,18 @@ and visual parameter mapping are still on the roadmap.
   global FFT and footer-meter choices stay outside the destination pane. The
   clipboard is session-only; reusable component presets are available in the
   top preset browser.
-- **Settings → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
+- [Application Settings](docs/application-settings.md): movable, categorized window
+  with eight GUI theme choices, including Resolve- and Ableton-inspired skins,
+  and saved interface zoom. Open with the top gear or Ctrl+,
+  (Cmd+, on Mac); drag its title bar to move, and press Escape to close.
+- **Settings → Help & About → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
   the sidebar; I opens the selected panel’s inspector; F toggles panel fullscreen; 1–4 select panes; F1 toggles Info View;
   F11 toggles fullscreen; Escape exits panel fullscreen or dismisses a modal/menu.
   Typing, key-repeat events, and open menus/modals do not trigger application actions.
+- [Compact component inspector and color library](docs/component-colors.md) with
+  icon tabs, aligned parameter rows, twelve gradient previews, editable color
+  stops, and saved palettes/swatches shared across components.
 - Numeric module controls: drag the filled field to adjust, Shift-drag for fine
   adjustment, double-click beside its number to reset, or click the number to type
   an exact value (including scientific notation). Focused fields also accept
@@ -43,7 +52,7 @@ and visual parameter mapping are still on the roadmap.
   Slider ranges are comfortable working ranges; selected geometry/appearance fields
   accept larger custom values within documented safe limits. Buffer sizes, history,
   percentages, and algorithm limits remain bounded. Rejected values retain the last
-  valid setting and appear in **Settings → Issue log**, with a copyable report.
+  valid setting and appear in **Settings → Help & About → Issue log**, with a copyable report.
   Diagnostics also append to `$XDG_STATE_HOME/symphos/issues.log` (fallback
   `~/.local/state/symphos/issues.log`, 1 MiB plus one rotated previous log).
   Reports include typed-value changes, rejected values, capture errors, panic
@@ -55,6 +64,11 @@ and visual parameter mapping are still on the roadmap.
 - [Flux particle cloud](docs/workspace-layouts.md#flux-particle-cloud) with
   music-driven 3D currents, 200–20,000 particles, trails, and 42 controls including
   orbit, roll, perspective, and color mapping
+- [Flux performance macros](docs/flux-performance.md) with twelve knobs/faders,
+  musical Impact bursts, and morphing Rings/Helix/Knot/Vortex/Petals formations
+- [Shared visualizer audio mappings](docs/audio-modulation.md) with draggable
+  frequency bands, independent movement/appearance destinations, graphical ADSR,
+  ambient motion controls, and editable per-layer Strata response
 - [Strata layered sculpture](docs/workspace-layouts.md#strata-visualizer) with
   rippling wire membranes, drifting dust, tumbling grains, an orbitable camera,
   and 39 controls for structure, motion, audio response, and appearance
@@ -71,7 +85,7 @@ and visual parameter mapping are still on the roadmap.
 - Spectrum peak hold and waveform controls for independent L/R/Mid/Side lanes,
   scroll or loop motion, speed, static/multi-band/color-map rendering, multi-band
   peak history, triggering, time/amplitude, and color palettes
-- Right-hand component inspector with a panel eye button and collapsible sections
+- Right-hand component inspector with a panel eye button, icon tabs, and collapsible groups
 - Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Toggleable bottom-left Info View with hover descriptions instead of popup tooltips
 - Shared FFT size, window function, analysis channel, and frame-rate controls
@@ -179,7 +193,7 @@ Click **? Help** at the far bottom left to show or hide **Info View** at the bot
 left. Hover over a control or visualization for a short description. Popup
 tooltips are disabled even when Info View is hidden; existing descriptions are
 retained in the shared help system. A capture-status indicator sits beside the
-bottom-right meters; detailed status remains in Shared options. When settings
+bottom-right meters; detailed status is in Settings → Audio and Analysis & Meters. When settings
 are open, Info View docks underneath them; otherwise it
 reserves space below the dashboard. It never covers a visualization.
 The waterfall's icon tabs are ordered **Geometry**, **Frequency Range**,
@@ -250,7 +264,7 @@ The shared-options icon holds the FFT window, frequency-analysis channel,
 single-view channel (mix/left/right), diagnostics, capture details, and theme info.
 Level bars show RMS with live and retained peak markers. Left, Right, and Mix
 maxima are held independently, clipping latches visibly, and both can be reset
-from Shared options or by restarting capture. Mixed levels are measured from the
+from Settings → Analysis & Meters or by restarting capture. Mixed levels are measured from the
 summed signal, including phase cancellation. Waveform time
 windows are independent of the FFT capture window. The source selector
 and a compact settings icon remain at the top right; there is no top-left menu button.
@@ -303,7 +317,7 @@ installs the verified binary and desktop metadata under `~/.local`. Run this
 command after local UI changes to update the launcher, then close and reopen
 Symphos. A running instance does not update itself.
 
-Settings (the gear menu) shows the app version and a source build identifier,
+Settings → Help & About shows the app version and a source build identifier,
 with a **Copy build info** button. The identifier includes uncommitted source
 changes, so it distinguishes local builds even before a commit. Compare it with
 `symphos --version` when reporting issues or checking what the launcher runs.
@@ -334,7 +348,7 @@ open target/macos/Symphos.app
 ```
 
 Allow system audio recording when macOS requests it. If capture needs to be
-restarted, use **Settings → Retry audio capture**. Microphone/interface input
+restarted, use **Settings → Audio → Retry audio capture**. Microphone/interface input
 selection and DAW plugins are not part of this first Mac milestone. The build
 is locally ad-hoc signed; public downloads will require release signing and
 notarization. See [Mac setup and validation](docs/macos-development.md).

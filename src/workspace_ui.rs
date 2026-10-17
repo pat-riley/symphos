@@ -24,16 +24,16 @@ fn sidebar_blend(a: Color32, b: Color32, amount: f32) -> Color32 {
 }
 
 pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
-    ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+    ui.spacing_mut().item_spacing = Vec2::new(5.0, 3.0);
     ui.spacing_mut().slider_width = 90.0;
     ui.style_mut()
         .text_styles
-        .insert(egui::TextStyle::Body, FontId::proportional(13.0));
+        .insert(egui::TextStyle::Body, FontId::proportional(12.0));
     ui.style_mut()
         .text_styles
-        .insert(egui::TextStyle::Button, FontId::proportional(13.0));
+        .insert(egui::TextStyle::Button, FontId::proportional(12.0));
     ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
-    ui.spacing_mut().interact_size.y = 28.0;
+    ui.spacing_mut().interact_size.y = 22.0;
     ui.spacing_mut().indent = 16.0;
     let field = if theme.dark_mode {
         sidebar_blend(theme.panel, Color32::BLACK, 0.24)
@@ -67,11 +67,11 @@ pub fn sidebar_header(
     description: &str,
 ) -> egui::Response {
     egui::Frame::new()
-        .inner_margin(12)
+        .inner_margin(8)
         .show(ui, |ui| {
             let close = ui
                 .horizontal_top(|ui| {
-                    let (badge, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
+                    let (badge, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
                     ui.painter().rect_filled(
                         badge,
                         5.0,
@@ -86,7 +86,7 @@ pub fn sidebar_header(
                         });
                         ui.with_layout(Layout::top_down(Align::Min), |ui| {
                             ui.add(
-                                egui::Label::new(RichText::new(title).size(15.0).strong())
+                                egui::Label::new(RichText::new(title).size(13.0).strong())
                                     .truncate(),
                             );
                             ui.add(
@@ -119,12 +119,7 @@ pub fn sidebar_rule(ui: &mut egui::Ui, bounds: Rect) {
 }
 
 fn navigation_color(theme: &AppTheme) -> Color32 {
-    // Match the dark macOS title-bar surface, while retaining Linux's theme palette.
-    #[cfg(target_os = "macos")]
-    if theme.dark_mode {
-        return Color32::from_gray(31);
-    }
-    theme.card
+    theme.navigation
 }
 
 pub fn navigation_surface(ui: &egui::Ui, rect: Rect, theme: &AppTheme) {
@@ -240,7 +235,8 @@ impl Manager {
             )
         });
         ui.horizontal_centered(|ui| {
-            let image = egui::Image::new((logo.id(), Vec2::new(20.0 * 1197.0 / 761.0, 20.0)));
+            let image = egui::Image::new((logo.id(), Vec2::new(20.0 * 1197.0 / 761.0, 20.0)))
+                .tint(ui.visuals().text_color());
             let response = ui
                 .add(
                     egui::Button::image(image)
@@ -421,6 +417,11 @@ impl Manager {
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             for kind in ModuleKind::ALL {
+                if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
+                    egui::Frame::new().inner_margin(12).show(ui, |ui| {
+                        ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));
+                    });
+                }
                 ui.push_id(kind.label(), |ui| {
                     sidebar_rule(ui, rect);
                     let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click_and_drag());

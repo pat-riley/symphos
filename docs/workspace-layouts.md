@@ -13,13 +13,16 @@ opens the selected pane’s inspector, and **N** toggles it. The far-right navba
 button also toggles the inspector and highlights when it is open. The inspector header X
 closes it. Selecting a visualization never opens a hidden inspector automatically.
 
-All sections appear in one scrollable panel with collapsible disclosure headers,
-open by default. Each pane/module retains its own disclosure and scroll state
-throughout the session. There is no separate section-icon rail. Major sections have full-width divider
-lines and disclosure headers; quieter labels group related controls within them.
+A pinned vertical icon rail switches between configuration tabs. Hover an icon
+for its name; the active tab also has a labeled title. Each pane/module remembers
+its selected tab, and each tab keeps its own scroll position. Related controls
+within the tab use compact collapsible groups and edge-to-edge dividers.
+
 The pinned header shows the component icon, name, visualization type, panel
-number, live/paused status, and capture sample rate. Numeric fields use full-width
-tracks below their labels, with a slim accent indicator and exact value entry.
+number, live/paused status, and capture sample rate. Numeric controls use aligned
+label/value columns with subtle alternating rows and slim accent indicators.
+Drag fields, Shift-drag for fine adjustment, or click the value for exact entry.
+The **Appearance** palette icon opens the shared [gradient and swatch library](component-colors.md).
 
 The inspector surface meets the navbar, right window edge, and bottom window
 edge without outer padding. A gap on its left separates it from the plots.
@@ -55,7 +58,12 @@ Click the white **Symphos logo** at the top left to open or close **New componen
 The browser docks flush on the left with a compact header and one list of components.
 Each single-line row shows an icon, name, and six-dot drag grip, with full-width
 dividers. Descriptions remain available on hover; search and category tabs are
-currently omitted.
+currently omitted. Small **Scientific instruments** and **Visualizers** headings
+separate measurement components from artistic ones.
+
+Veroni, Strata, and Flux share the [Audio mappings inspector](audio-modulation.md)
+for selecting frequency bands, routing them to specific movements or appearance,
+and editing graphical attack/decay/sustain/release envelopes.
 
 - Click a component row to add that visualization beside the selected pane.
 - Drag a row to a pane edge to add a new split there.
@@ -75,25 +83,20 @@ rounded cells, pale outlines, luminous points, and fine connections inspired by
 the reference image. The points define the geometry, so their movement actually
 reshapes the cells.
 
-The right inspector has four sections with 30 controls:
+The right inspector has four sections, including editable audio mappings:
 
 | Section | Controls |
 | --- | --- |
 | Geometry | 12–240 cells, repeatable pattern seed, clustering, corner softness |
 | Flow & Motion | Speed, drift, turbulence, swirl, breathing |
-| Signal Response | Sensitivity, noise floor, attack/release, bass/mid/high movement, stereo influence |
-| Appearance | Four palettes, cell outlines/tint, edge width/opacity/response, point size/response, glow, connections and reach |
+| Audio mappings | Frequency bands, movement/appearance destinations, level/gated/transient response, graphical ADSR |
+| Appearance | Shared gradients and custom swatches, cell outlines/tint, edge width/opacity/response, point size/response, glow, connections and reach |
 
-Bass (20–250 Hz) expands clusters and changes the flow speed. Mids (250 Hz–4 kHz)
-bend the currents and swirl; highs (4–20 kHz) add fine motion. Band energy also
-changes point size and border strength. Attack and release soften these changes;
-stereo balance gently steers the field. This is energy-driven motion, not a
-BPM-locked animation. It uses the same shared analysis and audio source as the
-other components, with no new device, driver, or permission requirements.
-
-For a calmer result, reduce **Flow speed** and **Turbulence**, then increase
-**Release ms**. For stronger musical movement, increase **Sensitivity** and the
-individual band influences. **Sensitivity = 0** keeps only ambient flow.
+Default mappings use bass for cell expansion, mids for swirling flow, and highs
+for fine turbulence. Brightness and point size have independent mappings. Open
+**Audio mappings** to change any source band, destination, amount, or response.
+For a calmer result, reduce Ambient motion and Flow speed, then increase the
+selected route's Release. Audio amount zero leaves only ambient flow.
 **Flow speed = 0** stops the flow clock while audio can still deform the cells;
 use the pane's **Pause** button to hold the entire visual still. Colors include
 Electric lime (default), Glacial blue, Ember, and the current theme accent.
@@ -111,33 +114,27 @@ membranes, drifting luminous dust, and slowly tumbling faceted grains inside a
 faint volume frame. The reference's layered mesh and granular structure inspire
 the design; it is an artistic energy-driven field, not a physical filter model.
 
-Its 39 inspector controls are organized into six sections:
+Its inspector controls are organized into six sections:
 
 | Section | Controls |
 | --- | --- |
 | Geometry | 2–12 layers, mesh detail, width, depth, stack height, sag, edge tension |
 | Flow & Motion | Motion speed, ripple frequency, turbulence, layer twist |
-| Signal Response | Sensitivity, noise floor, attack/release, bass bend, mid ripples, high shimmer |
+| Audio mappings | Automatic frequency bands or individual layer targets, bend/ripple/shimmer, brightness, graphical ADSR |
 | Particles | Dust count, wire grains, repeatable seed, lift, spread, grain radius, dust size, trails |
-| Appearance | Kiln/Glacier/Pearl/theme palettes, wire width, mesh/particle opacity, glow, membrane/frame/hint toggles |
+| Appearance | Shared gradients and custom swatches (legacy Kiln/Glacier/Pearl/theme presets retained), wire width, mesh/particle opacity, glow, membrane/frame/hint toggles |
 | Camera | Rotation, elevation, zoom, auto orbit, orbit speed |
 
-Each membrane owns a distinct logarithmic frequency range across 20 Hz–20 kHz:
-bass at the bottom, midrange in the middle, and treble at the top. Changing the
-layer count automatically redistributes all ranges across the complete spectrum.
-Hover the frequency caption under **Layers** to see each layer's assignment.
+The default layer mappings distribute 20 Hz–20 kHz logarithmically from bass at
+the bottom to treble at the top. Changing the count automatically redistributes
+the bands. In **Audio mappings**, choose All layers to subdivide a custom range,
+or a numbered layer to target just that membrane. Each layer has its own envelope
+and motion clock. Bend, ripple, and shimmer are separate destinations. The
+spectrum editor shows the current subdivisions; full-mix and stereo sources
+can also drive the layers together.
 
-Each layer has its own attack/release envelope and motion clock. Low-band layers
-deepen and accelerate with bass, mid-band layers develop traveling ripples, and
-high-band layers develop fine waves and highlights. The Bass bend, Mid ripples,
-and High shimmer controls blend according to how much of a layer's range falls
-in each region, including when only two layers are used. Energy in another
-layer's band does not change this layer's motion or illumination; ambient flow
-continues between sounds. Remapping clears old band envelopes to avoid carrying
-the previous frequency response into a newly assigned layer.
-
-High frequencies also illuminate dust and expand wire grains. Mesh highlights
-move toward the palette's warm color as the layer's deformation and energy rise.
+A separate brightness mapping illuminates the sculpture. Mesh highlights move
+toward the palette's warm color as the layer's deformation and energy rise.
 Each layer stays within its own vertical space, even at maximum response.
 Particles fade before wrapping at the top or bottom of the volume.
 
@@ -145,7 +142,7 @@ Drag inside the scene to orbit (this stops auto orbit at its current angle).
 Scroll to zoom; double-click to reset the view. **Pause** freezes the wave clock,
 particles, and automatic camera rotation together. Manual camera controls remain
 available while paused. Auto orbit runs independently of **Motion speed**; set
-**Sensitivity** to zero for ambient motion alone. Presets contain settings only;
+**Audio amount** to zero for ambient motion alone. Presets contain settings only;
 animation clocks and captured audio are never serialized.
 
 For a quieter composition, reduce Dust count and Wire grains, lower Mesh opacity,
@@ -162,29 +159,48 @@ including those containing customized Veroni components.
 
 **Flux** is under **New component**, or select **Flux currents** from the
 preset browser. It creates a 3D cloud of thousands of colored points, drawn into
-flowing streams around moving attraction points. It starts at 6,000 particles
+a dispersed, moving volume around attraction points. It starts at 6,000 particles
 and supports 200–20,000. The reference's multicolored filaments and luminous cores
 inspire the cloud; forces, damping, and turbulence animate individual particles.
 
-There are 42 inspector controls:
+The inspector includes six sections:
 
 | Section | Controls |
 | --- | --- |
 | Geometry | Particle count, 1–8 attraction points, seed, cloud spread, depth stretch |
-| Flow & Motion | Simulation speed, attraction, swirl, turbulence, damping, diffusion, core movement, vertical pull |
-| Signal Response | Sensitivity, noise floor, attack/release, bass expansion, mid currents, high scatter, transient bursts, stereo steering |
+| Flow & Motion | Simulation speed, orbit magnetism, attraction, swirl, turbulence, damping, diffusion, core movement, vertical pull |
+| Audio mappings | Frequency bands, force/brightness/size/steering destinations, level/gated/transient response, graphical ADSR |
 | Particles | Point size, size variation, opacity, trails, glow, sparkle, core visibility and size |
-| Appearance | Spectrum/Solar/Ion/theme palettes, color by current/velocity/audio band/depth, saturation, depth fade, navigation hints |
+| Appearance | Shared gradients and custom swatches (legacy Spectrum/Solar/Ion/theme presets retained), color by current/velocity/audio band/depth, saturation, depth fade, navigation hints |
 | Camera | Rotation, elevation, roll, zoom, perspective, auto orbit, orbit speed |
 
-Bass pushes particles away from the cores, with extra bursts on rising low-band
-energy. Mids strengthen swirl; highs increase scatter and sparkle. Stereo RMS
-balance steers the cloud horizontally. Attack/release smooth these forces.
-Particles dim between passages and brighten with broadband and per-core band
-energy. Rising bass adds a brightness accent and a small size bloom, making
-musical peaks visible in both motion and light; core markers also follow audio.
-Transient response compares fast and slow bass envelopes; it does not claim BPM
-synchronization. Sensitivity zero leaves only ambient movement.
+Flux's [performance bar](flux-performance.md) docks below the selected pane's
+workspace: four faders and eight knobs cover pacing, expansion, musical accents,
+orbital shape, and appearance. Press **P** to show/hide it; in panel fullscreen,
+P brings the controls back. **Inspect** reveals the detailed right-hand controls
+for the last-touched macro. The formation menu provides Cloud, Rings, Helix,
+Knot, Vortex, and Petals; **Burst** launches a manual accent.
+
+**Orbit magnetism** in **Flow & Motion** blends between a cloud and orbital bands.
+It defaults to **0**: every particle follows its own moving path through a 3D
+volume, so the initial cloud does not settle into thin rings. Raise it toward
+**1** to gather particles onto shared orbital bands; intermediate values retain
+thicker, looser formations. Lowering it disperses the same particles again,
+without reseeding or teleporting. Existing presets without this setting also
+start at zero.
+
+Audio expansion increases the extent of both formations. Swirl changes their
+circulation, and turbulence disturbs their paths; a tightly magnetized ring keeps
+a smaller amount of turbulence so its band remains readable. **Attraction** sets
+how closely particles follow those paths. **Auto orbit** remains a separate
+camera setting.
+
+Default mappings send bass to expansion, mids to swirl, highs to turbulence,
+and stereo balance to horizontal steering. Brightness, particle size, and motion
+speed are separate destinations. Change the bands and envelopes in **Audio
+mappings**; add a Transient ADSR mapping for onset-driven bursts. Level follower
+smooths continuous energy with attack/release. Audio amount zero leaves only
+ambient movement; camera orbit remains independently controlled.
 
 Drag to orbit; **Shift-drag** to roll; scroll to zoom; double-click to reset the
 view. Manual dragging stops auto orbit at the current angle. Perspective zero
@@ -193,8 +209,8 @@ automatic camera together, while still allowing manual rotation of the frozen
 cloud. Simulation speed zero stops particles but leaves automatic camera motion
 and audio-driven brightness active.
 
-For long, bright streams, increase Swirl and Trails, lower Damping, and add some
-Mid currents. For a soft nebula, lower Attraction, raise Diffusion, and increase
+For orbital streams, raise Orbit magnetism, then increase Swirl and Trails and add some
+amount on the Swirling flow mapping. For a soft nebula, lower Attraction, raise Diffusion, and increase
 Depth fade. Lower particle count and Glow when using several visualizer panes.
 Changing the seed or attraction-point count reseeds the cloud; adding particles
 preserves those already present. Presets save settings only, not particle

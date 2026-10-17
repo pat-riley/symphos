@@ -1,3 +1,4 @@
+use crate::colors::Palette;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 
 use super::{label, mix, properties_combo, settings_panel};
@@ -64,6 +65,7 @@ impl CorrelationMode {
 
 pub struct Stereometer {
     display_mode: DisplayMode,
+    palette: Palette,
     color_mode: ColorMode,
     correlation_mode: CorrelationMode,
     window_ms: f32,
@@ -77,6 +79,8 @@ pub struct Stereometer {
 
 module_settings!(Stereometer, StereometerSettings, {
 display_mode: DisplayMode => display_mode,
+#[serde(default)]
+palette: Palette => palette,
 color_mode: ColorMode => color_mode,
 correlation_mode: CorrelationMode => correlation_mode,
 window_ms: f32 => window_ms,
@@ -92,6 +96,7 @@ impl Default for Stereometer {
     fn default() -> Self {
         Self {
             display_mode: DisplayMode::Linear,
+            palette: Palette::Theme,
             color_mode: ColorMode::Rgb,
             correlation_mode: CorrelationMode::MultiBand,
             window_ms: 120.0,
@@ -150,6 +155,12 @@ impl Stereometer {
         });
 
         settings_panel(ui, "Appearance", |ui| {
+            if self.color_mode == ColorMode::Static {
+                self.palette.controls(ui);
+            } else {
+                ui.small("RGB and band overlays retain their frequency colors. Choose Static to use a palette.");
+            }
+
             super::settings_group(ui, "Color", |ui| {
                 properties_combo("stereometer-color-mode", 176.0, ColorMode::ALL.len())
                     .selected_text(self.color_mode.label())
@@ -157,7 +168,7 @@ impl Stereometer {
                         for mode in ColorMode::ALL {
                             ui.selectable_value(&mut self.color_mode, mode, mode.label())
                                 .help_text(match mode {
-                                    ColorMode::Static => "Use the current theme accent for every sample.",
+                                    ColorMode::Static => "Use the selected palette; default colors follow the platform palette, independently of the GUI skin.",
                                     ColorMode::Rgb => "Blend red, green, and blue from each sample's low-, mid-, and high-frequency balance.",
                                     ColorMode::MultiBand => "Overlay separate low, mid, and high vectorscopes in red, green, and blue.",
                                 });
@@ -288,6 +299,7 @@ impl Stereometer {
                     self.display_mode,
                     self.dot_size,
                     self.intensity,
+                    self.palette,
                     theme,
                 ),
                 ColorMode::Rgb => paint_samples(
@@ -298,6 +310,7 @@ impl Stereometer {
                     self.display_mode,
                     self.dot_size,
                     self.intensity,
+                    self.palette,
                     theme,
                 ),
                 ColorMode::MultiBand => {
@@ -310,6 +323,7 @@ impl Stereometer {
                             self.display_mode,
                             self.dot_size,
                             self.intensity,
+                            self.palette,
                             theme,
                         );
                     }
@@ -454,6 +468,7 @@ fn paint_samples(
     display_mode: DisplayMode,
     dot_size: f32,
     intensity: f32,
+    palette: Palette,
     theme: &AppTheme,
 ) {
     let multi_band = color_or_band.is_some_and(|value| value < 3);
@@ -468,7 +483,15 @@ fn paint_samples(
         };
         let point = to_screen(scope, scope_coordinates(display_mode, stereo[0], stereo[1]));
         let base_color = match color_or_band {
-            None => theme.accent,
+            None => {
+                if palette == Palette::Theme {
+                    theme.accent
+                } else {
+                    palette
+                        .gradient(theme)
+                        .color(stereo[0].abs().max(stereo[1].abs()))
+                }
+            }
             Some(band) if band < 3 => band_colors()[band],
             Some(_) => rgb_color(sample.envelopes, theme),
         };

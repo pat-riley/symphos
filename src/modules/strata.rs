@@ -1,14 +1,18 @@
 //! A depth-sorted, translucent wire sculpture of audio-reactive membranes.
 //! All simulation is bounded UI work; no audio callback or platform dependencies.
-use super::{camera_gizmo::project_direction, mix, properties_combo, settings_panel};
+use super::{camera_gizmo::project_direction, mix, settings_panel};
+use crate::modulation::{ModulationSettings, Modulator, Target, Visualizer};
 use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, theme::AppTheme};
 use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::{f32::consts::TAU, time::Instant};
 
 const MAX_LAYERS: usize = 12;
+#[cfg(test)]
 const LOW_HZ: f32 = 20.0;
+#[cfg(test)]
 const HIGH_HZ: f32 = 20_000.0;
 
+#[cfg(test)]
 fn layer_range(layer: u32, layers: u32) -> (f32, f32) {
     let edge = |index: u32| LOW_HZ * (HIGH_HZ / LOW_HZ).powf(index as f32 / layers as f32);
     (edge(layer), edge(layer + 1))
@@ -16,6 +20,7 @@ fn layer_range(layer: u32, layers: u32) -> (f32, f32) {
 
 // Each layer owns a nonoverlapping logarithmic band. Summed bin power keeps the
 // response independent of the number of FFT bins in a band (no bin-count average).
+#[cfg(test)]
 fn layer_targets(frame: &AnalysisFrame, settings: &StrataSettings) -> [f32; MAX_LAYERS] {
     let mut powers = [0.0_f32; MAX_LAYERS];
     let edges: Vec<_> = (0..settings.layers)
@@ -41,6 +46,7 @@ fn layer_targets(frame: &AnalysisFrame, settings: &StrataSettings) -> [f32; MAX_
 
 // Blend the existing bass/mid/high controls by overlap, including broad bands
 // when only two layers are present. Their weights always sum to one.
+#[cfg(test)]
 fn layer_weights(layer: u32, layers: u32) -> [f32; 3] {
     let (low, high) = layer_range(layer, layers);
     let width = (high / low).ln();
@@ -48,46 +54,13 @@ fn layer_weights(layer: u32, layers: u32) -> [f32; 3] {
         .map(|(a, b)| (high.min(b) / low.max(a)).ln().max(0.0) / width)
 }
 
-fn range_label(layer: u32, layers: u32) -> String {
-    let (low, high) = layer_range(layer, layers);
-    format!("Layer {}: {:.0}–{:.0} Hz", layer + 1, low, high)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum Palette {
-    Kiln,
-    Glacier,
-    Pearl,
-    Theme,
-}
-impl Palette {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Kiln => "Kiln · ivory / coral",
-            Self::Glacier => "Glacier · blue / ice",
-            Self::Pearl => "Pearl · monochrome",
-            Self::Theme => "Theme accent",
-        }
-    }
-    fn colors(self, theme: &AppTheme) -> (Color32, Color32) {
-        match self {
-            Self::Kiln => (
-                Color32::from_rgb(225, 218, 170),
-                Color32::from_rgb(255, 76, 50),
-            ),
-            Self::Glacier => (
-                Color32::from_rgb(160, 227, 245),
-                Color32::from_rgb(67, 100, 250),
-            ),
-            Self::Pearl => (theme.foreground, theme.foreground),
-            Self::Theme => (theme.foreground, theme.accent),
-        }
-    }
-}
+use crate::colors::Palette;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct StrataSettings {
+    #[serde(default)]
+    modulation: Option<ModulationSettings>,
     layers: u32,
     resolution: u32,
     width: f32,
@@ -131,6 +104,7 @@ pub(crate) struct StrataSettings {
 impl Default for StrataSettings {
     fn default() -> Self {
         Self {
+            modulation: Some(ModulationSettings::for_visualizer(Visualizer::Strata)),
             layers: 7,
             resolution: 24,
             width: 1.8,
@@ -196,11 +170,31 @@ impl StrataSettings {
             line_width: 0.25, 2.0; mesh_opacity: 0.0, 1.0; particle_opacity: 0.0, 1.0; glow: 0.0, 1.0;
             yaw: -180.0, 180.0; elevation: -70.0, 70.0; zoom: 0.4, 2.5; orbit_speed: -12.0, 12.0;
         }
+        let modulation = self.modulation.get_or_insert_with(|| {
+            let mut m = ModulationSettings::migrate(
+                Visualizer::Strata,
+                self.sensitivity,
+                self.gate_db,
+                self.attack_ms,
+                self.release_ms,
+            );
+            for r in &mut m.routes {
+                match r.target {
+                    Target::LayerBend => r.amount = self.bass_bend,
+                    Target::LayerRipple => r.amount = self.mid_ripple,
+                    Target::LayerShimmer => r.amount = self.high_shimmer,
+                    _ => {}
+                }
+            }
+            m
+        });
+        modulation.sanitize(Visualizer::Strata);
     }
 }
 
 #[derive(Default)]
 pub struct Strata {
+    modulator: Modulator,
     settings: StrataSettings,
     last_time: Option<Instant>,
     phase: f64,
@@ -215,10 +209,12 @@ impl Strata {
         self.settings.clone()
     }
     pub(crate) fn apply_settings(&mut self, settings: &StrataSettings) {
+        self.modulator = Modulator::default();
         self.settings = settings.clone();
         self.settings.sanitize();
     }
     pub fn clear(&mut self) {
+        self.modulator = Modulator::default();
         self.last_time = None;
         self.phase = 0.0;
         self.orbit = 0.0;
@@ -229,7 +225,7 @@ impl Strata {
     }
     pub fn reset_settings(&mut self) {
         self.settings = StrataSettings::default();
-        self.orbit = 0.0;
+        self.clear();
     }
     fn reset_camera(&mut self) {
         let defaults = StrataSettings::default();
@@ -238,7 +234,8 @@ impl Strata {
         self.settings.zoom = defaults.zoom;
         self.orbit = 0.0;
     }
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
+    pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        self.settings.sanitize();
         let s = &mut self.settings;
         macro_rules! p {
             ($ui:ident, $field:ident, $range:expr, $label:expr, $help:expr) => {
@@ -255,13 +252,7 @@ impl Strata {
                 layers,
                 2..=12,
                 "Layers",
-                "One logarithmic frequency band per layer, from 20 Hz at the bottom to 20 kHz at the top. Bands redistribute automatically. Movement stays within each layer's space."
-            );
-            ui.small("20 Hz → 20 kHz · bottom to top").on_hover_text(
-                (0..s.layers)
-                    .map(|layer| range_label(layer, s.layers))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+                "Auto-band mappings redistribute their selected range across the layers. Bottom listens to the lowest band, top to the highest. Movement stays within each layer's space."
             );
             p!(
                 ui,
@@ -336,55 +327,13 @@ impl Strata {
                 "Gently rotate the membranes relative to each other inside the frame."
             );
         });
-        settings_panel(ui, "Signal Response", |ui| {
-            p!(
+        settings_panel(ui, "Audio mappings", |ui| {
+            self.modulator.editor(
                 ui,
-                sensitivity,
-                0.0..=4.0,
-                "Sensitivity",
-                "Visual response gain. Zero leaves only ambient movement; audio volume is unchanged."
-            );
-            p!(
-                ui,
-                gate_db,
-                -90.0..=-20.0,
-                "Noise floor dB",
-                "Ignore energy below this level."
-            );
-            p!(
-                ui,
-                attack_ms,
-                5.0..=500.0,
-                "Attack ms",
-                "How quickly the sculpture responds to rising energy."
-            );
-            p!(
-                ui,
-                release_ms,
-                50.0..=3000.0,
-                "Release ms",
-                "How slowly the layers and highlights settle after a sound."
-            );
-            p!(
-                ui,
-                bass_bend,
-                0.0..=2.0,
-                "Bass bend",
-                "Strength of low-frequency deformation and flow in layers covering 20–250 Hz. Each layer listens only to its assigned band."
-            );
-            p!(
-                ui,
-                mid_ripple,
-                0.0..=2.0,
-                "Mid ripples",
-                "Strength of traveling waves in layers covering 250 Hz–4 kHz, driven by each layer's assigned band."
-            );
-            p!(
-                ui,
-                high_shimmer,
-                0.0..=2.0,
-                "High shimmer",
-                "Fine waves and highlights in layers covering 4–20 kHz; also energizes particles and wire grains."
+                frame,
+                s.modulation.as_mut().unwrap(),
+                Visualizer::Strata,
+                s.layers as usize,
             );
         });
         settings_panel(ui, "Particles", |ui| {
@@ -446,20 +395,7 @@ impl Strata {
             );
         });
         settings_panel(ui, "Appearance", |ui| {
-            properties_combo("strata-palette", 176.0, 4)
-                .selected_text(s.palette.label())
-                .show_ui(ui, |ui| {
-                    for palette in [
-                        Palette::Kiln,
-                        Palette::Glacier,
-                        Palette::Pearl,
-                        Palette::Theme,
-                    ] {
-                        ui.selectable_value(&mut s.palette, palette, palette.label());
-                    }
-                })
-                .response
-                .help_text("Cool mesh edges transition to warm, energy-driven highlights.");
+            s.palette.controls(ui);
             p!(
                 ui,
                 line_width,
@@ -527,6 +463,9 @@ impl Strata {
         });
     }
     fn advance(&mut self, now: Instant, frame: &AnalysisFrame, live: bool) {
+        if self.settings.modulation.is_none() {
+            self.settings.sanitize();
+        }
         if self.mapped_layers != self.settings.layers {
             // Don't carry bass energy into a newly treble-mapped layer after a count change.
             self.layer_energy = [0.0; MAX_LAYERS];
@@ -540,58 +479,39 @@ impl Strata {
         if dt == 0.0 {
             return;
         }
-        let target = if live {
-            super::reactive::energy(frame, self.settings.sensitivity, self.settings.gate_db)
-        } else {
-            [0.0; 4]
-        };
-        for (energy, target) in self.energy.iter_mut().zip(target) {
-            let ms = if target > *energy {
-                self.settings.attack_ms
-            } else {
-                self.settings.release_ms
-            };
-            *energy += (target - *energy) * (1.0 - (-dt * 1000.0 / ms).exp());
+        self.modulator.advance(
+            frame,
+            live,
+            self.settings.modulation.as_ref().unwrap(),
+            dt,
+            self.settings.layers as usize,
+        );
+        let brightness = self.modulator.value(Target::Brightness);
+        self.energy = [brightness; 4];
+        let ambient = self.settings.modulation.as_ref().unwrap().ambient;
+        for layer in 0..self.settings.layers as usize {
+            let response = self.layer_response(layer as u32);
+            self.layer_energy[layer] = response.into_iter().fold(0.0_f32, f32::max);
+            self.layer_phase[layer] += f64::from(
+                dt * self.settings.speed
+                    * (ambient * 0.65
+                        + self.layer_energy[layer] * 0.4
+                        + self.modulator.value(Target::Motion))
+                    .clamp(0.0, 3.0),
+            );
         }
-        let targets = if live {
-            layer_targets(frame, &self.settings)
-        } else {
-            [0.0; MAX_LAYERS]
-        };
-        for (layer, target) in targets
-            .iter()
-            .enumerate()
-            .take(self.settings.layers as usize)
-        {
-            let energy = &mut self.layer_energy[layer];
-            let ms = if target > energy {
-                self.settings.attack_ms
-            } else {
-                self.settings.release_ms
-            };
-            *energy += (target - *energy) * (1.0 - (-dt * 1000.0 / ms).exp());
-            let weights = layer_weights(layer as u32, self.settings.layers);
-            let gain = weights[0] * self.settings.bass_bend
-                + weights[1] * self.settings.mid_ripple
-                + weights[2] * self.settings.high_shimmer;
-            self.layer_phase[layer] +=
-                f64::from(dt * self.settings.speed * (0.65 + *energy * gain * 0.4));
-        }
-        self.phase += f64::from(dt * self.settings.speed * 0.65);
+        self.phase += f64::from(
+            dt * self.settings.speed
+                * (ambient * 0.65 + self.modulator.value(Target::Motion)).clamp(0.0, 3.0),
+        );
         if self.settings.auto_orbit {
             self.orbit = (self.orbit + f64::from(dt * self.settings.orbit_speed)).rem_euclid(360.0);
         }
     }
 
     fn layer_response(&self, layer: u32) -> [f32; 3] {
-        let s = &self.settings;
-        let energy = self.layer_energy[layer as usize];
-        let weights = layer_weights(layer, s.layers);
-        [
-            energy * weights[0] * s.bass_bend,
-            energy * weights[1] * s.mid_ripple,
-            energy * weights[2] * s.high_shimmer,
-        ]
+        [Target::LayerBend, Target::LayerRipple, Target::LayerShimmer]
+            .map(|t| self.modulator.layer(t, layer as usize))
     }
 
     #[cfg(test)]
@@ -737,7 +657,7 @@ impl Strata {
     }
     fn scene(&self, camera: &Camera, theme: &AppTheme) -> Vec<DrawItem> {
         let s = &self.settings;
-        let (cool, hot) = s.palette.colors(theme);
+        let cool = s.palette.strata(0.0, theme);
         let n = s.resolution as usize;
         let mut items = Vec::with_capacity(
             s.layers as usize * n * (n + 1) * 2 + s.particles as usize * 2 + s.grains as usize * 30,
@@ -776,7 +696,7 @@ impl Strata {
         }
         if s.show_layers {
             for layer in 0..s.layers {
-                // Frequency overlap/gain is constant across this entire membrane.
+                // Per-layer modulation is constant across this entire membrane.
                 let response = self.layer_response(layer);
                 let points: Vec<_> = (0..=n)
                     .flat_map(|z| (0..=n).map(move |x| (x, z)))
@@ -802,8 +722,12 @@ impl Strata {
                             let (a, wa) = points[index];
                             let (b, wb) = points[next];
                             let heat = (wa + wb) * 0.5;
-                            let color = mix(cool, hot, heat)
-                                .gamma_multiply(s.mesh_opacity * (0.40 + heat * 0.60));
+                            let color = s.palette.strata(heat, theme).gamma_multiply(
+                                s.mesh_opacity
+                                    * (0.40 + heat * 0.60)
+                                    * (0.65 + self.modulator.value(Target::Brightness) * 0.35)
+                                        .clamp(0.0, 1.8),
+                            );
                             add_line(
                                 &mut items,
                                 a,
@@ -820,7 +744,8 @@ impl Strata {
         for i in 0..s.particles {
             let (p, fade) = self.particle(i, 0.0);
             let brightness =
-                (0.35 + random(i, 8) * 0.4 + self.energy[2] * s.high_shimmer * 0.4).min(1.0);
+                (0.35 + random(i, 8) * 0.4 + self.modulator.value(Target::Brightness) * 0.4)
+                    .clamp(0.0, 1.0);
             let color = mix(theme.foreground, cool, 0.35)
                 .gamma_multiply(s.particle_opacity * fade * brightness);
             let (screen, depth) = camera.project(p);
@@ -828,7 +753,12 @@ impl Strata {
                 depth,
                 color,
                 glow: s.glow,
-                shape: Primitive::Dot(screen, s.point_size * (0.55 + brightness * 0.65)),
+                shape: Primitive::Dot(
+                    screen,
+                    s.point_size
+                        * (0.65 + random(i, 8) * 0.4)
+                        * (1.0 + self.modulator.value(Target::Size) * 0.3).max(0.05),
+                ),
             });
             if s.trails > 0.0 {
                 let (tail, _) = self.particle(i, f64::from(s.trails * 0.35));
@@ -843,7 +773,7 @@ impl Strata {
             let (center, fade) = self.particle(i + 1009, 0.0);
             let radius = s.grain_size
                 * (0.65 + random(i, 15) * 0.5)
-                * (1.0 + self.energy[2] * s.high_shimmer * 0.3);
+                * (1.0 + self.modulator.value(Target::Size) * 0.3).max(0.05);
             let angle = (self.phase * 0.4 + f64::from(random(i, 16) * TAU))
                 .rem_euclid(f64::from(TAU)) as f32;
             let transformed: Vec<_> = vertices
@@ -861,7 +791,7 @@ impl Strata {
             let color = theme.foreground.gamma_multiply(
                 s.particle_opacity
                     * fade
-                    * (0.24 + self.energy[2] * s.high_shimmer * 0.2).min(0.75),
+                    * (0.24 + self.modulator.value(Target::Brightness) * 0.2).clamp(0.0, 0.75),
             );
             for &(a, b) in &edges {
                 add_line(&mut items, transformed[a], transformed[b], color, 0.55, 0.0);
@@ -1047,8 +977,12 @@ mod tests {
                     let base = (layer as f32 / (layers - 1) as f32 - 0.5) * strata.settings.height;
                     for x in 0..=20 {
                         for z in 0..=20 {
-                            let (p, heat) =
-                                strata.surface(layer, x as f32 * 0.1 - 1.0, z as f32 * 0.1 - 1.0);
+                            let (p, heat) = strata.surface_with_response(
+                                layer,
+                                x as f32 * 0.1 - 1.0,
+                                z as f32 * 0.1 - 1.0,
+                                [4.0; 3],
+                            );
                             assert!(p.iter().all(|value| value.is_finite()));
                             assert!((p[1] - base).abs() < spacing * 0.45);
                             assert!(

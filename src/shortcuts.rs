@@ -7,12 +7,14 @@ pub enum Action {
     Pause,
     PauseAll,
     Sidebar,
+    Performance,
     Inspect,
     PanelFullscreen,
     Fullscreen,
     Restore,
     Help,
     Bindings,
+    Settings,
     Pane(usize),
 }
 struct Binding {
@@ -23,6 +25,20 @@ struct Binding {
     description: &'static str,
 }
 const BINDINGS: &[Binding] = &[
+    Binding {
+        action: Action::Settings,
+        key: Key::Comma,
+        modifiers: Modifiers::COMMAND,
+        label: "Ctrl + ,",
+        description: "Open application Settings",
+    },
+    Binding {
+        action: Action::Performance,
+        key: Key::P,
+        modifiers: Modifiers::NONE,
+        label: "P",
+        description: "Show / hide Flux performance macros",
+    },
     Binding {
         action: Action::CopySettings,
         key: Key::C,
@@ -203,6 +219,11 @@ mod tests {
     #[test]
     fn shortcuts_distinguish_modifiers_ignore_repeats_and_respect_modals() {
         for (events, modal, expected) in [
+            (
+                vec![event(Key::Comma, Modifiers::COMMAND, false)],
+                false,
+                Some(Action::Settings),
+            ),
             (
                 vec![event(Key::Space, Modifiers::NONE, false)],
                 false,

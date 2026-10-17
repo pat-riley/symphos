@@ -2,12 +2,14 @@ mod analysis;
 mod app;
 mod audio;
 mod capture_history;
+mod colors;
 #[cfg(feature = "development")]
 mod development;
 mod global_bar;
 mod help;
 mod icons;
 mod issues;
+mod modulation;
 mod modules;
 mod parameter;
 mod shortcuts;

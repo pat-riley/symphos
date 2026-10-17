@@ -69,30 +69,24 @@ impl<T: Numeric + Display> Parameter<'_, T> {
         let high = self.range.end().to_f64();
         let mut value = before;
         let inspector = crate::modules::inspector_bounds(ui).is_some();
-        let layout = if inspector {
-            egui::Layout::top_down(egui::Align::Min)
-        } else {
-            egui::Layout::left_to_right(egui::Align::Center)
-        };
+        let layout = egui::Layout::left_to_right(egui::Align::Center);
         let mut row_rect = ui.available_rect_before_wrap();
-        if !inspector {
-            row_rect.max.y = row_rect.top() + ui.spacing().interact_size.y.max(22.0);
-        }
+        row_rect.max.y = row_rect.top() + ui.spacing().interact_size.y.max(22.0);
+        crate::modules::property_background(ui, row_rect);
         let inner = ui.scope_builder(egui::UiBuilder::new().layout(layout).max_rect(row_rect), |ui| {
             let width = ui.available_width().min(420.0);
-            let label_width = if inspector { width } else { (width * 0.38).min(104.0) };
+            let label_width = if inspector { width * 0.43 } else { (width * 0.38).min(104.0) };
             let height = ui.spacing().interact_size.y.max(22.0);
             // Fixed columns align labels and numeric fields throughout the inspector.
             let (label_rect, _) = ui.allocate_exact_size(
-                egui::vec2(label_width, if inspector { 16.0 } else { height }), egui::Sense::hover(),
+                egui::vec2(label_width, height), egui::Sense::hover(),
             );
             let mut label_ui = ui.new_child(egui::UiBuilder::new()
                 .max_rect(label_rect)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)));
             label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
             label_ui.add(egui::Label::new(self.text.as_ref()).truncate());
-            let field_width = if inspector { width }
-                else { (width - label_width - ui.spacing().item_spacing.x).min(ui.available_width()).max(32.0) };
+            let field_width = (width - label_width - ui.spacing().item_spacing.x).min(ui.available_width()).max(32.0);
             let (rect, mut response) = ui.allocate_exact_size(
                 egui::vec2(field_width, height), egui::Sense::click_and_drag(),
             );
@@ -438,7 +432,7 @@ mod tests {
         assert_eq!(value, 1.0);
     }
     #[test]
-    fn wide_field_supports_dragging_and_inline_entry_without_value_jumps() {
+    fn compact_field_supports_dragging_and_inline_entry_without_value_jumps() {
         let ctx = egui::Context::default();
         let mut value = 2.0;
         let render = |value: &mut f32, events| {
@@ -457,7 +451,7 @@ mod tests {
         };
         let (response, _) = render(&mut value, vec![]);
         let field = ctx.read_response(response.id).unwrap().rect;
-        assert!(field.width() > 216.0 * 0.55);
+        assert!(field.width() > 216.0 * 0.45);
         assert!(field.right() <= 216.0);
         let center = field.center();
         assert_eq!(

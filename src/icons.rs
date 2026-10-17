@@ -29,6 +29,10 @@ pub enum Icon {
     Dots,
     Stems,
     Bars,
+    Palette,
+    Camera,
+    Clock,
+    AudioMappings,
 }
 
 pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool, description: &str) -> Response {
@@ -64,6 +68,34 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         ));
     };
     match icon {
+        Icon::Palette => {
+            painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
+            for (x, y) in [(6.0, 5.0), (11.0, 4.0), (15.0, 8.0), (6.0, 11.0)] {
+                painter.circle_filled(p(x, y), 1.5, color);
+            }
+            painter.circle_stroke(p(12.0, 14.0), 2.0, stroke);
+        }
+        Icon::Camera => {
+            painter.rect_stroke(
+                Rect::from_min_max(p(2.0, 5.0), p(18.0, 17.0)),
+                2.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(p(10.0, 11.0), 3.4, stroke);
+            line(&[(5.0, 5.0), (6.0, 2.0), (12.0, 2.0), (14.0, 5.0)]);
+        }
+        Icon::Clock => {
+            painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
+            line(&[(10.0, 4.0), (10.0, 10.0), (14.0, 12.0)]);
+        }
+        Icon::AudioMappings => {
+            line(&[(2.0, 10.0), (8.0, 10.0), (13.0, 4.0), (18.0, 4.0)]);
+            line(&[(8.0, 10.0), (13.0, 16.0), (18.0, 16.0)]);
+            for (x, y) in [(2.0, 10.0), (18.0, 4.0), (18.0, 16.0)] {
+                painter.circle_filled(p(x, y), 2.0, color);
+            }
+        }
         Icon::Plus => {
             line(&[(10.0, 3.0), (10.0, 17.0)]);
             line(&[(3.0, 10.0), (17.0, 10.0)]);

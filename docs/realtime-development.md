@@ -31,7 +31,7 @@ the build cache. Initial builds and dependency changes take longer.
 
 The saved development workspace includes all component settings in each
 pane, pane assignments, selected pane, inspector visibility and width, divider
-positions, shared analysis and meter controls, audio mode, and window size and
+positions, shared analysis and meter controls, app theme, optional UI zoom, audio mode, and window size and
 position. It deliberately excludes samples, histories, frozen frames, textures,
 and meter peaks. Panel fullscreen and disclosure/scroll state remain transient.
 State is checkpointed during use and on graceful exit. An
@@ -77,6 +77,12 @@ keys, or invalid values keep the last working theme and record an
 entry in the regular issue log. See `assets/development/theme.json` for the
 complete palette.
 
+In Settings → Theme & Colors, choose **Automatic** to use this live palette.
+An explicit app theme takes precedence while the file continues to be watched.
+Settings → Display & Layout → Interface zoom takes precedence over the file
+scale; **Use default zoom** returns control to the file. The `navigation` color
+controls the top bar. See [Application Settings](application-settings.md).
+
 These overrides apply to the dev app. To retain an approved starting palette
 in Git, copy the values into the tracked development template. Changes intended
 for the normal app should be implemented in its theme system separately.
@@ -88,6 +94,7 @@ for the normal app should be implemented in its theme system separately.
 | `theme.json` | Live palette and UI scale |
 | `workspace.json` | Versioned settings-only checkpoint, including tiled layout |
 | `presets.json` | User layout, full-view, and component preset library |
+| `colors.json` | Shared saved gradients and named swatches |
 | `workspace.rejected.json` | Most recent invalid checkpoint retained for recovery |
 | `status.json` | Latest supervisor build status |
 | `control.json` | Supervisor's graceful-close request |
@@ -100,11 +107,20 @@ elsewhere first. The ordinary issue log remains available inside the app.
 
 ## Verification
 
+The visualizer modulation milestone adds frequency/ADSR drag tests, per-target
+routing isolation, silence/retrigger checks, layer redistribution, and migration
+coverage. Its live Mac inspector was checked for spectrum/envelope contrast and
+compact mapping rows. See [Audio mappings](audio-modulation.md) for usage.
+
 Mac normal and development builds pass formatting, Clippy, and tests. The
-normal suite passes 154 tests and the development suite passes 161 tests; both
-retain five ignored manual timing probes (including Veroni, Strata, and Flux). Four Python supervisor tests
+normal suite passes 188 tests and the development suite passes 198 tests; both
+retain six ignored manual timing probes (including cached features, Veroni, Strata, and Flux). Four Python supervisor tests
 cover source watching, successful publishing, atomic control writes, and failed
-builds retaining the current app.
+builds retaining the current app. Settings coverage includes title-bar dragging,
+category navigation, Escape priority, preference restoration, and manual theme/zoom
+precedence over automatic palette refresh. A frozen-waveform rendering regression
+checks that GUI skin changes leave visual colors, frozen samples, and component
+settings unchanged.
 
 A live watcher check intentionally introduced a compilation error, verified the
 running build was retained, restored the source, and verified that the successful
@@ -118,21 +134,32 @@ The Veroni timing probe can be run with:
 cargo test --features development modules::veroni::tests::render_timing -- --ignored --nocapture
 ```
 
-On the development Mac it measured approximately 0.49 ms/frame at 128 cells and
-1.13 ms/frame at 240 cells for UI drawing and tessellation at 1600×900 points.
+On the development Mac it measured approximately 0.44 ms/frame at 128 cells and
+1.06 ms/frame at 240 cells for UI drawing and tessellation at 1600×900 points.
 These are local CPU measurements, not end-to-end GPU frame times or Linux results.
 
 Strata's corresponding probe is
 `cargo test --features development modules::strata::tests::render_timing -- --ignored --nocapture`.
-After adding per-layer frequency mapping, it measured 0.94 ms/frame at default settings and 5.14 ms/frame
+After adding per-layer frequency mapping, it measured 1.04 ms/frame at default settings and 5.51 ms/frame
 at maximum layers, grid detail, dust, and grain counts. It includes geometry,
 depth sorting, UI drawing, and tessellation; GPU presentation is excluded.
 
 Flux's corresponding probe is
 `cargo test --features development modules::flux::tests::render_timing -- --ignored --nocapture`.
-On the same Mac, it measured 2.12 ms/frame at the default 6,000 particles and
-9.34 ms/frame at 20,000 particles. It includes fixed-step simulation, depth
+With the dispersed cloud and orbit-magnetism model, it measured 2.44 ms/frame
+at the default 6,000 particles and 10.57 ms/frame at 20,000 particles on the same Mac. It includes fixed-step simulation, depth
 sorting, UI drawing, and tessellation; GPU presentation is excluded.
+
+The current rendering probes were run serially to avoid contention between tests:
+`cargo test --features development render_timing -- --ignored --nocapture --test-threads=1`.
+The live app may still consume CPU/GPU, so these remain local measurements rather
+than isolated benchmark or frame-rate guarantees.
+
+`cargo test --features development feature_cache_timing -- --ignored --nocapture`
+measured the shared feature-cache construction at 0.026 ms for FFT 8192 and
+0.043 ms for FFT 16384. Twenty-four band queries against the reused cache took
+0.944 µs and 1.065 µs respectively. These costs are on the analysis/UI test path,
+not capture callbacks, and exclude the FFT itself.
 
 CI includes the development feature and supervisor tests on Mac and Linux.
 A real Omarchy session is still required for desktop-device and graphics

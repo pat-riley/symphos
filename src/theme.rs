@@ -14,6 +14,7 @@ pub struct AppTheme {
     pub background: Color32,
     pub panel: Color32,
     pub card: Color32,
+    pub navigation: Color32,
     pub foreground: Color32,
     pub muted: Color32,
     pub accent: Color32,
@@ -31,6 +32,11 @@ impl Default for AppTheme {
             background: Color32::from_rgb(17, 18, 16),
             panel: Color32::from_rgb(24, 25, 22),
             card: Color32::from_rgb(31, 33, 29),
+            navigation: if cfg!(target_os = "macos") {
+                Color32::from_gray(31)
+            } else {
+                Color32::from_rgb(31, 33, 29)
+            },
             foreground: Color32::from_rgb(230, 229, 221),
             muted: Color32::from_rgb(144, 145, 135),
             accent: Color32::from_rgb(54, 161, 102),
@@ -39,6 +45,163 @@ impl Default for AppTheme {
             warning: Color32::from_rgb(194, 181, 60),
             error: Color32::from_rgb(208, 104, 82),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeChoice {
+    SymphosDark,
+    Graphite,
+    Midnight,
+    Plum,
+    Ember,
+    Resolve,
+    Live,
+    #[default]
+    #[serde(other)]
+    Automatic,
+}
+impl ThemeChoice {
+    pub const ALL: [Self; 8] = [
+        Self::Automatic,
+        Self::SymphosDark,
+        Self::Resolve,
+        Self::Live,
+        Self::Graphite,
+        Self::Midnight,
+        Self::Plum,
+        Self::Ember,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::SymphosDark => "Symphos Dark",
+            Self::Graphite => "Graphite",
+            Self::Midnight => "Midnight",
+            Self::Plum => "Plum",
+            Self::Ember => "Ember",
+            Self::Resolve => "Studio charcoal",
+            Self::Live => "Live dark",
+        }
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Automatic => "Platform palette",
+            Self::SymphosDark => "Original green accent",
+            Self::Resolve => "Resolve-inspired charcoal",
+            Self::Live => "Ableton-inspired gray",
+            Self::Graphite => "Neutral with cool accents",
+            Self::Midnight => "Deep blue workspace",
+            Self::Plum => "Violet workspace",
+            Self::Ember => "Warm copper accents",
+        }
+    }
+    pub fn resolve(self, automatic: &AppTheme) -> AppTheme {
+        if self == Self::Automatic {
+            return automatic.clone();
+        }
+        if self == Self::SymphosDark {
+            return AppTheme::default();
+        }
+        let color = |(r, g, b)| Color32::from_rgb(r, g, b);
+        let (background, panel, card, foreground, muted, accent, alt, selection) = match self {
+            Self::Resolve => (
+                (25, 26, 29),
+                (38, 39, 45),
+                (47, 48, 54),
+                (226, 228, 234),
+                (162, 165, 175),
+                (108, 175, 213),
+                (185, 198, 206),
+                (44, 71, 87),
+            ),
+            Self::Live => (
+                (38, 38, 38),
+                (44, 44, 44),
+                (54, 54, 54),
+                (228, 226, 220),
+                (166, 165, 160),
+                (255, 174, 87),
+                (125, 173, 182),
+                (87, 67, 44),
+            ),
+            Self::Graphite => (
+                (20, 21, 23),
+                (28, 29, 32),
+                (37, 38, 42),
+                (238, 240, 242),
+                (164, 168, 177),
+                (163, 196, 213),
+                (190, 179, 216),
+                (49, 65, 76),
+            ),
+            Self::Midnight => (
+                (10, 17, 29),
+                (17, 26, 43),
+                (25, 36, 57),
+                (229, 238, 251),
+                (150, 169, 198),
+                (85, 187, 225),
+                (126, 150, 237),
+                (29, 61, 82),
+            ),
+            Self::Plum => (
+                (22, 15, 28),
+                (32, 23, 41),
+                (43, 31, 53),
+                (242, 231, 249),
+                (178, 158, 193),
+                (203, 145, 232),
+                (235, 170, 179),
+                (73, 43, 91),
+            ),
+            Self::Ember => (
+                (24, 18, 16),
+                (34, 26, 22),
+                (47, 35, 29),
+                (247, 235, 219),
+                (188, 164, 147),
+                (236, 164, 96),
+                (214, 130, 116),
+                (81, 54, 35),
+            ),
+            _ => unreachable!(),
+        };
+        AppTheme {
+            name: self.label().into(),
+            dark_mode: true,
+            background: color(background),
+            panel: color(panel),
+            card: color(card),
+            navigation: if self == Self::Resolve {
+                Color32::from_rgb(23, 24, 27)
+            } else if self == Self::Live {
+                Color32::from_gray(32)
+            } else {
+                color(card)
+            },
+            foreground: color(foreground),
+            muted: color(muted),
+            accent: color(accent),
+            accent_alt: color(alt),
+            selection: color(selection),
+            warning: Color32::from_rgb(226, 185, 94),
+            error: Color32::from_rgb(232, 132, 130),
+        }
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AppearancePreferences {
+    pub theme: ThemeChoice,
+    /// None follows the existing platform/development scale.
+    pub ui_scale: Option<f32>,
+}
+impl AppearancePreferences {
+    pub fn valid(&self) -> bool {
+        self.ui_scale
+            .is_none_or(|v| v.is_finite() && (0.6..=2.0).contains(&v))
     }
 }
 
@@ -105,6 +268,7 @@ impl AppTheme {
             .unwrap_or_else(|| mix(theme.foreground, theme.background, 0.5));
         theme.panel = mix(theme.background, theme.foreground, 0.045);
         theme.card = mix(theme.background, theme.foreground, 0.085);
+        theme.navigation = theme.card;
         theme
     }
 }

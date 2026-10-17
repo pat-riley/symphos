@@ -247,7 +247,7 @@ impl Waveform {
                         for mode in WaveformColorMode::ALL {
                             ui.selectable_value(&mut self.color_mode, mode, mode.label())
                                 .help_text(match mode {
-                                    WaveformColorMode::Static => "Use one theme color per waveform lane.",
+                                    WaveformColorMode::Static => "Use one selected palette color per waveform lane, independently of the GUI skin.",
                                     WaveformColorMode::MultiBand => "Color each part of the trace from its low-, mid-, and high-frequency energy.",
                                     WaveformColorMode::ColorMap => "Map the selected palette to instantaneous waveform level.",
                                 });
@@ -255,9 +255,11 @@ impl Waveform {
                     })
                     .response
                     .help_text("Choose whether color identifies the lane, frequency balance, or signal level.");
-                if self.color_mode == WaveformColorMode::ColorMap {
+                if self.color_mode != WaveformColorMode::MultiBand {
                     self.palette.controls(ui);
-                    self.palette.contrast_controls(ui, &mut self.contrast);
+                    if self.color_mode == WaveformColorMode::ColorMap {
+                        self.palette.contrast_controls(ui, &mut self.contrast);
+                    }
                 }
                 ui.checkbox(&mut self.peak_history, "Multi-band peak history")
                     .help_text("Overlay the recent low-, mid-, and high-frequency peak envelopes behind the waveform.");
@@ -516,7 +518,11 @@ impl Waveform {
     ) -> Color32 {
         match self.color_mode {
             WaveformColorMode::Static => {
-                if lane == 0 {
+                if self.palette != Palette::Theme {
+                    self.palette
+                        .gradient(theme)
+                        .color(if lane == 0 { 0.8 } else { 0.25 })
+                } else if lane == 0 {
                     theme.accent
                 } else {
                     theme.accent_alt

@@ -354,6 +354,8 @@ fn valid_pane(pane: &PaneState) -> bool {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(default)]
+    pub appearance: crate::theme::AppearancePreferences,
     pub version: u32,
     #[serde(default = "default_demo")]
     pub demo: bool,
@@ -382,7 +384,8 @@ fn default_preset() -> String {
 impl Session {
     pub fn validate(&self) -> bool {
         let ids = self.layout.as_ref().map_or_else(Vec::new, Tile::ids);
-        self.version == 2
+        self.appearance.valid()
+            && self.version == 2
             && !self.panes.is_empty()
             && self.panes.len() <= MAX_PANES
             && self.panes.iter().all(valid_pane)
@@ -943,6 +946,7 @@ mod tests {
 
     fn session() -> Session {
         Session {
+            appearance: crate::theme::AppearancePreferences::default(),
             version: 2,
             demo: true,
             panes: [
@@ -1018,6 +1022,33 @@ mod tests {
         let mut bad = original;
         bad.panes[0].settings.pop();
         assert!(!bad.validate());
+    }
+
+    #[test]
+    fn old_sessions_default_appearance_and_new_preferences_roundtrip() {
+        let mut value = serde_json::to_value(session()).unwrap();
+        value.as_object_mut().unwrap().remove("appearance");
+        let restored = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            restored.appearance,
+            crate::theme::AppearancePreferences::default()
+        );
+        let mut state = restored;
+        state.appearance.theme = crate::theme::ThemeChoice::Midnight;
+        state.appearance.ui_scale = Some(1.3);
+        let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.appearance, state.appearance);
+        let mut value = serde_json::to_value(state).unwrap();
+        value["appearance"]["theme"] = "future_skin".into();
+        assert_eq!(
+            Session::decode(&serde_json::to_vec(&value).unwrap())
+                .unwrap()
+                .appearance
+                .theme,
+            crate::theme::ThemeChoice::Automatic
+        );
+        value["appearance"]["ui_scale"] = 10.into();
+        assert!(Session::decode(&serde_json::to_vec(&value).unwrap()).is_none());
     }
 
     #[test]
