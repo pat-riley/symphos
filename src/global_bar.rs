@@ -1,5 +1,5 @@
 use crate::{
-    analysis::{AnalysisFrame, AnalysisSettings, ChannelMode, FFT_SIZES, WindowFunction},
+    analysis::{AnalysisFrame, AnalysisSettings, ChannelMode, FFT_SIZES},
     audio::AudioStatus,
     help::{self, HoverHelp},
     icons::{self, Icon},
@@ -35,7 +35,7 @@ pub struct BarInfo<'a> {
 }
 
 impl GlobalBar {
-    fn reset_meter_hold(&mut self) {
+    pub(crate) fn reset_meter_hold(&mut self) {
         self.held_peaks.fill(0.0);
         self.clip_latched.fill(false);
     }
@@ -65,7 +65,7 @@ impl GlobalBar {
         ui: &mut egui::Ui,
         settings: &mut AnalysisSettings,
         help_open: &mut bool,
-        inspector: &mut bool,
+        settings_open: &mut bool,
         info: BarInfo<'_>,
     ) -> bool {
         self.update_meter_hold(&info);
@@ -99,38 +99,7 @@ impl GlobalBar {
                 else { "Single meter: show the selected mix, left, or right level. Click for separate L/R meters. Waveform lanes are unchanged." }).clicked() {
                 self.stereo = !self.stereo;
             }
-            let options = icons::button(ui, Icon::Settings, false,
-                "Shared options: FFT window, analysis channel, single-view channel, diagnostics, and capture status.");
-            egui::Popup::menu(&options).show(|ui| {
-                ui.set_min_width(245.0);
-                ui.strong("SHARED OPTIONS");
-                ui.label("FFT window");
-                egui::ComboBox::from_id_salt("global-window").selected_text(settings.window.label()).show_ui(ui, |ui| {
-                    for window in WindowFunction::ALL {
-                        ui.selectable_value(&mut settings.window, window, window.label());
-                    }
-                }).response.help_text("Window applied before the FFT. Changing it clears all histories.");
-                ui.label("Frequency-analysis channel");
-                channel_selector(ui, "analysis-channel", &mut settings.channel_mode)
-                    .help_text("Shared signal analyzed by frequency modules: stereo mix, left, or right. Changing this clears histories.");
-                ui.label("Single-view channel");
-                channel_selector(ui, "view-channel", &mut self.channel)
-                    .help_text("Signal used by the footer meter when single view is active: stereo mix, left, or right. Waveform panes have independent channel settings.");
-                ui.separator();
-                ui.checkbox(inspector, "FFT inspector / diagnostics")
-                    .help_text("Open raw frequency bins and detailed audio-analysis statistics.");
-                ui.label(format!("Capture: {}", info.status.label()));
-                ui.label(format!("{} Hz · {} channels", info.frame.sample_rate, info.frame.channels));
-                ui.label(format!("Dropped samples: {}", info.frame.dropped_samples));
-                ui.label(format!("Theme: {}", info.theme.name));
-                if ui
-                    .button("Reset peak / clip hold")
-                    .help_text("Clear the retained meter maxima and latched clip indicators.")
-                    .clicked()
-                {
-                    self.reset_meter_hold();
-                }
-            });
+            if icons::button(ui, Icon::Settings, *settings_open, "Open Settings: Analysis & Meters, audio, display, and app themes.").clicked() { *settings_open = true; }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.meters(ui, &info, if compact { 160.0 } else { 220.0 });
                 if !compact {
@@ -257,12 +226,16 @@ impl GlobalBar {
                 color,
             );
         }
-        response.help_text_with(|| format!("{} levels: RMS bars, live peak markers, retained peak markers, and latched clip indicators. Reset hold in Shared options. Capture: {}. {} dropped samples.",
+        response.help_text_with(|| format!("{} levels: RMS bars, live peak markers, retained peak markers, and latched clip indicators. Reset hold in Settings → Analysis & Meters. Capture: {}. {} dropped samples.",
             if self.stereo { "Stereo L/R" } else { self.channel.label() }, info.status.label(), info.frame.dropped_samples));
     }
 }
 
-fn channel_selector(ui: &mut egui::Ui, id: &str, channel: &mut ChannelMode) -> egui::Response {
+pub(crate) fn channel_selector(
+    ui: &mut egui::Ui,
+    id: &str,
+    channel: &mut ChannelMode,
+) -> egui::Response {
     egui::ComboBox::from_id_salt(id)
         .selected_text(channel.label())
         .show_ui(ui, |ui| {

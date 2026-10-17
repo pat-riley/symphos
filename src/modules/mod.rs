@@ -1,10 +1,10 @@
 // Explicit settings-only snapshots: no samples, histories, textures, or clocks.
 // Clone is deliberate so this schema can grow owned preset fields later.
 macro_rules! module_settings {
-    ($module:ident, $settings:ident, { $($field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
+    ($module:ident, $settings:ident, { $($(#[$meta:meta])* $field:ident : $ty:ty => $($path:ident).+),* $(,)? }) => {
         #[derive(serde::Serialize, serde::Deserialize)]
         #[derive(Clone, Debug, PartialEq)]
-        pub(crate) struct $settings { $( $field: $ty, )* }
+        pub(crate) struct $settings { $( $(#[$meta])* $field: $ty, )* }
         impl $module {
             #[allow(clippy::clone_on_copy)]
             pub(crate) fn settings_snapshot(&self) -> $settings {
@@ -22,6 +22,7 @@ mod camera_gizmo;
 mod flux;
 mod frequency;
 mod oscilloscope;
+#[cfg(test)]
 mod reactive;
 mod spectrogram;
 mod spectrum;
@@ -35,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 
+pub(crate) use crate::colors::Palette;
 use crate::help::HoverHelp;
 use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
@@ -167,6 +169,7 @@ pub struct ModulePane {
     strata: Strata,
     flux: Flux,
     active_sections: [usize; 9],
+    inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
     pub last_capture: u64,
@@ -267,6 +270,7 @@ pub enum SettingsSection {
     Geometry,
     Frequency,
     Response,
+    Modulation,
     Appearance,
     Channels,
     TimeWindow,
@@ -286,6 +290,7 @@ impl SettingsSection {
             Self::Geometry => "Geometry",
             Self::Frequency => "Frequency Range",
             Self::Response => "Signal Response",
+            Self::Modulation => "Audio mappings",
             Self::Appearance => "Appearance",
             Self::Channels => "Channels",
             Self::TimeWindow => "Time Window",
@@ -295,6 +300,25 @@ impl SettingsSection {
             Self::Sync => "Synchronization",
             Self::Flow => "Flow & Motion",
             Self::Particles => "Particles",
+        }
+    }
+}
+
+impl SettingsSection {
+    fn icon(self) -> Icon {
+        match self {
+            Self::Camera => Icon::Camera,
+            Self::Appearance => Icon::Palette,
+            Self::History | Self::TimeWindow => Icon::Clock,
+            Self::Geometry => Icon::Waterfall,
+            Self::Frequency => Icon::Bars,
+            Self::Response | Self::Amplitude => Icon::Settings,
+            Self::Modulation => Icon::AudioMappings,
+            Self::Channels | Self::Correlation => Icon::Stereo,
+            Self::Display => Icon::Surface,
+            Self::Sync => Icon::Oscilloscope,
+            Self::Flow => Icon::Waveform,
+            Self::Particles => Icon::Flux,
         }
     }
 }
@@ -382,6 +406,7 @@ impl ModulePane {
             strata: Strata::default(),
             flux: Flux::default(),
             active_sections: [0; 9],
+            inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
             last_capture: 0,
@@ -454,6 +479,28 @@ impl ModulePane {
         }
     }
 
+    pub fn toggle_performance(&mut self) {
+        if self.kind == ModuleKind::Flux {
+            self.flux.toggle_performance();
+        }
+    }
+    pub fn performance_height(&self, width: f32) -> Option<f32> {
+        (self.kind == ModuleKind::Flux).then(|| self.flux.performance_height(width))
+    }
+    pub fn performance_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        theme: &AppTheme,
+        index: usize,
+    ) -> bool {
+        let inspect = self.flux.performance_bar(ui, rect, theme, index);
+        if inspect {
+            let section = self.flux.performance_section();
+            self.inspector_focus = Some(section);
+        }
+        inspect
+    }
     fn section_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         match self.kind {
@@ -463,38 +510,57 @@ impl ModulePane {
             ModuleKind::Spectrogram => self.spectrogram.controls(ui),
             ModuleKind::Stereometer => self.stereometer.controls(ui),
             ModuleKind::Oscilloscope => self.oscilloscope.controls(ui),
-            ModuleKind::Veroni => self.veroni.controls(ui),
-            ModuleKind::Strata => self.strata.controls(ui),
-            ModuleKind::Flux => self.flux.controls(ui),
+            ModuleKind::Veroni => self.veroni.controls(ui, frame),
+            ModuleKind::Strata => self.strata.controls(ui, frame),
+            ModuleKind::Flux => self.flux.controls(ui, frame),
+        }
+    }
+
+    pub fn inspector_tabs(&mut self, ui: &mut egui::Ui) {
+        if let Some(section) = self.inspector_focus.take() {
+            self.select_section(section);
+        }
+        for &section in self.sections() {
+            let selected = self.active_section() == section;
+            let response =
+                crate::icons::sized_button(ui, section.icon(), selected, 28.0, section.title());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, section.title())
+            });
+            if response.clone().on_hover_text(section.title()).clicked() {
+                self.select_section(section);
+            }
         }
     }
 
     pub fn inspector_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        let section = self.active_section();
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("property-row-index"), 0_usize));
         ui.push_id(self.kind.label(), |ui| {
-            for &section in self.sections() {
-                inspector_rule(ui);
-                ui.scope(|ui| {
-                    ui.spacing_mut().interact_size.y = 30.0;
-                    ui.spacing_mut().button_padding = egui::vec2(10.0, 7.0);
-                    ui.visuals_mut().collapsing_header_frame = true;
-                    let section_fill = ui.visuals().widgets.noninteractive.bg_fill;
-                    ui.visuals_mut().widgets.inactive.weak_bg_fill = section_fill;
-                    egui::CollapsingHeader::new(egui::RichText::new(section.title()).strong())
-                        .id_salt(("inspector-section", section.title()))
-                        .default_open(true)
-                        .show_unindented(ui, |ui| {
-                            egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                                ui.data_mut(|data| data.insert_temp(ui.id().with("active-module-section"), section));
-                                self.section_controls(ui, frame);
-                            });
-                        });
-                });
-            }
             inspector_rule(ui);
-            egui::Frame::new().inner_margin(12).show(ui, |ui| {
-                if ui.button("Reset module settings")
-                    .help_text("Restore all settings for this module only. Keep captured history and other panes unchanged.")
-                    .clicked() { self.reset_settings(); }
+            egui::Frame::new()
+                .fill(ui.visuals().widgets.noninteractive.bg_fill)
+                .inner_margin(egui::Margin::symmetric(8, 5))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.strong(section.title());
+                });
+            inspector_rule(ui);
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(8, 5))
+                .show(ui, |ui| {
+                    ui.data_mut(|d| d.insert_temp(ui.id().with("active-module-section"), section));
+                    self.section_controls(ui, frame);
+                });
+            inspector_rule(ui);
+            egui::Frame::new().inner_margin(8).show(ui, |ui| {
+                if ui
+                    .small_button("Reset component")
+                    .help_text("Reset all parameters of this component; keep captured history.")
+                    .clicked()
+                {
+                    self.reset_settings();
+                }
             });
         });
     }
@@ -508,19 +574,17 @@ impl ModulePane {
             ModuleKind::Waveform => &[Channels, TimeWindow, Amplitude, Appearance],
             ModuleKind::Stereometer => &[Display, Appearance, Correlation],
             ModuleKind::Oscilloscope => &[Channels, Sync, TimeWindow, Amplitude, Appearance],
-            ModuleKind::Veroni => &[Geometry, Flow, Response, Appearance],
+            ModuleKind::Veroni => &[Modulation, Geometry, Flow, Appearance],
             ModuleKind::Strata | ModuleKind::Flux => {
-                &[Geometry, Flow, Response, Particles, Appearance, Camera]
+                &[Modulation, Geometry, Flow, Particles, Appearance, Camera]
             }
         }
     }
 
-    #[cfg(test)]
     pub fn active_section(&self) -> SettingsSection {
         self.sections()[self.active_sections[self.kind as usize]]
     }
 
-    #[cfg(test)]
     pub fn select_section(&mut self, section: SettingsSection) {
         if let Some(index) = self
             .sections()
@@ -751,15 +815,13 @@ pub(crate) fn inspector_rule(ui: &mut egui::Ui) {
 /// Compact disclosure rows, with state scoped to the pane, module, and section.
 pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
     if inspector_bounds(ui).is_some() {
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(title)
-                .size(11.0)
-                .color(ui.visuals().weak_text_color()),
-        );
-        ui.add_space(2.0);
-        ui.push_id(title, body);
-        ui.add_space(4.0);
+        ui.add_space(3.0);
+        inspector_rule(ui);
+        egui::CollapsingHeader::new(egui::RichText::new(title).size(12.0).strong())
+            .default_open(true)
+            .show_unindented(ui, |ui| {
+                ui.push_id(title, body);
+            });
         return;
     }
     ui.separator();
@@ -793,6 +855,54 @@ pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
                 body(ui);
                 ui.add_space(4.0);
             });
+    });
+}
+
+pub(crate) fn property_background(ui: &egui::Ui, rect: Rect) {
+    if inspector_bounds(ui).is_none() {
+        return;
+    }
+    let index = ui.data_mut(|d| {
+        let id = egui::Id::new("property-row-index");
+        let n = d.get_temp::<usize>(id).unwrap_or(0);
+        d.insert_temp(id, n + 1);
+        n
+    });
+    if index % 2 == 1 {
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().text_color().gamma_multiply(0.025));
+    }
+}
+
+/// Shared two-column property rows, aligned with compact numeric controls.
+pub(crate) fn property_row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
+    let width = ui.available_width();
+    property_background(
+        ui,
+        Rect::from_min_size(ui.cursor().min, egui::vec2(width, 22.0)),
+    );
+    ui.horizontal(|ui| {
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(width * 0.43, 22.0), egui::Sense::hover());
+        let mut label_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        label_ui
+            .add(egui::Label::new(label).truncate())
+            .on_hover_text(label);
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2((width * 0.57 - ui.spacing().item_spacing.x).max(30.0), 22.0),
+            egui::Sense::hover(),
+        );
+        let mut field = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(label)
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        control(&mut field);
     });
 }
 
@@ -883,6 +993,40 @@ mod tests {
         );
         panes[0].ingest(&frames);
         assert_eq!(panes[0].spectrogram.history_len(), 240);
+    }
+
+    #[test]
+    fn legacy_visualizer_presets_migrate_to_editable_mappings_without_losing_geometry() {
+        for kind in [ModuleKind::Flux, ModuleKind::Strata, ModuleKind::Veroni] {
+            let mut value = serde_json::to_value(ModulePane::new(kind).copy_settings()).unwrap();
+            let object = value
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()
+                .as_object_mut()
+                .unwrap();
+            object.remove("modulation");
+            object.insert("sensitivity".into(), serde_json::json!(2.0));
+            object.insert("attack_ms".into(), serde_json::json!(123.0));
+            object.insert("gate_db".into(), serde_json::json!(-72.0));
+            let legacy: ModuleSettings = serde_json::from_value(value).unwrap();
+            let mut pane = ModulePane::new(kind);
+            assert!(pane.paste_settings(&legacy));
+            let migrated = serde_json::to_value(pane.copy_settings()).unwrap();
+            let settings = migrated.as_object().unwrap().values().next().unwrap();
+            assert_eq!(settings["modulation"]["amount"], 2.0);
+            assert_eq!(settings["modulation"]["ambient"], 1.0);
+            assert_eq!(
+                settings["modulation"]["routes"][0]["envelope"]["attack"],
+                123.0
+            );
+            assert_eq!(settings["modulation"]["routes"][0]["floor_db"], -72.0);
+            let saved: ModuleSettings = serde_json::from_value(migrated).unwrap();
+            assert!(pane.paste_settings(&saved));
+            assert_eq!(pane.copy_settings(), saved);
+        }
     }
 
     #[test]
@@ -1000,65 +1144,56 @@ mod tests {
     }
 
     #[test]
-    fn inspector_lists_all_sections_and_collapsing_one_keeps_the_others_visible() {
+    fn icon_tabs_select_sections_and_all_properties_fit_compact_width() {
         for kind in ModuleKind::ALL {
             let context = egui::Context::default();
-            for theme in [egui::Theme::Dark, egui::Theme::Light] {
-                context.style_mut_of(theme, |style| style.animation_time = 0.0);
-            }
             let mut pane = ModulePane::new(kind);
-            let render = |pane: &mut ModulePane, pane_id, events| {
-                let mut height = 0.0;
+            let render = |pane: &mut ModulePane, events| {
                 let mut output = context.run_ui(
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
-                            egui::vec2(300.0, 8000.0),
+                            egui::vec2(334.0, 2400.0),
                         )),
                         events,
                         ..Default::default()
                     },
                     |ui| {
-                        ui.push_id(pane_id, |ui| {
-                            pane.inspector_controls(ui, &AnalysisFrame::default())
-                        });
-                        height = ui.min_rect().height();
+                        crate::workspace_ui::sidebar_style(ui, &AppTheme::default());
+                        let mut rail =
+                            ui.new_child(egui::UiBuilder::new().id_salt("rail").max_rect(
+                                Rect::from_min_size(egui::pos2(3.0, 4.0), egui::vec2(28.0, 2000.0)),
+                            ));
+                        rail.spacing_mut().button_padding = egui::vec2(2.0, 2.0);
+                        rail.spacing_mut().interact_size = egui::vec2(28.0, 28.0);
+                        pane.inspector_tabs(&mut rail);
+                        let bounds =
+                            Rect::from_min_size(egui::pos2(34.0, 0.0), egui::vec2(300.0, 2400.0));
+                        let mut body =
+                            ui.new_child(egui::UiBuilder::new().id_salt("body").max_rect(bounds));
+                        body.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), bounds));
+                        pane.inspector_controls(&mut body, &AnalysisFrame::default());
                         assert!(
-                            ui.min_rect().width() <= 300.0,
-                            "{kind:?} inspector must fit its width"
+                            body.min_rect().width() <= 301.0,
+                            "{kind:?} / {:?} fits",
+                            pane.active_section()
                         );
                     },
                 );
                 output.textures_delta.clear();
-                (output, height)
+                output
             };
-            let (output, expanded_height) = render(&mut pane, 0, vec![]);
-            for section in pane.sections() {
-                assert!(
-                    output.shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.job.text == section.title())),
-                    "{kind:?} includes {section:?}"
-                );
-            }
-            let first_title = pane.sections()[0].title();
-            let header = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.job.text == first_title => {
-                        Some(text.pos + text.galley.size() * 0.5)
-                    }
-                    _ => None,
-                })
-                .unwrap();
+            render(&mut pane, vec![]);
+            render(&mut pane, vec![]);
+            let last = *pane.sections().last().unwrap();
+            let pos = egui::pos2(17.0, 18.0 + (pane.sections().len() - 1) as f32 * 31.0);
             for pressed in [true, false] {
                 render(
                     &mut pane,
-                    0,
                     vec![
-                        egui::Event::PointerMoved(header),
+                        egui::Event::PointerMoved(pos),
                         egui::Event::PointerButton {
-                            pos: header,
+                            pos,
                             button: egui::PointerButton::Primary,
                             pressed,
                             modifiers: egui::Modifiers::NONE,
@@ -1066,23 +1201,49 @@ mod tests {
                     ],
                 );
             }
-            let (collapsed, collapsed_height) = render(&mut pane, 0, vec![]);
-            assert!(
-                collapsed_height < expanded_height,
-                "{kind:?} disclosure hides its parameters"
-            );
-            for section in pane.sections() {
-                assert!(collapsed.shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.job.text == section.title())));
+            assert_eq!(pane.active_section(), last, "{kind:?} tab click");
+            let restored = pane.snapshot();
+            let mut other = ModulePane::new(kind);
+            other.restore(&restored);
+            assert_eq!(other.active_section(), last);
+            for &section in pane.sections() {
+                pane.select_section(section);
+                let output = render(&mut pane, vec![]);
+                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==section.title())));
             }
-            let (_, other_height) = render(&mut pane, 1, vec![]);
-            assert_eq!(
-                other_height, expanded_height,
-                "another pane has independent disclosures"
-            );
-            let (_, restored_height) = render(&mut pane, 0, vec![]);
-            assert_eq!(restored_height, collapsed_height);
         }
+    }
+
+    #[test]
+    fn legacy_scope_snapshots_default_new_palette_and_custom_colors_are_portable() {
+        for kind in [ModuleKind::Oscilloscope, ModuleKind::Stereometer] {
+            let pane = ModulePane::new(kind);
+            let mut value = serde_json::to_value(pane.copy_settings()).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("palette");
+            let legacy: ModuleSettings = serde_json::from_value(value).unwrap();
+            assert_eq!(pane.copy_settings(), legacy);
+        }
+        let mut source = ModulePane::new(ModuleKind::Flux);
+        let mut value = serde_json::to_value(source.copy_settings()).unwrap();
+        value["Flux"]["palette"] = serde_json::to_value(Palette::Custom(
+            Palette::Aurora.gradient(&AppTheme::default()),
+        ))
+        .unwrap();
+        let colors: ModuleSettings = serde_json::from_value(value).unwrap();
+        source.paste_settings(&colors);
+        let encoded = serde_json::to_vec(&source.snapshot()).unwrap();
+        let saved: PaneState = serde_json::from_slice(&encoded).unwrap();
+        let mut restored = ModulePane::new(ModuleKind::Flux);
+        restored.restore(&saved);
+        assert_eq!(restored.copy_settings(), source.copy_settings());
     }
 
     #[test]
@@ -1308,99 +1469,6 @@ mod tests {
                 Palette::Heatmap.color_with_contrast(t, 1.0, &theme),
                 Palette::Heatmap.color(t, &theme)
             );
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum Palette {
-    #[default]
-    Theme,
-    Ember,
-    Ocean,
-    Heatmap,
-}
-
-impl Palette {
-    fn contrast_controls(self, ui: &mut egui::Ui, contrast: &mut f32) {
-        if self == Self::Heatmap {
-            ui.add(crate::parameter::Parameter::new(contrast, 0.25..=3.0, 1.0).text("Contrast"))
-                .help_text("1 is neutral. Higher contrast separates quiet blues from loud reds; lower contrast brings colors toward the middle. Changes color only, not height, levels, or retained audio.");
-        }
-    }
-
-    fn color_with_contrast(self, value: f32, contrast: f32, theme: &AppTheme) -> Color32 {
-        let value = if self == Self::Heatmap {
-            let t = value.clamp(0.0, 1.0);
-            let a = t.powf(contrast);
-            a / (a + (1.0 - t).powf(contrast))
-        } else {
-            value
-        };
-        self.color(value, theme)
-    }
-
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        properties_combo("palette", 176.0, 4)
-            .selected_text(self.label())
-            .show_ui(ui, |ui| {
-                for value in [Self::Theme, Self::Ember, Self::Ocean, Self::Heatmap] {
-                    ui.selectable_value(self, value, value.label()).help_text(
-                        if value == Self::Heatmap {
-                            "Full-spectrum heatmap: cool blue and cyan for quiet levels, green through yellow and orange to red for loud peaks. Floor and Ceiling set the level range."
-                        } else {
-                            "Choose the colors used to represent quiet and loud signal levels."
-                        },
-                    );
-                }
-            })
-            .response
-            .help_text("Choose a signal color palette: current theme, Ember, Ocean, or a full-spectrum Heatmap from cool quiet levels to warm loud peaks.");
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Theme => "Theme colors",
-            Self::Ember => "Ember",
-            Self::Ocean => "Ocean",
-            Self::Heatmap => "Heatmap",
-        }
-    }
-
-    fn color(self, value: f32, theme: &AppTheme) -> Color32 {
-        let (low, high) = match self {
-            Self::Heatmap => {
-                // Map the same normalized level used for waterfall height to a
-                // full cool-to-warm spectrum, independent of the desktop theme.
-                const STOPS: [Color32; 7] = [
-                    Color32::from_rgb(32, 40, 160),
-                    Color32::from_rgb(36, 100, 240),
-                    Color32::from_rgb(0, 200, 230),
-                    Color32::from_rgb(45, 205, 115),
-                    Color32::from_rgb(245, 224, 55),
-                    Color32::from_rgb(255, 140, 35),
-                    Color32::from_rgb(240, 45, 35),
-                ];
-                let position = value.clamp(0.0, 1.0) * (STOPS.len() - 1) as f32;
-                let index = (position as usize).min(STOPS.len() - 2);
-                return mix(STOPS[index], STOPS[index + 1], position - index as f32);
-            }
-            Self::Theme => (theme.accent_alt, theme.accent),
-            Self::Ember => (
-                Color32::from_rgb(140, 44, 70),
-                Color32::from_rgb(255, 181, 70),
-            ),
-            Self::Ocean => (
-                Color32::from_rgb(45, 72, 172),
-                Color32::from_rgb(80, 225, 214),
-            ),
-        };
-        if value < 0.4 {
-            mix(theme.background, low, value / 0.4)
-        } else if value < 0.85 {
-            mix(low, high, (value - 0.4) / 0.45)
-        } else {
-            mix(high, theme.foreground, (value - 0.85) / 0.15)
         }
     }
 }

@@ -3,40 +3,19 @@
 use std::f32::consts::TAU;
 use std::time::Instant;
 
-use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
+use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 
-use super::{properties_combo, settings_panel};
+use super::settings_panel;
+use crate::modulation::{ModulationSettings, Modulator, Target, Visualizer};
 use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, theme::AppTheme};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum Palette {
-    Lime,
-    Ice,
-    Ember,
-    Theme,
-}
-impl Palette {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Lime => "Electric lime",
-            Self::Ice => "Glacial blue",
-            Self::Ember => "Ember",
-            Self::Theme => "Theme accent",
-        }
-    }
-    fn color(self, theme: &AppTheme) -> Color32 {
-        match self {
-            Self::Lime => Color32::from_rgb(150, 255, 35),
-            Self::Ice => Color32::from_rgb(65, 220, 255),
-            Self::Ember => Color32::from_rgb(255, 142, 65),
-            Self::Theme => theme.accent,
-        }
-    }
-}
+use crate::colors::Palette;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct VeroniSettings {
+    #[serde(default)]
+    modulation: Option<ModulationSettings>,
     cells: u32,
     seed: u32,
     clustering: f32,
@@ -71,6 +50,7 @@ pub(crate) struct VeroniSettings {
 impl Default for VeroniSettings {
     fn default() -> Self {
         Self {
+            modulation: Some(ModulationSettings::for_visualizer(Visualizer::Veroni)),
             cells: 128,
             seed: 7,
             clustering: 0.65,
@@ -128,11 +108,32 @@ impl VeroniSettings {
             cell_fill: 0.0, 0.3; point_size: 0.5, 6.0; point_pulse: 0.0, 3.0;
             glow: 0.0, 1.0; link_opacity: 0.0, 0.6; link_reach: 0.5, 3.0;
         }
+        let modulation = self.modulation.get_or_insert_with(|| {
+            let mut m = ModulationSettings::migrate(
+                Visualizer::Veroni,
+                self.sensitivity,
+                self.gate_db,
+                self.attack_ms,
+                self.release_ms,
+            );
+            for r in &mut m.routes {
+                match r.target {
+                    Target::Expansion => r.amount = self.bass_motion,
+                    Target::Swirl => r.amount = self.mid_motion,
+                    Target::Turbulence => r.amount = self.treble_motion,
+                    Target::Steering => r.amount = self.stereo_motion,
+                    _ => {}
+                }
+            }
+            m
+        });
+        modulation.sanitize(Visualizer::Veroni);
     }
 }
 
 #[derive(Default)]
 pub struct Veroni {
+    modulator: Modulator,
     settings: VeroniSettings,
     last_time: Option<Instant>,
     phase: f64,
@@ -145,10 +146,12 @@ impl Veroni {
         self.settings.clone()
     }
     pub(crate) fn apply_settings(&mut self, settings: &VeroniSettings) {
+        self.modulator = Modulator::default();
         self.settings = settings.clone();
         self.settings.sanitize();
     }
     pub fn clear(&mut self) {
+        self.modulator = Modulator::default();
         self.last_time = None;
         self.phase = 0.0;
         self.energy = [0.0; 4];
@@ -156,9 +159,11 @@ impl Veroni {
     }
     pub fn reset_settings(&mut self) {
         self.settings = VeroniSettings::default();
+        self.clear();
     }
 
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
+    pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        self.settings.sanitize();
         let s = &mut self.settings;
         macro_rules! param {
             ($ui:ident, $field:ident, $range:expr, $label:expr, $help:expr) => {
@@ -236,76 +241,17 @@ impl Veroni {
                 "Slow expansion and contraction, with additional bass-driven displacement."
             );
         });
-        settings_panel(ui, "Signal Response", |ui| {
-            param!(
+        settings_panel(ui, "Audio mappings", |ui| {
+            self.modulator.editor(
                 ui,
-                sensitivity,
-                0.0..=4.0,
-                "Sensitivity",
-                "Visual response gain only; does not change the audio. Zero leaves ambient flow."
-            );
-            param!(
-                ui,
-                gate_db,
-                -90.0..=-20.0,
-                "Noise floor dB",
-                "Ignore signal energy below this threshold to keep silence calm."
-            );
-            param!(
-                ui,
-                attack_ms,
-                5.0..=500.0,
-                "Attack ms",
-                "How quickly movement and brightness respond to increasing energy."
-            );
-            param!(
-                ui,
-                release_ms,
-                50.0..=3000.0,
-                "Release ms",
-                "How slowly the visual response settles after a sound."
-            );
-            param!(
-                ui,
-                bass_motion,
-                0.0..=2.0,
-                "Bass movement",
-                "20–250 Hz expands the clusters and accelerates the flow."
-            );
-            param!(
-                ui,
-                mid_motion,
-                0.0..=2.0,
-                "Mid movement",
-                "250 Hz–4 kHz bends the flow and increases its swirl."
-            );
-            param!(
-                ui,
-                treble_motion,
-                0.0..=2.0,
-                "High movement",
-                "Above 4 kHz adds fine movement and point sparkle."
-            );
-            param!(
-                ui,
-                stereo_motion,
-                0.0..=2.0,
-                "Stereo influence",
-                "Left/right RMS balance gently steers the field horizontally."
+                frame,
+                s.modulation.as_mut().unwrap(),
+                Visualizer::Veroni,
+                1,
             );
         });
         settings_panel(ui, "Appearance", |ui| {
-            properties_combo("veroni-palette", 176.0, 4)
-                .selected_text(s.palette.label())
-                .show_ui(ui, |ui| {
-                    for palette in [Palette::Lime, Palette::Ice, Palette::Ember, Palette::Theme] {
-                        ui.selectable_value(&mut s.palette, palette, palette.label());
-                    }
-                })
-                .response
-                .help_text(
-                    "Point, link and cell-tint palette. Borders remain neutral for contrast.",
-                );
+            s.palette.controls(ui);
             ui.checkbox(&mut s.show_cells, "Cell outlines");
             param!(
                 ui,
@@ -376,6 +322,9 @@ impl Veroni {
     }
 
     fn advance(&mut self, now: Instant, frame: &AnalysisFrame, live: bool) {
+        if self.settings.modulation.is_none() {
+            self.settings.sanitize();
+        }
         let dt = self.last_time.map_or(0.0, |last| {
             now.saturating_duration_since(last).as_secs_f32().min(0.05)
         });
@@ -383,28 +332,26 @@ impl Veroni {
         if dt == 0.0 {
             return;
         }
-        let target = if live {
-            audio_energy(frame, &self.settings)
-        } else {
-            [0.0; 4]
-        };
-        for (energy, target) in self.energy.iter_mut().zip(target) {
-            let ms = if target > *energy {
-                self.settings.attack_ms
-            } else {
-                self.settings.release_ms
-            };
-            *energy += (target - *energy) * (1.0 - (-dt * 1000.0 / ms).exp());
-        }
-        let sum = frame.rms[0] + frame.rms[1];
-        let balance = if live && sum.is_finite() && sum > 0.0001 {
-            ((frame.rms[1] - frame.rms[0]) / sum).clamp(-1.0, 1.0)
-        } else {
-            0.0
-        };
-        self.balance += (balance - self.balance) * (1.0 - (-dt / 0.3).exp());
+        self.modulator.advance(
+            frame,
+            live,
+            self.settings.modulation.as_ref().unwrap(),
+            dt,
+            1,
+        );
+        self.energy = [
+            Target::Expansion,
+            Target::Swirl,
+            Target::Turbulence,
+            Target::Brightness,
+        ]
+        .map(|t| self.modulator.value(t));
+        self.balance = self.modulator.value(Target::Steering);
         self.phase += f64::from(
-            dt * self.settings.speed * (0.28 + self.energy[0] * self.settings.bass_motion * 0.3),
+            dt * self.settings.speed
+                * (self.settings.modulation.as_ref().unwrap().ambient * 0.28
+                    + self.modulator.value(Target::Motion) * 0.6)
+                    .clamp(0.0, 3.0),
         );
     }
 
@@ -420,8 +367,7 @@ impl Veroni {
                 let g = group as f32 * 2.399_963;
                 let center = Vec2::new(0.5 + 0.33 * sin(0.37, g), 0.5 + 0.33 * cos(0.29, g + 1.4));
                 let base = Vec2::new(h(1), h(2));
-                let angle =
-                    h(3) * TAU + sin(0.43, g) * s.swirl * (1.0 + self.energy[1] * s.mid_motion);
+                let angle = h(3) * TAU + sin(0.43, g) * s.swirl * (1.0 + self.energy[1]);
                 let radius = 0.035 + h(4).sqrt() * 0.19;
                 let orbit = Vec2::angled(angle) * radius;
                 // Keep a quarter of the sites spread over the field so clusters
@@ -429,17 +375,16 @@ impl Veroni {
                 let cluster = if i % 4 == 0 { 0.0 } else { s.clustering };
                 let mut p = base + (center + orbit - base) * cluster;
                 let phase = h(5) * TAU;
-                let bass = self.energy[0] * s.bass_motion;
-                let mids = self.energy[1] * s.mid_motion;
-                let highs = self.energy[2] * s.treble_motion;
+                let bass = self.energy[0];
+                let highs = self.energy[2];
                 p += (p - center) * s.breathing * (0.16 * sin(0.65, g) + bass * 0.5);
                 p += Vec2::new(sin(0.51, base.y * 5.0), cos(0.47, base.x * 5.0)) * s.drift * 0.13;
                 p += Vec2::new(
                     sin(1.3, phase + base.y * 9.0),
                     cos(1.1, phase + base.x * 8.0),
                 ) * s.turbulence
-                    * (0.025 + mids * 0.04 + highs * 0.015);
-                p.x += self.balance * s.stereo_motion * 0.06;
+                    * (0.025 + highs * 0.055);
+                p.x += self.balance * 0.06;
                 // Reflect at the boundary instead of wrapping (which would teleport
                 // seeds and cause a discontinuous change in neighboring cells).
                 Pos2::new(reflect(p.x) * size.x, reflect(p.y) * size.y)
@@ -464,12 +409,14 @@ impl Veroni {
         let sites = self.sites(bounds.size());
         let s = &self.settings;
         let painter = ui.painter_at(rect);
-        let accent = s.palette.color(theme);
         let average_area = bounds.area() / sites.len() as f32;
         let mut polygon = Vec::with_capacity(24);
         let mut scratch = Vec::with_capacity(24);
         for (i, &site) in sites.iter().enumerate() {
-            let local = self.energy[i % 3] * 0.7 + self.energy[3] * 0.3;
+            let accent = s
+                .palette
+                .cellular(i as f32 / sites.len().max(1) as f32, theme);
+            let local = self.energy[3];
             if s.show_cells || s.cell_fill > 0.0 {
                 voronoi_cell(&sites, i, bounds.size(), &mut polygon, &mut scratch);
                 if polygon.len() < 3 {
@@ -490,8 +437,9 @@ impl Veroni {
                     let opacity = (s.edge_opacity * (0.42 + 0.3 * scale)
                         + local * s.edge_pulse * 0.18)
                         .clamp(0.0, 1.0);
-                    let width =
-                        s.edge_width * (0.55 + 0.4 * scale) * (1.0 + local * s.edge_pulse * 0.4);
+                    let width = s.edge_width
+                        * (0.55 + 0.4 * scale)
+                        * (1.0 + local * s.edge_pulse * 0.4).max(0.05);
                     if s.glow > 0.0 {
                         painter.add(egui::Shape::closed_line(
                             path.clone(),
@@ -537,9 +485,12 @@ impl Veroni {
         // Points sit above all borders and links.
         if s.show_points {
             for (i, site) in sites.iter().enumerate() {
+                let accent = s
+                    .palette
+                    .cellular(i as f32 / sites.len().max(1) as f32, theme);
                 let variation = random(i as u32 + s.seed, 9);
-                let energy = (self.energy[i % 3] * 0.75 + self.energy[3] * 0.25) * s.point_pulse;
-                let radius = s.point_size * (0.45 + variation * 0.8) * (1.0 + energy);
+                let energy = self.modulator.value(Target::Size) * s.point_pulse;
+                let radius = s.point_size * (0.45 + variation * 0.8) * (1.0 + energy).max(0.05);
                 let position = bounds.min + site.to_vec2();
                 for (size, alpha) in [(3.6, 0.035), (2.4, 0.07), (1.6, 0.13)] {
                     if s.glow > 0.0 {
@@ -553,7 +504,9 @@ impl Veroni {
                 painter.circle_filled(
                     position,
                     radius,
-                    accent.gamma_multiply((0.6 + energy * 0.4 + variation * 0.25).min(1.0)),
+                    accent.gamma_multiply(
+                        (0.3 + self.energy[3] * 0.7 + variation * 0.15).clamp(0.0, 1.0),
+                    ),
                 );
             }
         }
@@ -572,6 +525,7 @@ fn reflect(value: f32) -> f32 {
     0.015 + (1.0 - (value.rem_euclid(2.0) - 1.0).abs()) * 0.97
 }
 
+#[cfg(test)]
 fn audio_energy(frame: &AnalysisFrame, s: &VeroniSettings) -> [f32; 4] {
     super::reactive::energy(frame, s.sensitivity, s.gate_db)
 }
@@ -663,6 +617,44 @@ mod tests {
     use super::*;
     use crate::analysis::FrequencyBin;
     use std::time::Duration;
+
+    #[test]
+    fn appearance_routes_do_not_reshape_cells_but_expansion_does() {
+        let mut active = Veroni::default();
+        active
+            .settings
+            .modulation
+            .as_mut()
+            .unwrap()
+            .routes
+            .retain(|r| r.target == Target::Brightness);
+        let mut silent = Veroni {
+            settings: active.settings.clone(),
+            ..Default::default()
+        };
+        let start = Instant::now();
+        for i in 0..=120 {
+            let now = start + Duration::from_secs_f64(i as f64 / 120.0);
+            active.advance(now, &signal(80.0), true);
+            silent.advance(now, &AnalysisFrame::default(), true);
+        }
+        assert_eq!(
+            active.sites(Vec2::splat(800.0)),
+            silent.sites(Vec2::splat(800.0))
+        );
+        assert!(active.energy[3] > 0.5);
+        active.settings.modulation.as_mut().unwrap().routes[0].target = Target::Expansion;
+        active.advance(start + Duration::from_secs_f64(1.02), &signal(80.0), true);
+        silent.advance(
+            start + Duration::from_secs_f64(1.02),
+            &AnalysisFrame::default(),
+            true,
+        );
+        assert_ne!(
+            active.sites(Vec2::splat(800.0)),
+            silent.sites(Vec2::splat(800.0))
+        );
+    }
 
     #[test]
     fn cells_partition_the_rectangle_and_belong_to_nearest_site() {

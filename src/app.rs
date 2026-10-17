@@ -10,7 +10,9 @@ use crate::global_bar::{BarInfo, GlobalBar};
 use crate::help::{self, HoverHelp};
 use crate::icons::{self, Icon};
 use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
-use crate::theme::AppTheme;
+use crate::theme::{AppTheme, AppearancePreferences};
+
+mod settings;
 use crate::workspace::{self, Axis, Edge, MAX_PANES, PresetContent, Session, Storage, Tile};
 use crate::workspace_ui::{self, DragPayload, Manager, Scope};
 
@@ -26,9 +28,15 @@ pub struct SymphosApp {
     source_manually_selected: bool,
     status: AudioStatus,
     theme: AppTheme,
+    automatic_theme: AppTheme,
+    automatic_scale: f32,
+    appearance: AppearancePreferences,
+    pending_zoom: Option<f32>,
+    settings_window: settings::SettingsWindow,
     last_theme_check: Instant,
     fullscreen: bool,
     panel_fullscreen: Option<usize>,
+    fullscreen_macros: bool,
     fullscreen_hint_started: Option<Instant>,
     show_inspector: bool,
     show_issues: bool,
@@ -65,10 +73,16 @@ impl SymphosApp {
             selected_node: None,
             source_manually_selected: false,
             status: AudioStatus::Idle,
+            automatic_theme: theme.clone(),
+            automatic_scale: 1.0,
+            appearance: AppearancePreferences::default(),
+            pending_zoom: None,
+            settings_window: settings::SettingsWindow::default(),
             theme,
             last_theme_check: Instant::now(),
             fullscreen: false,
             panel_fullscreen: None,
+            fullscreen_macros: false,
             fullscreen_hint_started: None,
             show_inspector: false,
             show_issues: false,
@@ -114,9 +128,11 @@ impl SymphosApp {
                 .settings
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = state.analysis;
+            app.appearance = state.appearance;
             app.global_bar.stereo = state.meter_stereo;
             app.global_bar.channel = state.meter_channel;
         }
+        app.apply_appearance(&context.egui_ctx);
         app
     }
 
@@ -138,6 +154,7 @@ impl SymphosApp {
         });
         Session {
             version: 2,
+            appearance: self.appearance.clone(),
             demo: {
                 #[cfg(feature = "development")]
                 {
@@ -229,12 +246,21 @@ impl SymphosApp {
         let Some(theme) = AppTheme::load_current_omarchy() else {
             return;
         };
-        if theme == self.theme {
-            return;
+        self.automatic_theme = theme;
+        self.apply_appearance(context);
+    }
+
+    fn apply_appearance(&mut self, context: &egui::Context) {
+        let theme = self.appearance.theme.resolve(&self.automatic_theme);
+        if self.theme != theme {
+            self.theme = theme;
+            apply_style(context, &self.theme);
+            context.request_repaint();
         }
-        self.theme = theme;
-        apply_style(context, &self.theme);
-        context.request_repaint();
+        let scale = self.appearance.ui_scale.unwrap_or(self.automatic_scale);
+        if (context.zoom_factor() - scale).abs() > 0.001 {
+            context.set_zoom_factor(scale);
+        }
     }
 
     fn source_selector(&mut self, ui: &mut egui::Ui) -> egui::Response {
@@ -275,8 +301,32 @@ impl SymphosApp {
         if settings_header(ui, self.panes[self.selected_pane].kind, &metadata).clicked() {
             self.sidebar_open = false;
         }
+        let bounds = ui.available_rect_before_wrap();
+        let rail_rect =
+            Rect::from_min_max(bounds.min, Pos2::new(bounds.left() + 34.0, bounds.bottom()));
+        ui.painter()
+            .rect_filled(rail_rect, 0.0, self.theme.navigation);
+        let mut rail = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("inspector-tabs", self.selected_pane))
+                .max_rect(rail_rect.shrink2(Vec2::new(3.0, 4.0))),
+        );
+        rail.spacing_mut().button_padding = Vec2::splat(2.0);
+        rail.spacing_mut().item_spacing = Vec2::new(0.0, 3.0);
+        rail.spacing_mut().interact_size = Vec2::splat(28.0);
+        rail.style_mut().interaction.tooltip_delay = 0.2;
+        self.panes[self.selected_pane].inspector_tabs(&mut rail);
+        let content_rect =
+            Rect::from_min_max(Pos2::new(rail_rect.right(), bounds.top()), bounds.max);
+        let mut properties = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("inspector-properties")
+                .max_rect(content_rect),
+        );
+        properties.set_clip_rect(content_rect.intersect(ui.clip_rect()));
+        properties.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), content_rect));
         settings_scroll_area(self.selected_pane, &self.panes[self.selected_pane])
-            .show(ui, |ui| {
+            .show(&mut properties, |ui| {
                 ui.push_id(self.selected_pane, |ui| {
                     ui.data_mut(|d| {
                         d.insert_temp(
@@ -290,7 +340,7 @@ impl SymphosApp {
                     });
                     self.panes[self.selected_pane].inspector_controls(ui, frame)
                 });
-                egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 0)).show(ui, |ui| {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
                         self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
@@ -313,6 +363,7 @@ impl SymphosApp {
     }
 
     fn toggle_panel_fullscreen(&mut self, index: usize, now: Instant) {
+        self.fullscreen_macros = false;
         self.panel_fullscreen = if self.panel_fullscreen == Some(index) {
             None
         } else {
@@ -331,6 +382,9 @@ impl SymphosApp {
 
     fn handle_shortcut(&mut self, ctx: &egui::Context, frame: &AnalysisFrame, now: Instant) {
         use crate::shortcuts::Action;
+        if self.settings_window.open {
+            return; // The modal owns Escape and blocks workspace shortcuts.
+        }
         // Always provide an exit even if a hidden inspector or dialog held focus.
         if self.panel_fullscreen.is_some()
             && ctx.input_mut(|input| {
@@ -347,6 +401,7 @@ impl SymphosApp {
                 Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
                 Some(Action::Help) => self.help_open = !self.help_open,
                 Some(Action::Bindings) => self.show_shortcuts = true,
+                Some(Action::Settings) => self.settings_window.open = true,
                 _ => {}
             }
             return;
@@ -375,12 +430,23 @@ impl SymphosApp {
                     }
                 }
             }
+            Some(Action::Performance)
+                if self.panes[self.selected_pane].kind == ModuleKind::Flux =>
+            {
+                if self.panel_fullscreen.is_some() {
+                    self.fullscreen_macros = !self.fullscreen_macros;
+                    self.fullscreen_hint_started = None;
+                } else {
+                    self.panes[self.selected_pane].toggle_performance();
+                }
+            }
             Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
             Some(Action::Inspect) => self.inspect_panel(self.selected_pane),
             Some(Action::PanelFullscreen) => self.toggle_panel_fullscreen(self.selected_pane, now),
             Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
             Some(Action::Help) => self.help_open = !self.help_open,
             Some(Action::Bindings) => self.show_shortcuts = true,
+            Some(Action::Settings) => self.settings_window.open = true,
             Some(Action::CopySettings) => {
                 self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings())
             }
@@ -420,8 +486,9 @@ impl SymphosApp {
             && self.engine.analysis().is_current(frame);
         let selected = self.selected_pane == index;
         let painter = ui.painter_at(rect);
-        // The header and visualization share one continuous panel surface.
-        painter.rect_filled(rect, 7.0, self.theme.background);
+        // Visual backdrop and default signal colors follow the platform palette,
+        // independently of the GUI skin. The header shares that backdrop.
+        painter.rect_filled(rect, 7.0, self.automatic_theme.background);
         painter.rect_stroke(
             rect,
             7.0,
@@ -495,7 +562,7 @@ impl SymphosApp {
             rect.max - Vec2::splat(8.0),
         );
         if canvas.width() >= 24.0 && canvas.height() >= 24.0 {
-            self.panes[index].draw(&mut child, canvas, frame, &self.theme, live);
+            self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
         }
     }
 
@@ -780,7 +847,19 @@ impl SymphosApp {
         now: Instant,
     ) {
         if let Some(index) = self.panel_fullscreen {
-            self.pane(ui, index, rect, snapshot);
+            let mut panel_rect = rect;
+            if self.fullscreen_macros
+                && let Some(height) = self.panes[index].performance_height(rect.width())
+            {
+                let height = height.min((rect.height() - 150.0).max(30.0));
+                let bar_rect =
+                    Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - height), rect.max);
+                panel_rect.max.y = bar_rect.top() - 6.0;
+                if self.panes[index].performance_bar(ui, bar_rect, &self.theme, index) {
+                    self.inspect_panel(index);
+                }
+            }
+            self.pane(ui, index, panel_rect, snapshot);
             if let Some(id) = self.pending_close.take() {
                 self.close_pane(id);
             }
@@ -893,67 +972,11 @@ impl SymphosApp {
                     Icon::Gear,
                     false,
                     source.rect.height(),
-                    "View settings: dashboard layout, fullscreen, and detailed diagnostics.",
+                    "Open Settings · Cmd/Ctrl+,",
                 );
-                egui::Popup::menu(&options).show(|ui| {
-                    if ui
-                        .button(crate::shortcuts::platform_label(
-                            "Keyboard shortcuts · Ctrl+K",
-                        ))
-                        .clicked()
-                    {
-                        self.show_shortcuts = true;
-                        ui.close();
-                    }
-                    if ui
-                        .button(format!("Issue log ({})", crate::issues::count()))
-                        .clicked()
-                    {
-                        self.show_issues = true;
-                        ui.close();
-                    }
-                    #[cfg(target_os = "macos")]
-                    {
-                        if ui.button("Retry audio capture").clicked() {
-                            if let Some(source) = self
-                                .sources
-                                .iter()
-                                .find(|source| {
-                                    Some(source.node_name.as_str()) == self.selected_node.as_deref()
-                                })
-                                .cloned()
-                            {
-                                self.engine.select_source(source);
-                                self.status = AudioStatus::Connecting;
-                                self.reset_modules();
-                            }
-                            ui.close();
-                        }
-                        ui.label("Allow system audio recording in macOS Privacy & Security.");
-                    }
-                    if ui
-                        .button("Balance pane sizes")
-                        .help_text("Equalize each split in the current layout.")
-                        .clicked()
-                    {
-                        if let Some(tree) = &mut self.tiles {
-                            equalize_splits(tree);
-                        }
-                        ui.close();
-                    }
-                    if ui
-                        .button("Fullscreen · F11")
-                        .help_text("Toggle fullscreen. You can also press F11.")
-                        .clicked()
-                    {
-                        self.toggle_fullscreen(ui.ctx());
-                        ui.close();
-                    }
-                    ui.checkbox(&mut self.show_inspector, "FFT inspector / diagnostics")
-                        .help_text("Open raw FFT bins and detailed audio-analysis statistics.");
-                    ui.separator();
-                    build_details(ui);
-                });
+                if options.clicked() {
+                    self.settings_window.open = true;
+                }
             });
         });
         let content_bounds = Rect::from_min_max(
@@ -988,11 +1011,12 @@ impl SymphosApp {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        let settings_were_open = self.settings_window.open;
         let reset = self.global_bar.show(
             &mut footer_ui,
             &mut settings,
             &mut self.help_open,
-            &mut self.show_inspector,
+            &mut self.settings_window.open,
             BarInfo {
                 frame: snapshot,
                 status: &self.status,
@@ -1006,6 +1030,9 @@ impl SymphosApp {
             .settings
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = settings;
+        if self.settings_window.open && !settings_were_open {
+            self.settings_window.category = settings::Category::Analysis;
+        }
         if reset {
             self.reset_modules();
         }
@@ -1031,12 +1058,26 @@ impl SymphosApp {
             self.help_open,
             &mut self.sidebar_width,
         );
-        let layout = workspace_layout(
+        let mut layout = workspace_layout(
             content,
             self.sidebar_open && self.tiles.is_some(),
             self.help_open,
             self.sidebar_width,
         );
+        if self.tiles.is_some()
+            && let Some(height) =
+                self.panes[self.selected_pane].performance_height(layout.dashboard.width())
+        {
+            let performance_rect = dock_performance(&mut layout, height);
+            if self.panes[self.selected_pane].performance_bar(
+                ui,
+                performance_rect,
+                &self.theme,
+                self.selected_pane,
+            ) {
+                self.sidebar_open = true;
+            }
+        }
         if let Some(sidebar_rect) = layout.sidebar {
             ui.painter()
                 .rect_filled(sidebar_rect, 0.0, self.theme.panel);
@@ -1112,11 +1153,17 @@ impl eframe::App for SymphosApp {
         if let Some(dev) = &mut self.development
             && let Some((theme, scale)) = dev.poll(ui.ctx())
         {
-            self.theme = theme;
-            apply_style(ui.ctx(), &self.theme);
-            ui.ctx().set_zoom_factor(scale);
+            self.automatic_theme = theme;
+            self.automatic_scale = scale;
         }
         self.refresh_theme(ui.ctx());
+        self.apply_appearance(ui.ctx());
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("component-color-theme"),
+                self.automatic_theme.clone(),
+            )
+        });
         help::begin_frame(ui);
         self.process_audio_events();
         let now = Instant::now();
@@ -1149,6 +1196,7 @@ impl eframe::App for SymphosApp {
             self.panes[id].ingest(&captures);
         }
         self.workspace_view(ui, rect, &snapshot, now);
+        self.show_settings(ui.ctx(), &snapshot);
         if self.storage.save_due() || ui.ctx().input(|input| input.viewport().close_requested()) {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
@@ -1192,9 +1240,15 @@ mod workspace_interaction_tests {
             source_manually_selected: false,
             status: AudioStatus::Idle,
             theme: AppTheme::default(),
+            automatic_theme: AppTheme::default(),
+            automatic_scale: 1.0,
+            appearance: AppearancePreferences::default(),
+            pending_zoom: None,
+            settings_window: settings::SettingsWindow::default(),
             last_theme_check: Instant::now(),
             fullscreen: false,
             panel_fullscreen: None,
+            fullscreen_macros: false,
             fullscreen_hint_started: None,
             show_inspector: false,
             show_issues: false,
@@ -1334,6 +1388,124 @@ mod workspace_interaction_tests {
         );
         output.textures_delta.clear();
         output
+    }
+
+    #[test]
+    fn appearance_preferences_override_automatic_without_resetting_panes() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.appearance.theme = crate::theme::ThemeChoice::Graphite;
+        app.appearance.ui_scale = Some(1.25);
+        app.panes[0].last_capture = 42;
+        app.apply_appearance(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        app.automatic_theme = crate::theme::ThemeChoice::Ember.resolve(&AppTheme::default());
+        app.automatic_scale = 1.1;
+        app.apply_appearance(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        assert_eq!(app.theme.name, "Graphite");
+        assert_eq!(ctx.zoom_factor(), 1.25);
+        assert_eq!(app.panes[0].last_capture, 42);
+        app.appearance = AppearancePreferences::default();
+        app.apply_appearance(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        assert_eq!(app.theme.name, "Ember");
+        assert_eq!(ctx.zoom_factor(), 1.1);
+        assert_eq!(app.panes[0].last_capture, 42);
+    }
+
+    #[test]
+    fn gui_skins_preserve_visual_colors_frozen_frames_and_component_settings() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        apply_style(&ctx, &app.theme);
+        app.panes[0].kind = ModuleKind::Waveform;
+        let mut frame = AnalysisFrame {
+            sample_rate: 48_000,
+            ..Default::default()
+        };
+        frame.waveform_left = (0..2048).map(|i| (i as f32 * 0.025).sin() * 0.6).collect();
+        frame.waveform_right = frame.waveform_left.clone();
+        app.panes[0].toggle_freeze(&frame, Instant::now());
+        let settings = app.panes[0].copy_settings();
+        let render = |app: &mut SymphosApp| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.pane(
+                        ui,
+                        0,
+                        Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(1100.0, 700.0)),
+                        &frame,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            output
+                .shapes
+                .into_iter()
+                .filter(|s| s.clip_rect.top() > 40.0)
+                .map(|s| s.shape)
+                .collect::<Vec<_>>()
+        };
+        render(&mut app);
+        let before = render(&mut app);
+        assert!(!before.is_empty());
+        for choice in [
+            crate::theme::ThemeChoice::Resolve,
+            crate::theme::ThemeChoice::Live,
+        ] {
+            app.appearance.theme = choice;
+            app.apply_appearance(&ctx);
+            assert_ne!(app.theme.accent, app.automatic_theme.accent);
+            assert_eq!(
+                render(&mut app),
+                before,
+                "GUI skin must not recolor or reset the waveform"
+            );
+            assert!(app.panes[0].is_frozen());
+            assert_eq!(app.panes[0].copy_settings(), settings);
+            let restored =
+                Session::decode(&serde_json::to_vec(&app.workspace(&ctx)).unwrap()).unwrap();
+            assert_eq!(restored.appearance.theme, choice);
+        }
+    }
+
+    #[test]
+    fn settings_owns_escape_before_panel_fullscreen() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.panel_fullscreen = Some(0);
+        app.settings_window.open = true;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            app.show_settings(ui.ctx(), &AnalysisFrame::default());
+        });
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                app.handle_shortcut(ui.ctx(), &AnalysisFrame::default(), Instant::now());
+                app.show_settings(ui.ctx(), &AnalysisFrame::default());
+            },
+        );
+        output.textures_delta.clear();
+        assert!(!app.settings_window.open);
+        assert_eq!(app.panel_fullscreen, Some(0));
     }
 
     #[test]
@@ -1525,7 +1697,12 @@ fn settings_header(ui: &mut egui::Ui, kind: ModuleKind, metadata: &str) -> egui:
 fn settings_scroll_area(pane_index: usize, pane: &ModulePane) -> egui::ScrollArea {
     // Each pane and module keeps its own scroll position across close and resize.
     egui::ScrollArea::vertical()
-        .id_salt(("module-settings", pane_index, pane.kind.label()))
+        .id_salt((
+            "module-settings",
+            pane_index,
+            pane.kind.label(),
+            pane.active_section().title(),
+        ))
         .auto_shrink([false, false])
 }
 
@@ -1713,6 +1890,22 @@ fn workspace_layout(
     }
 }
 
+fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect {
+    let bottom = layout
+        .help
+        .map_or(layout.dashboard.bottom(), |r| r.bottom());
+    let height = requested_height.min((layout.dashboard.height() - 100.0).max(30.0));
+    let rect = Rect::from_min_max(
+        Pos2::new(layout.dashboard.left(), bottom - height),
+        Pos2::new(layout.dashboard.right(), bottom),
+    );
+    layout.dashboard.max.y -= height + 6.0;
+    if let Some(help) = &mut layout.help {
+        *help = help.translate(Vec2::new(0.0, -height - 6.0));
+    }
+    rect
+}
+
 fn apply_style(context: &egui::Context, theme: &AppTheme) {
     let mut visuals = if theme.dark_mode {
         egui::Visuals::dark()
@@ -1721,7 +1914,8 @@ fn apply_style(context: &egui::Context, theme: &AppTheme) {
     };
     let border = mix(theme.card, theme.muted, 0.4);
     let selected_text = contrasting_color(theme.accent, theme.foreground, theme.background);
-    visuals.override_text_color = Some(theme.foreground);
+    // Widget foregrounds supply normal text; selected buttons may use contrasting text.
+    visuals.override_text_color = None;
     visuals.weak_text_color = Some(theme.muted);
     visuals.panel_fill = theme.background;
     visuals.window_fill = theme.card;
@@ -1736,7 +1930,10 @@ fn apply_style(context: &egui::Context, theme: &AppTheme) {
     visuals.error_fg_color = theme.error;
     visuals.selection.bg_fill = theme.accent;
     visuals.selection.stroke = Stroke::new(1.0, selected_text);
+    visuals.text_cursor.stroke.color = theme.accent;
     visuals.widgets.noninteractive.bg_fill = theme.card;
+    visuals.widgets.noninteractive.weak_bg_fill = theme.card;
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, border);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, theme.foreground);
     visuals.widgets.inactive.bg_fill = theme.card;
     visuals.widgets.inactive.weak_bg_fill = theme.card;
@@ -2098,8 +2295,8 @@ mod layout_tests {
             assert!(render(&pane, 0, false, 216.0).is_none());
             pane.select_section(pane.sections()[1]);
             let (other_id, other_state) = render(&pane, 0, true, 216.0).unwrap();
-            assert_eq!(id, other_id);
-            assert_eq!(other_state.offset.y, 240.0);
+            assert_ne!(id, other_id);
+            assert_eq!(other_state.offset.y, 0.0);
             pane.select_section(first);
             let (restored_id, restored) = render(&pane, 0, true, 400.0).unwrap();
             assert_eq!(id, restored_id);
@@ -2227,6 +2424,30 @@ mod layout_tests {
                 .global_id,
             3
         );
+    }
+
+    #[test]
+    fn performance_dock_reserves_plot_space_and_keeps_help_and_inspector_separate() {
+        for width in [1024.0, 1440.0, 1800.0] {
+            for help in [false, true] {
+                let content = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 658.0));
+                let mut layout = workspace_layout(content, true, help, 236.0);
+                let height = if layout.dashboard.width() >= 900.0 {
+                    156.0
+                } else {
+                    258.0
+                };
+                let bar = dock_performance(&mut layout, height);
+                assert!(layout.dashboard.height() >= 90.0);
+                assert!(!bar.intersects(layout.dashboard));
+                assert!(!bar.intersects(layout.sidebar.unwrap()));
+                if let Some(help) = layout.help {
+                    assert!(!help.intersects(bar));
+                    assert!(!help.intersects(layout.dashboard));
+                }
+                assert!(content.contains_rect(bar));
+            }
+        }
     }
 
     #[test]

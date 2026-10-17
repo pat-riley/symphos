@@ -1,69 +1,16 @@
 //! A bounded, fixed-step particle field with music-driven attraction and flow.
 use super::{camera_gizmo::project_direction, mix, properties_combo, settings_panel};
+use crate::modulation::{ModulationSettings, Modulator, Target, Visualizer};
 use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, theme::AppTheme};
 use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::{f32::consts::TAU, time::Instant};
 
+mod performance;
+use performance::{Macro, Performance, orbit_position};
+
 const STEP: f32 = 1.0 / 120.0;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum Palette {
-    Spectrum,
-    Solar,
-    Ion,
-    Theme,
-}
-impl Palette {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Spectrum => "Spectrum",
-            Self::Solar => "Solar",
-            Self::Ion => "Ion",
-            Self::Theme => "Theme accent",
-        }
-    }
-    fn color(self, t: f32, theme: &AppTheme) -> Color32 {
-        let colors = match self {
-            Self::Spectrum => [
-                Color32::from_rgb(255, 212, 65),
-                Color32::from_rgb(255, 113, 49),
-                Color32::from_rgb(208, 86, 238),
-                Color32::from_rgb(94, 103, 255),
-                Color32::from_rgb(48, 225, 227),
-                Color32::from_rgb(159, 231, 85),
-            ],
-            Self::Solar => [
-                Color32::from_rgb(255, 239, 145),
-                Color32::from_rgb(255, 179, 42),
-                Color32::from_rgb(255, 93, 55),
-                Color32::from_rgb(225, 61, 121),
-                Color32::from_rgb(251, 130, 61),
-                Color32::from_rgb(255, 213, 95),
-            ],
-            Self::Ion => [
-                Color32::from_rgb(106, 247, 233),
-                Color32::from_rgb(61, 164, 255),
-                Color32::from_rgb(92, 83, 232),
-                Color32::from_rgb(187, 97, 252),
-                Color32::from_rgb(230, 172, 255),
-                Color32::from_rgb(95, 223, 255),
-            ],
-            Self::Theme => [
-                theme.accent,
-                theme.accent_alt,
-                theme.foreground,
-                theme.accent_alt,
-                theme.accent,
-                theme.foreground,
-            ],
-        };
-        let x = t.rem_euclid(1.0) * 6.0;
-        mix(
-            colors[x as usize % 6],
-            colors[(x as usize + 1) % 6],
-            x.fract(),
-        )
-    }
-}
+use crate::colors::Palette;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ColorMode {
     Current,
@@ -84,6 +31,14 @@ impl ColorMode {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct FluxSettings {
+    #[serde(default)]
+    modulation: Option<ModulationSettings>,
+    brightness: f32,
+    expansion: f32,
+    impact: f32,
+    orbit_shape: f32,
+    color_drift: f32,
+    performance_open: bool,
     count: u32,
     cores: u32,
     seed: u32,
@@ -91,6 +46,7 @@ pub(crate) struct FluxSettings {
     depth: f32,
     speed: f32,
     attraction: f32,
+    orbit_magnetism: f32,
     swirl: f32,
     turbulence: f32,
     drag: f32,
@@ -130,6 +86,13 @@ pub(crate) struct FluxSettings {
 impl Default for FluxSettings {
     fn default() -> Self {
         Self {
+            modulation: Some(ModulationSettings::for_visualizer(Visualizer::Flux)),
+            brightness: 1.0,
+            expansion: 1.0,
+            impact: 0.65,
+            orbit_shape: 0.0,
+            color_drift: 0.10,
+            performance_open: true,
             count: 6000,
             cores: 5,
             seed: 41,
@@ -137,6 +100,7 @@ impl Default for FluxSettings {
             depth: 1.0,
             speed: 1.0,
             attraction: 1.1,
+            orbit_magnetism: 0.0,
             swirl: 1.2,
             turbulence: 0.65,
             drag: 0.85,
@@ -185,8 +149,9 @@ impl FluxSettings {
             self.$field = if self.$field.is_finite() { self.$field.clamp($lo, $hi) } else { defaults.$field };
         )*}; }
         bound! {
+            brightness: 0.0, 2.0; expansion: 0.35, 2.0; impact: 0.0, 2.0; orbit_shape: 0.0, 1.0; color_drift: 0.0, 1.0;
             radius: 0.4, 2.0; depth: 0.2, 2.0; speed: 0.0, 2.0;
-            attraction: 0.0, 3.0; swirl: -3.0, 3.0; turbulence: 0.0, 2.0; drag: 0.1, 3.0;
+            attraction: 0.0, 3.0; orbit_magnetism: 0.0, 1.0; swirl: -3.0, 3.0; turbulence: 0.0, 2.0; drag: 0.1, 3.0;
             diffusion: 0.0, 1.0; core_motion: 0.0, 2.0; gravity: -1.0, 1.0;
             sensitivity: 0.0, 4.0; gate_db: -90.0, -20.0; attack_ms: 5.0, 500.0; release_ms: 50.0, 3000.0;
             bass_push: 0.0, 3.0; mid_flow: 0.0, 3.0; high_scatter: 0.0, 3.0; stereo: 0.0, 2.0; transients: 0.0, 3.0;
@@ -196,6 +161,26 @@ impl FluxSettings {
             yaw: -180.0, 180.0; elevation: -85.0, 85.0; roll: -180.0, 180.0; zoom: 0.35, 3.0;
             perspective: 0.0, 1.0; orbit_speed: -15.0, 15.0;
         }
+        let modulation = self.modulation.get_or_insert_with(|| {
+            let mut m = ModulationSettings::migrate(
+                Visualizer::Flux,
+                self.sensitivity,
+                self.gate_db,
+                self.attack_ms,
+                self.release_ms,
+            );
+            for r in &mut m.routes {
+                match r.target {
+                    Target::Expansion => r.amount = self.bass_push,
+                    Target::Swirl => r.amount = self.mid_flow,
+                    Target::Turbulence => r.amount = self.high_scatter,
+                    Target::Steering => r.amount = self.stereo,
+                    _ => {}
+                }
+            }
+            m
+        });
+        modulation.sanitize(Visualizer::Flux);
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -203,19 +188,23 @@ struct Particle {
     position: [f32; 3],
     velocity: [f32; 3],
     variation: f32,
+    home: [f32; 3],
     group: usize,
 }
 #[derive(Default)]
 pub struct Flux {
+    modulator: Modulator,
+    performance: Performance,
+    color_phase: f64,
     settings: FluxSettings,
     particles: Vec<Particle>,
     pattern: Option<(u32, u32)>,
     last_time: Option<Instant>,
     accumulator: f32,
     phase: f64,
+    flow_phase: f64,
     orbit: f64,
     energy: [f32; 4],
-    slow_bass: f32,
     balance: f32,
 }
 impl Flux {
@@ -223,18 +212,23 @@ impl Flux {
         self.settings.clone()
     }
     pub(crate) fn apply_settings(&mut self, settings: &FluxSettings) {
+        self.modulator = Modulator::default();
+        self.performance = Performance::default();
         self.settings = settings.clone();
         self.settings.sanitize();
     }
     pub fn clear(&mut self) {
+        self.modulator = Modulator::default();
+        self.performance = Performance::default();
         self.particles.clear();
         self.pattern = None;
         self.last_time = None;
         self.accumulator = 0.0;
         self.phase = 0.0;
+        self.color_phase = 0.0;
+        self.flow_phase = 0.0;
         self.orbit = 0.0;
         self.energy = [0.0; 4];
-        self.slow_bass = 0.0;
         self.balance = 0.0;
     }
     pub fn reset_settings(&mut self) {
@@ -249,7 +243,8 @@ impl Flux {
         self.settings.zoom = 1.0;
         self.orbit = 0.0;
     }
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
+    pub fn controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        self.settings.sanitize();
         let s = &mut self.settings;
         macro_rules! p {
             ($ui:ident, $field:ident, $range:expr, $label:expr, $help:expr) => {
@@ -307,17 +302,45 @@ impl Flux {
             );
             p!(
                 ui,
+                expansion,
+                0.35..=2.0,
+                "Base expansion",
+                "Resting extent of the formation; music adds expansion on top."
+            );
+            p!(
+                ui,
+                impact,
+                0.0..=2.0,
+                "Impact",
+                "Transient emphasis: rising mapped energy adds short expansion, brightness, and momentum accents."
+            );
+            p!(
+                ui,
+                orbit_shape,
+                0.0..=1.0,
+                "Orbit shape",
+                "Morph Rings / Helix / Knot / Vortex / Petals. Raise Orbit magnetism to reveal the path."
+            );
+            p!(
+                ui,
+                orbit_magnetism,
+                0.0..=1.0,
+                "Orbit magnetism",
+                "Zero keeps particles in a dispersed, moving 3D cloud. Raise this to gather them into orbital bands; one tightly binds the bands. Audio still expands and disturbs both formations."
+            );
+            p!(
+                ui,
                 attraction,
                 0.0..=3.0,
                 "Attraction",
-                "Pull toward the moving cores. Low values produce diffuse clouds; high values form dense streams."
+                "How firmly particles follow their moving cloud or orbital paths. Low values drift loosely; high values track the field more closely."
             );
             p!(
                 ui,
                 swirl,
                 -3.0..=3.0,
                 "Swirl",
-                "Rotating force around each core. Negative values reverse its direction."
+                "Circulation through the cloud or around magnetized bands. Negative values reverse its direction."
             );
             p!(
                 ui,
@@ -338,7 +361,7 @@ impl Flux {
                 diffusion,
                 0.0..=1.0,
                 "Diffusion",
-                "Individual particle drift that prevents the cloud collapsing onto the cores."
+                "Amount of individual wandering around each particle’s path through the cloud."
             );
             p!(
                 ui,
@@ -355,69 +378,13 @@ impl Flux {
                 "Bias the field upward or downward while keeping it bounded."
             );
         });
-        settings_panel(ui, "Signal Response", |ui| {
-            p!(
+        settings_panel(ui, "Audio mappings", |ui| {
+            self.modulator.editor(
                 ui,
-                sensitivity,
-                0.0..=4.0,
-                "Sensitivity",
-                "Visual response gain. Zero produces ambient motion without audio modulation."
-            );
-            p!(
-                ui,
-                gate_db,
-                -90.0..=-20.0,
-                "Noise floor dB",
-                "Ignore energy below this threshold."
-            );
-            p!(
-                ui,
-                attack_ms,
-                5.0..=500.0,
-                "Attack ms",
-                "How quickly the forces and brightness respond to increasing energy."
-            );
-            p!(
-                ui,
-                release_ms,
-                50.0..=3000.0,
-                "Release ms",
-                "How slowly the visual response settles after a sound."
-            );
-            p!(
-                ui,
-                bass_push,
-                0.0..=3.0,
-                "Bass expansion",
-                "Low-frequency energy pushes particles away from their cores."
-            );
-            p!(
-                ui,
-                mid_flow,
-                0.0..=3.0,
-                "Mid currents",
-                "Mid-frequency energy increases swirling flow."
-            );
-            p!(
-                ui,
-                high_scatter,
-                0.0..=3.0,
-                "High scatter",
-                "High-frequency energy increases fine turbulence and sparkle."
-            );
-            p!(
-                ui,
-                transients,
-                0.0..=3.0,
-                "Transient bursts",
-                "Extra outward force when bass energy rises above its slower envelope. Energy-driven; not BPM synchronization."
-            );
-            p!(
-                ui,
-                stereo,
-                0.0..=2.0,
-                "Stereo steering",
-                "Left/right RMS balance steers the cloud horizontally."
+                frame,
+                s.modulation.as_mut().unwrap(),
+                Visualizer::Flux,
+                1,
             );
         });
         settings_panel(ui, "Particles", |ui| {
@@ -473,20 +440,21 @@ impl Flux {
             );
         });
         settings_panel(ui, "Appearance", |ui| {
-            properties_combo("flux-palette", 176.0, 4)
-                .selected_text(s.palette.label())
-                .show_ui(ui, |ui| {
-                    for palette in [
-                        Palette::Spectrum,
-                        Palette::Solar,
-                        Palette::Ion,
-                        Palette::Theme,
-                    ] {
-                        ui.selectable_value(&mut s.palette, palette, palette.label());
-                    }
-                })
-                .response
-                .help_text("Color family for the cloud and its currents.");
+            p!(
+                ui,
+                brightness,
+                0.0..=2.0,
+                "Brightness",
+                "Master visual light level, separate from audio volume and particle opacity."
+            );
+            p!(
+                ui,
+                color_drift,
+                0.0..=1.0,
+                "Color drift",
+                "Rate of continuous movement through the selected palette."
+            );
+            s.palette.controls(ui);
             properties_combo("flux-color-mode", 176.0, 4).selected_text(s.color_mode.label()).show_ui(ui, |ui| {
                 for mode in [ColorMode::Current, ColorMode::Velocity, ColorMode::Frequency, ColorMode::Depth] { ui.selectable_value(&mut s.color_mode, mode, mode.label()); }
             }).response.help_text("Map color to current membership, speed, audio bands, or distance from the camera.");
@@ -593,11 +561,15 @@ impl Flux {
                     direction[1] * 0.15,
                 ],
                 variation: h(4),
+                home: direction.map(|v| v * h(3).cbrt()),
                 group,
             });
         }
     }
     fn advance(&mut self, now: Instant, frame: &AnalysisFrame, live: bool) {
+        if self.settings.modulation.is_none() {
+            self.settings.sanitize();
+        }
         self.ensure_particles();
         let dt = self.last_time.map_or(0.0, |last| {
             now.saturating_duration_since(last).as_secs_f32().min(0.05)
@@ -606,36 +578,59 @@ impl Flux {
         if dt == 0.0 {
             return;
         }
-        let target = if live {
-            super::reactive::energy(frame, self.settings.sensitivity, self.settings.gate_db)
-        } else {
-            [0.0; 4]
-        };
-        let sum = frame.rms[0] + frame.rms[1];
-        let balance = if live && sum.is_finite() && sum > 0.0001 {
-            ((frame.rms[1] - frame.rms[0]) / sum).clamp(-1.0, 1.0)
-        } else {
-            0.0
-        };
         self.accumulator += dt;
         // At most six 120 Hz steps per frame after a stall, never an unbounded catch-up.
         while self.accumulator + 1e-7 >= STEP {
             self.accumulator = (self.accumulator - STEP).max(0.0);
-            for (energy, target) in self.energy.iter_mut().zip(target) {
-                let ms = if target > *energy {
-                    self.settings.attack_ms
-                } else {
-                    self.settings.release_ms
-                };
-                *energy += (target - *energy) * (1.0 - (-STEP * 1000.0 / ms).exp());
-            }
-            self.slow_bass += (self.energy[0] - self.slow_bass) * (1.0 - (-STEP / 0.6).exp());
-            self.balance += (balance - self.balance) * (1.0 - (-STEP / 0.25).exp());
+            self.modulator.advance(
+                frame,
+                live,
+                self.settings.modulation.as_ref().unwrap(),
+                STEP,
+                1,
+            );
+            self.energy = [
+                Target::Expansion,
+                Target::Swirl,
+                Target::Turbulence,
+                Target::Brightness,
+            ]
+            .map(|t| self.modulator.value(t));
+            self.balance = self.modulator.value(Target::Steering);
+            let input = self
+                .modulator
+                .input_for(
+                    Target::Expansion,
+                    self.settings.modulation.as_ref().unwrap(),
+                )
+                .max(
+                    self.modulator.input_for(
+                        Target::Turbulence,
+                        self.settings.modulation.as_ref().unwrap(),
+                    ) * 0.55,
+                );
+            self.performance.advance(&self.settings, input, STEP);
+
             if self.settings.auto_orbit {
                 self.orbit =
                     (self.orbit + f64::from(STEP * self.settings.orbit_speed)).rem_euclid(360.0);
             }
-            self.step(STEP * self.settings.speed);
+            // Force mappings can wake a still cloud even without a separate speed route.
+            let movement = self.energy[..3]
+                .iter()
+                .map(|v| v.abs())
+                .fold(self.balance.abs(), f32::max);
+            self.step(
+                STEP * self.performance.value(&self.settings, Macro::Speed)
+                    * (1.0
+                        + self.performance.pulse
+                            * self.performance.value(&self.settings, Macro::Impact)
+                            * 0.35)
+                    * (self.settings.modulation.as_ref().unwrap().ambient
+                        + self.modulator.value(Target::Motion))
+                    .max(movement)
+                    .clamp(0.0, 3.0),
+            );
         }
     }
     fn step(&mut self, dt: f32) {
@@ -646,44 +641,76 @@ impl Flux {
         let centers = self.centers();
         let s = &self.settings;
         let t = self.phase.rem_euclid(f64::from(TAU) * 1000.0) as f32;
-        let pulse = (self.energy[0] - self.slow_bass).max(0.0) * s.transients;
-        let expansion = 0.08 + self.energy[0] * s.bass_push * 0.6 + pulse * 3.0;
-        let turbulence = s.turbulence + self.energy[2] * s.high_scatter * 1.3;
-        let swirl = s.swirl * (1.0 + self.energy[1] * s.mid_flow * 2.0);
-        let damping = (-dt * s.drag).exp();
+        let magnetism = self.performance.value(s, Macro::Magnetism);
+        let impact = self.performance.value(s, Macro::Impact) * self.performance.pulse;
+        let base_expansion = self.performance.value(s, Macro::Expansion);
+        let shape = self.performance.value(s, Macro::Shape);
+        self.color_phase += f64::from(dt * self.performance.value(s, Macro::Color) * 0.18);
+        let expansion =
+            (base_expansion * (1.0 + self.energy[0] * 0.35 + impact * 0.5)).clamp(0.2, 2.6);
+        let turbulence =
+            (self.performance.value(s, Macro::Turbulence) + self.energy[2] * 0.8).clamp(0.0, 4.0);
+        let swirl = (self.performance.value(s, Macro::Swirl) * (1.0 + self.energy[1] * 1.2))
+            .clamp(-8.0, 8.0);
+        self.flow_phase += f64::from(dt * swirl * 0.45);
+        let flow = self.flow_phase.rem_euclid(f64::from(TAU)) as f32;
+        let damping = (-dt * (s.drag + magnetism * 1.5)).exp();
+        let tracking = 0.9 + s.attraction * 1.2 + magnetism * 3.0;
+        let kick = self.performance.impulse * self.performance.value(s, Macro::Impact);
         for particle in &mut self.particles {
             let p = particle.position;
             let center = centers[particle.group];
-            let d: [f32; 3] = std::array::from_fn(|axis| center[axis] - p[axis]);
-            let distance = length(d).max(s.radius * 0.08);
             let individual = particle.variation * TAU;
-            let axis = particle.group % 3;
-            let mut tangent = [d[2], 0.0, -d[0]];
-            if axis == 1 {
-                tangent = [0.0, d[2], -d[1]];
-            }
-            if axis == 2 {
-                tangent = [d[1], -d[0], 0.0];
-            }
-            let field = [
-                (p[1] / s.radius * 2.1 + t * 0.7).sin() + (p[2] / s.radius * 1.7 - t * 0.4).cos(),
-                (p[2] / s.radius * 2.3 + t * 0.5).sin() - (p[0] / s.radius * 1.8 + t * 0.6).cos(),
-                (p[0] / s.radius * 2.0 - t * 0.4).sin() + (p[1] / s.radius * 2.5 + t * 0.3).cos(),
-            ];
+            // Persistent, volume-distributed homes prevent damped particles from
+            // converging on the same attractor or a common radial equilibrium.
+            // Two rotating axes and individual rates retain depth as time passes.
+            let a = flow + t * (0.11 + particle.variation * 0.13) + individual;
+            let b = t * (0.17 + particle.home[0].abs() * 0.19) + individual * 2.3;
+            let (sa, ca) = a.sin_cos();
+            let (sb, cb) = b.sin_cos();
+            let [hx, hy, hz] = particle.home;
+            let x = hx * ca - hz * sa;
+            let z = hx * sa + hz * ca;
+            let cloud = [x, hy * cb - z * sb, hy * sb + z * cb];
+            let angle = flow + individual;
+            let path = if magnetism > 0.0001 {
+                orbit_position(shape, angle, particle.home)
+            } else {
+                [0.0; 3]
+            };
+            let ring = match particle.group % 3 {
+                0 => path,
+                1 => [path[1], path[0], path[2]],
+                _ => [path[0], path[2], path[1]],
+            };
+            let radial: [f32; 3] = std::array::from_fn(|k| p[k] - center[k]);
+            let distance = length(radial).max(s.radius * 0.05);
             for k in 0..3 {
-                let diffusion = (t * 1.3 + individual + k as f32 * 2.1).sin() * s.diffusion;
-                let mut force = d[k] * s.attraction + tangent[k] * swirl
-                    - d[k] / distance * expansion * s.radius
-                    + (field[k] * turbulence * 0.22 + diffusion * 0.18) * s.radius;
+                let wander = (t * (0.47 + particle.variation * 0.31)
+                    + individual * (k as f32 + 1.7)
+                    + particle.home[(k + 1) % 3] * 4.0)
+                    .sin();
+                let eddy = (t * 1.1 + particle.home[k] * 7.0 + individual + k as f32 * 2.1).cos();
+                let cloud_offset = cloud[k] * expansion * 0.95
+                    + wander * (0.18 + s.diffusion * 0.35)
+                    + eddy * turbulence * 0.18;
+                let ring_offset = ring[k] * expansion + eddy * turbulence * 0.018;
+                let target = center[k]
+                    + s.radius * (cloud_offset * (1.0 - magnetism) + ring_offset * magnetism);
+                // Track a bounded moving volume, rather than continuously injecting
+                // tangential acceleration that flings everything into planar rings.
+                let mut force = (target - p[k]) * tracking;
                 if k == 0 {
-                    force += self.balance * s.stereo * s.radius * 0.3;
+                    force += self.balance * s.radius * 0.3;
                 }
                 if k == 1 {
                     force += s.gravity * s.radius;
                 }
-                // Smooth confinement keeps particles in view instead of teleporting them.
-                force -= p[k] * (length(p) / s.radius - 1.6).max(0.0) * 2.0;
-                particle.velocity[k] = (particle.velocity[k] + force * dt) * damping;
+                force -= p[k] * (length(p) / s.radius - 2.1).max(0.0) * 2.0;
+                particle.velocity[k] = (particle.velocity[k]
+                    + force * dt
+                    + radial[k] / distance * kick * s.radius * 0.35)
+                    * damping;
             }
             let velocity = length(particle.velocity);
             if velocity > s.radius * 4.0 {
@@ -702,6 +729,7 @@ impl Flux {
                 }
             }
         }
+        self.performance.impulse = 0.0;
     }
 
     pub fn draw(
@@ -743,7 +771,8 @@ impl Flux {
                 * (ui.input(|i| i.smooth_scroll_delta.y) * 0.002).exp())
             .clamp(0.35, 3.0);
         }
-        let camera = Camera::new(rect, &self.settings, self.orbit as f32);
+        let mut camera = Camera::new(rect, &self.settings, self.orbit as f32);
+        camera.depth = self.performance.value(&self.settings, Macro::Depth);
         let mesh = self.mesh(&camera, theme);
         ui.painter_at(rect).add(egui::Shape::mesh(mesh));
         if self.settings.labels && rect.width() > 380.0 && rect.height() > 160.0 {
@@ -758,7 +787,12 @@ impl Flux {
     }
     fn mesh(&self, camera: &Camera, theme: &AppTheme) -> egui::Mesh {
         let s = &self.settings;
-        let pulse = ((self.energy[0] - self.slow_bass).max(0.0) * s.transients).min(1.0);
+        let brightness = self.performance.value(s, Macro::Brightness);
+        let impact = self.performance.pulse * self.performance.value(s, Macro::Impact);
+        let trails = (self.performance.value(s, Macro::Trails) + impact * 0.14).clamp(0.0, 1.0);
+        let glow = self.performance.value(s, Macro::Glow);
+        let color = self.color_phase.rem_euclid(1.0) as f32;
+
         let mut dots: Vec<_> = self
             .particles
             .iter()
@@ -775,27 +809,32 @@ impl Flux {
                     }
                     ColorMode::Depth => depth / (s.radius * 5.0) + 0.5,
                 };
-                let tint = mix(theme.foreground, s.palette.color(hue, theme), s.saturation);
+                let tint = mix(
+                    theme.foreground,
+                    s.palette.cycle(hue + color, theme),
+                    s.saturation,
+                );
                 let sparkle =
                     (self.phase * 2.7 + f64::from(p.variation * 48.0)).sin() as f32 * 0.5 + 0.5;
                 // A quieter resting cloud leaves headroom for audible peaks. Band-specific
                 // illumination and a small size bloom make changes visible at tiny dot sizes.
-                let drive = self.energy[3] * 0.55 + self.energy[p.group % 3] * 0.45;
-                let light = (0.24
-                    + drive * 0.64
-                    + pulse * 0.45
-                    + sparkle * s.twinkle * (0.12 + self.energy[2] * s.high_scatter * 0.3))
-                    .min(1.0);
+                let drive = self.energy[3];
+                let light = (brightness
+                    * (0.20
+                        + drive * 0.60
+                        + impact * 0.45
+                        + sparkle * s.twinkle * (0.10 + drive * 0.22)))
+                    .clamp(0.0, 1.0);
                 let fade =
                     1.0 - s.depth_fade * ((1.0 - depth / (s.radius * 3.4)) * 0.5).clamp(0.0, 1.0);
                 let radius = s.size
                     * (1.0 - s.size_variation * 0.65
                         + p.variation.powi(3) * s.size_variation * 1.3)
                     * scale
-                    * (1.0 + drive * 0.35 + pulse * 0.25);
+                    * (1.0 + self.modulator.value(Target::Size) * 0.65).max(0.05);
                 let tail = camera
                     .project(std::array::from_fn(|k| {
-                        p.position[k] - p.velocity[k] * s.trails * 0.12
+                        p.position[k] - p.velocity[k] * trails * 0.12
                     }))
                     .0;
                 Dot {
@@ -815,13 +854,19 @@ impl Flux {
                     position,
                     tail: position,
                     depth,
-                    radius: s.core_size * scale * (1.0 + self.energy[i % 3] * 0.3),
+                    radius: s.core_size
+                        * scale
+                        * (1.0 + self.modulator.value(Target::Size) * 0.3).max(0.05),
                     color: mix(
-                        s.palette.color(i as f32 / s.cores as f32, theme),
+                        s.palette.cycle(i as f32 / s.cores as f32, theme),
                         theme.foreground,
                         0.4,
                     )
-                    .gamma_multiply(s.opacity * (0.4 + self.energy[i % 3] * 0.6)),
+                    .gamma_multiply(
+                        s.opacity
+                            * (brightness * (0.4 + self.energy[3] * 0.6 + impact * 0.3))
+                                .clamp(0.0, 1.0),
+                    ),
                     core: true,
                 });
             }
@@ -829,7 +874,7 @@ impl Flux {
         dots.sort_by(|a, b| a.depth.total_cmp(&b.depth));
         let mut mesh = egui::Mesh::default();
         for dot in dots {
-            if s.trails > 0.0 && !dot.core {
+            if trails > 0.0 && !dot.core {
                 streak(
                     &mut mesh,
                     dot.tail,
@@ -838,12 +883,12 @@ impl Flux {
                     dot.color.gamma_multiply(0.5),
                 );
             }
-            if s.glow > 0.0 {
+            if glow > 0.0 {
                 disc(
                     &mut mesh,
                     dot.position,
                     dot.radius * if dot.core { 4.0 } else { 2.6 },
-                    dot.color.gamma_multiply(s.glow * 0.18),
+                    dot.color.gamma_multiply(glow * 0.18),
                 );
             }
             disc(&mut mesh, dot.position, dot.radius, dot.color);
@@ -1053,7 +1098,7 @@ mod tests {
         assert_eq!(slow.orbit, orbit);
         // A hidden pane resumes with bounded work instead of simulating every missed second.
         slow.advance(start + Duration::from_secs(3600), &frame, true);
-        assert!(slow.phase - phase < 0.051);
+        assert!(slow.phase - phase < 0.151);
     }
 
     #[test]
@@ -1067,7 +1112,7 @@ mod tests {
             silent.advance(now, &AnalysisFrame::default(), true);
         }
         assert!(live.energy.iter().all(|e| *e > 0.5));
-        assert!(live.balance > 0.4);
+        assert!(live.balance > 0.15);
         let kinetic_energy = |cloud: &Flux| {
             cloud
                 .particles
@@ -1108,6 +1153,179 @@ mod tests {
     }
 
     #[test]
+    fn force_route_wakes_zero_ambient_cloud_without_a_speed_route() {
+        let mut active = small_cloud();
+        let m = active.settings.modulation.as_mut().unwrap();
+        m.ambient = 0.0;
+        m.routes.retain(|r| r.target == Target::Expansion);
+        let mut silent = small_cloud();
+        silent.settings = active.settings.clone();
+        let start = Instant::now();
+        for i in 0..=120 {
+            let now = start + Duration::from_secs_f64(i as f64 / 120.0);
+            active.advance(now, &signal(), true);
+            silent.advance(now, &AnalysisFrame::default(), true);
+        }
+        assert_eq!(silent.phase, 0.0);
+        assert!(active.phase > 0.5);
+        assert_ne!(active.particles, silent.particles);
+    }
+
+    #[test]
+    fn brightness_only_mapping_leaves_particle_trajectories_unchanged() {
+        let mut active = small_cloud();
+        active
+            .settings
+            .modulation
+            .as_mut()
+            .unwrap()
+            .routes
+            .retain(|r| r.target == Target::Brightness);
+        let mut silent = small_cloud();
+        silent.settings = active.settings.clone();
+        let start = Instant::now();
+        for i in 0..=120 {
+            let now = start + Duration::from_secs_f64(i as f64 / 120.0);
+            active.advance(now, &signal(), true);
+            silent.advance(now, &AnalysisFrame::default(), true);
+        }
+        assert_eq!(active.particles, silent.particles);
+        assert!(active.energy[3] > 0.5);
+        assert_eq!(silent.energy[3], 0.0);
+        let camera = Camera::new(
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0)),
+            &active.settings,
+            0.0,
+        );
+        let a = active.mesh(&camera, &AppTheme::default());
+        let b = silent.mesh(&camera, &AppTheme::default());
+        assert_eq!(a.vertices.len(), b.vertices.len());
+        assert!(
+            a.vertices
+                .iter()
+                .zip(&b.vertices)
+                .any(|(a, b)| a.color != b.color)
+        );
+        assert!(
+            a.vertices
+                .iter()
+                .zip(&b.vertices)
+                .all(|(a, b)| a.pos == b.pos)
+        );
+    }
+
+    fn formation_spread(cloud: &Flux) -> (f32, f32, f32) {
+        let centers = cloud.centers();
+        let mut normal_power = 0.0;
+        let mut radial = 0.0;
+        let mut radial_power = 0.0;
+        for p in &cloud.particles {
+            let d: [f32; 3] = std::array::from_fn(|k| p.position[k] - centers[p.group][k]);
+            let axis = [1, 0, 2][p.group % 3];
+            normal_power += d[axis].powi(2);
+            let r = length(d);
+            radial += r;
+            radial_power += r * r;
+        }
+        let n = cloud.particles.len() as f32;
+        (
+            (normal_power / n).sqrt(),
+            (radial_power / n - (radial / n).powi(2)).max(0.0).sqrt(),
+            radial / n,
+        )
+    }
+
+    #[test]
+    fn cloud_stays_volumetric_and_magnetism_progressively_forms_bands() {
+        let mut formations: Vec<_> = [0.0, 0.5, 1.0]
+            .into_iter()
+            .map(|magnetism| {
+                let mut cloud = small_cloud();
+                cloud.settings.orbit_magnetism = magnetism;
+                cloud.settings.core_motion = 0.0;
+                cloud.energy = [0.7, 0.5, 0.3, 0.8];
+                cloud.ensure_particles();
+                cloud
+            })
+            .collect();
+        // Sample repeatedly over 30 seconds, well beyond the initial seeded cloud.
+        for step in 0..3600 {
+            for cloud in &mut formations {
+                cloud.step(STEP);
+            }
+            if step >= 1200 && step % 120 == 0 {
+                let spreads: Vec<_> = formations.iter().map(formation_spread).collect();
+                assert!(spreads[0].0 > 0.25, "cloud lost depth: {spreads:?}");
+                assert!(
+                    spreads[0].1 > 0.15,
+                    "cloud collapsed to a shell: {spreads:?}"
+                );
+                assert!(
+                    spreads[0].0 > spreads[1].0 * 1.4,
+                    "intermediate blend: {spreads:?}"
+                );
+                assert!(
+                    spreads[1].0 > spreads[2].0 * 3.0,
+                    "band not magnetized: {spreads:?}"
+                );
+                assert!(spreads[2].0 < 0.08, "ring too thick: {spreads:?}");
+            }
+        }
+        // Releasing magnetism restores depth without reseeding or teleporting.
+        let mut ring = formations.remove(2);
+        let before = ring.particles.clone();
+        ring.settings.orbit_magnetism = 0.0;
+        ring.step(STEP);
+        for (a, b) in before.iter().zip(&ring.particles) {
+            assert_eq!(a.home, b.home);
+            assert!(length(std::array::from_fn(|k| a.position[k] - b.position[k])) < 0.04);
+        }
+        for _ in 0..1200 {
+            ring.step(STEP);
+        }
+        assert!(formation_spread(&ring).0 > 0.25);
+    }
+
+    #[test]
+    fn audio_expansion_changes_both_cloud_and_orbital_radius() {
+        for magnetism in [0.0, 1.0] {
+            let mut quiet = small_cloud();
+            quiet.settings.orbit_magnetism = magnetism;
+            quiet.settings.core_motion = 0.0;
+            quiet.ensure_particles();
+            let mut loud = small_cloud();
+            loud.settings = quiet.settings.clone();
+            loud.energy[0] = 1.0;
+            loud.ensure_particles();
+            for _ in 0..2400 {
+                quiet.step(STEP);
+                loud.step(STEP);
+            }
+            assert!(formation_spread(&loud).2 > formation_spread(&quiet).2 * 1.2);
+        }
+    }
+
+    #[test]
+    fn magnetism_round_trips_and_old_presets_start_as_clouds() {
+        let mut settings = FluxSettings {
+            orbit_magnetism: 0.75,
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(&settings).unwrap();
+        let saved: FluxSettings = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(saved.orbit_magnetism, 0.75);
+        json.as_object_mut().unwrap().remove("orbit_magnetism");
+        let old: FluxSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(old.orbit_magnetism, 0.0);
+        settings.orbit_magnetism = f32::NAN;
+        settings.sanitize();
+        assert_eq!(settings.orbit_magnetism, 0.0);
+        settings.orbit_magnetism = 4.0;
+        settings.sanitize();
+        assert_eq!(settings.orbit_magnetism, 1.0);
+    }
+
+    #[test]
     fn extreme_forces_stay_bounded_and_core_changes_reseed_safely() {
         let mut cloud = small_cloud();
         cloud.settings.radius = 0.4;
@@ -1124,7 +1342,8 @@ mod tests {
         cloud.settings.transients = 3.0;
         cloud.energy = [1.0; 4];
         cloud.ensure_particles();
-        for _ in 0..2400 {
+        for i in 0..2400 {
+            cloud.settings.orbit_magnetism = if i < 1200 { 0.0 } else { 1.0 };
             cloud.step(STEP * 2.0);
         }
         for p in &cloud.particles {
@@ -1135,6 +1354,97 @@ mod tests {
         cloud.settings.cores = 1;
         cloud.ensure_particles();
         assert!(cloud.particles.iter().all(|p| p.group == 0));
+    }
+
+    #[test]
+    fn every_orbital_formation_and_impact_stays_bounded_under_live_audio() {
+        let start = Instant::now();
+        for shape in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let mut cloud = small_cloud();
+            cloud.settings.orbit_shape = shape;
+            cloud.settings.orbit_magnetism = 1.0;
+            cloud.settings.impact = 2.0;
+            cloud.settings.speed = 2.0;
+            cloud.settings.expansion = 2.0;
+            for i in 0..=1200 {
+                if i % 120 == 0 {
+                    cloud.performance.manual_burst = true;
+                }
+                cloud.advance(
+                    start + Duration::from_secs_f64(i as f64 / 120.0),
+                    &signal(),
+                    true,
+                );
+            }
+            assert!(cloud.particles.iter().all(|p| {
+                p.position.iter().chain(&p.velocity).all(|v| v.is_finite())
+                    && length(p.position) <= cloud.settings.radius * 3.401
+            }));
+            let camera = Camera::new(
+                Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0)),
+                &cloud.settings,
+                0.0,
+            );
+            let mesh = cloud.mesh(&camera, &AppTheme::default());
+            assert!(mesh.is_valid());
+            assert!(mesh.vertices.iter().all(|v| v.pos.is_finite()));
+        }
+    }
+
+    #[test]
+    fn impact_adds_a_short_music_accent_and_brightness_can_black_out_the_scene() {
+        let start = Instant::now();
+        let mut accented = small_cloud();
+        accented.settings.impact = 2.0;
+        let mut plain = small_cloud();
+        plain.settings.impact = 0.0;
+        for i in 0..=18 {
+            let time = start + Duration::from_secs_f64(i as f64 / 120.0);
+            accented.advance(time, &signal(), true);
+            plain.advance(time, &signal(), true);
+        }
+        assert!(accented.performance.pulse > 0.3);
+        assert_ne!(accented.particles, plain.particles);
+        let phase = accented.phase;
+        let pulse = accented.performance.pulse;
+        accented.advance(
+            start + Duration::from_secs_f64(18.0 / 120.0),
+            &signal(),
+            true,
+        );
+        assert_eq!(accented.phase, phase);
+        assert_eq!(accented.performance.pulse, pulse);
+        for i in 19..=480 {
+            accented.advance(
+                start + Duration::from_secs_f64(i as f64 / 120.0),
+                &signal(),
+                true,
+            );
+        }
+        assert!(
+            accented.performance.pulse < 0.0001,
+            "a sustained tone should settle instead of endlessly retriggering"
+        );
+        Macro::Brightness.set_normalized(&mut accented.settings, 0.0);
+        for i in 481..=600 {
+            accented.advance(
+                start + Duration::from_secs_f64(i as f64 / 120.0),
+                &signal(),
+                true,
+            );
+        }
+        let camera = Camera::new(
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0)),
+            &accented.settings,
+            0.0,
+        );
+        assert!(
+            accented
+                .mesh(&camera, &AppTheme::default())
+                .vertices
+                .iter()
+                .all(|v| v.color == Color32::TRANSPARENT)
+        );
     }
 
     #[test]

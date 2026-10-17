@@ -110,6 +110,7 @@ pub struct SpectrumBand {
 
 #[derive(Clone, Debug)]
 pub struct AnalysisFrame {
+    pub features: Option<Arc<crate::modulation::AudioFeatures>>,
     pub capture_epoch: u64,
     pub sequence: u64,
     pub sample_rate: u32,
@@ -139,6 +140,7 @@ pub struct AnalysisFrame {
 impl Default for AnalysisFrame {
     fn default() -> Self {
         Self {
+            features: None,
             capture_epoch: 0,
             sequence: 0,
             sample_rate: 48_000,
@@ -456,7 +458,12 @@ impl Analyzer {
         let mono_peak = peak[0].max(peak[1]);
         let mono_rms = ((rms[0] * rms[0] + rms[1] * rms[1]) * 0.5).sqrt();
 
+        let mix_rms = (mix_squares / self.size as f64).sqrt() as f32;
+        let features = Some(Arc::new(crate::modulation::AudioFeatures::new(
+            &bins, mix_rms, rms,
+        )));
         AnalysisFrame {
+            features,
             capture_epoch: 0,
             sequence,
             sample_rate,
@@ -470,7 +477,7 @@ impl Analyzer {
             peak,
             rms,
             mix_peak,
-            mix_rms: (mix_squares / self.size as f64).sqrt() as f32,
+            mix_rms,
             dominant_frequency_hz: dominant.0,
             dominant_note: frequency_to_note(dominant.0),
             spectral_centroid_hz,
