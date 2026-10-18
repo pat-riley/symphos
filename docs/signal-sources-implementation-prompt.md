@@ -54,7 +54,7 @@ Keep the product interface concrete: choose a source template, configure it,
 watch its output, and assign it. No node canvas, scripting, arbitrary graphs,
 or audio-effects insert chains are required.
 
-## Confirmed direction versus provisional defaults
+## Confirmed direction and final answers
 
 Confirmed:
 
@@ -72,21 +72,18 @@ Confirmed:
 - Save/reopen creative setups is a future goal to address in this milestone's
   persistence design.
 
-Three final questions were presented before the handoff. Check for the user's
-answers. Until revised, the proposed defaults are:
+The user confirmed the final scope on October 16, 2026:
 
-1. First milestone implements current audio plus lightweight detectors;
-   Ableton/MIDI/OSC connections and stem separation are later integrations.
-2. A project saves inputs' logical references, signals, mappings, components,
-   layout, palette data, and base macro values together. GUI themes and physical
-   device preferences stay separate.
-3. Disconnected inputs fade their influence to zero, then resume on reconnection.
-   Define and document the fade and freshness timing; do not apply a sudden jump
-   or hold stale control data indefinitely.
+1. System audio and detectors first, with visible disabled placeholders and an
+   architecture prepared for future MIDI, OSC, Ableton, and file integrations.
+2. Projects save the complete creative setup; GUI and physical device preferences
+   stay separate.
+3. Disconnected inputs fade influence to zero and resume automatically as soon as
+   fresh data returns, using the configured response.
 
-These are proposals, not claims that the user explicitly approved each detail.
-Routine implementation choices may follow these defaults after the merge unless
-new user guidance changes them.
+PR #62 was verified merged before implementation began on
+`codex/musical-signal-sources`. See `docs/signal-sources.md` for the implemented
+workflow, contracts, persistence and explicit integration boundaries.
 
 ## Baseline to preserve
 

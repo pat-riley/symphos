@@ -4,68 +4,12 @@ Select a Flux pane to reveal its performance bar below the visualization. The
 right inspector still contains the detailed geometry, appearance, and audio
 mappings. The bar controls the selected Flux instance, not every pane.
 
-Click **Flux macros** or **Hide** to collapse the bar; click **Show Flux macros**
-to expand it. **P** also toggles it. Twelve controls fit in one row on wider
-workspaces and two rows on narrower ones, leaving the visualization usable.
-In panel fullscreen the bar starts hidden; press P to bring it up for performance.
-**Inspect** opens the right sidebar, exits panel fullscreen if necessary, and
-reveals the relevant section for the last-touched macro. For a macro with an
-audio mapping, it selects that destination's route.
-
-## Play the controls
-
-The four vertical faders are levels and pacing controls. The eight rotary knobs
-shape motion and appearance. Drag upward to increase, hold Shift for fine
-adjustments, or double-click to restore that control's default. The percentage
-field supports exact entry. Focused controls also accept arrow keys.
-
-| Control | Type | Performance effect |
-| --- | --- | --- |
-| Brightness | Fader | Master visual light level. Zero blacks out particles and cores; captured audio is unaffected. |
-| Speed | Fader | Base travel rate, with music adding movement. Zero settles the particle clock to a stop; illumination can still react. |
-| Expansion | Fader | Resting extent of the formation, leaving room for music-driven expansion. |
-| Impact | Fader | Rising musical energy adds brief outward impulses, expansion, illumination, longer trails, and momentum. Zero removes these extra accents while normal mappings remain active. |
-| Swirl | Knob | Circulation speed and direction. The midpoint is neutral; lower values reverse circulation. |
-| Turbulence | Knob | Smooth travel to disturbed, detailed paths, combined with the mapped high-frequency response. |
-| Magnetism | Knob | Independent 3D cloud paths to tightly held orbital formations. |
-| Shape | Knob | Continuous morph through Rings, Helix, Knot, Vortex, and Petals. |
-| Depth | Knob | Compress or stretch the displayed third dimension. |
-| Trails | Knob | Particle streak length, with short extra extensions from Impact. |
-| Glow | Knob | Halo around points and cores. |
-| Color drift | Knob | Palette circulation, independent of instantaneous audio-driven brightness. |
-
-Percentages represent the control's safe range, not the current audio-driven
-result. Thin accent meters show the mapped music influence on the related
-controls; Impact's meter shows its actual transient envelope. The manual settings
-remain visible while audio adds motion underneath. Values glide over about
-65 ms to make fast mouse changes—and future controller changes—less abrupt.
-Very small residual differences snap to the target so zero speed and brightness
-actually reach zero.
-
-## Drop and formation gestures
-
-Try keeping Speed and Impact moderate during a verse, then raising Impact,
-Expansion, and Brightness together for a drop. Increase Trails for longer
-filaments, or briefly lower Magnetism to release a tightly held formation into a
-cloud. **Burst** launches a manual one-shot accent using the current Impact
-setting. It also works without waiting for an audio onset; Impact zero makes it
-visually neutral.
-
-The formation menu beside the panel number provides quick starting points:
-
-- **Cloud** releases magnetism while keeping the same particles.
-- **Rings** uses orbital paths in alternating planes.
-- **Helix** distributes particles along a cylindrical corkscrew.
-- **Knot** traces a torus-knot-like path with intertwined loops.
-- **Vortex** forms a widening spiral funnel.
-- **Petals** creates a lobed orbit with motion through three dimensions.
-
-Choosing an orbital form sets Shape to its anchor and Magnetism to 90%. Shape
-can then morph between those anchors; increase Magnetism for tighter paths or
-reduce it for diffuse formations. Audio expansion acts on every formation.
-These changes move the existing particles through bounded forces, without
-reseeding or teleporting them. Auto orbit in the inspector rotates the camera
-and is independent of the orbital formation.
+The current control workflow is documented in
+[Performance macros and inline modulation](performance-modulation.md). All
+three artistic components now expose twelve knobs in one horizontally scrolling
+row, source badges, draggable modulation rings, inline source editors, and
+reaction presets. **Advanced** opens the right inspector. **Burst** and the
+Cloud/Rings/Helix/Knot/Vortex/Petals formation menu remain available in Flux.
 
 ## Musical response
 
@@ -79,7 +23,7 @@ A brightness-only route does not feed this motion detector.
 
 The existing [audio mappings](audio-modulation.md) remain editable. Their source
 bands, sensitivity, envelopes, and amounts still determine what each visual
-response listens to. Master Audio amount zero removes audio-driven accents;
+response listens to. Mod amount zero removes audio-driven accents;
 manual Burst remains available. Pause freezes all animation, macro smoothing,
 and pulse clocks. A manual Burst queued while paused starts upon resuming.
 
@@ -120,8 +64,8 @@ than implementing a second control layer. Device selection, MIDI Learn, encoder
 handling, and pickup/soft takeover are future work; this milestone does not open
 MIDI ports.
 
-Automated coverage includes the twelve controls and their saved values, drag
-interaction, narrow/wide bar layouts, sustained versus transient response,
+Automated coverage includes the twelve controls and their saved values, separate knob/ring drag
+interaction, a single-row bar, sustained versus transient response,
 smoothing/zero recovery, distinct and continuous orbital paths, extreme live
 audio and repeated bursts across all five formations, plot/sidebar/help docking,
 brightness-only isolation, and pause/frame-rate behavior.

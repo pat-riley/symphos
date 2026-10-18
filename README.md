@@ -64,7 +64,7 @@ signal sources and reusable projects are the next planned milestone; see the
 - [Flux particle cloud](docs/workspace-layouts.md#flux-particle-cloud) with
   music-driven 3D currents, 200–20,000 particles, trails, and 42 controls including
   orbit, roll, perspective, and color mapping
-- [Flux performance macros](docs/flux-performance.md) with twelve knobs/faders,
+- [Performance macros](docs/performance-modulation.md) for every component with twelve assignable rotary controls,
   musical Impact bursts, and morphing Rings/Helix/Knot/Vortex/Petals formations
 - [Shared visualizer audio mappings](docs/audio-modulation.md) with draggable
   frequency bands, independent movement/appearance destinations, graphical ADSR,
@@ -394,3 +394,43 @@ larger change.
 ## License
 
 Symphos is available under the [MIT License](LICENSE).
+
+### Signals and portable projects
+
+Use **Signals** to prepare reusable intensity, band-energy, hit, spectral-change
+and stereo controls, then assign them in **Visualize**. **File → Save Project** saves signals,
+mappings, layouts and component settings together. MIDI, OSC, Ableton and file
+inputs are marked as planned. See [the Signals guide](docs/signal-sources.md).
+
+### 3D Sphere
+
+Add **3D Sphere** from the component library, or choose the **Spherical spectrum**
+view preset. It wraps the same processed FFT history as 3D Waterfall onto a closed
+sphere: frequency runs around the circumference, history flows from north to
+south, and level pushes the surface outward. A mirrored frequency wrap closes
+the seam; pole taper keeps both poles smooth. Reverse flow changes the direction.
+
+The inspector includes shared frequency range, logarithmic/linear spacing, gain,
+smoothing, decay, and dB limits, plus radius, displacement, three-axis stretch,
+twist, longitude offset, spectrum repeats, history duration, and mesh resolution.
+Choose wireframe, surface, rings, meridians, points, or radial spikes. Color by
+frequency, level, or history with the shared palettes; adjust brightness, contrast,
+opacity, rear visibility, and the resting grid independently.
+
+Drag to orbit, Shift/right-drag to pan, scroll to zoom, and double-click to reset.
+The Camera tab adds roll, axis views, and reversible auto-orbit. Numeric parameter
+labels can be dragged onto the twelve empty macro slots, including scientific
+processing controls. Project and view presets preserve settings and macro banks;
+older projects gain a default Sphere bank without altering existing components.
+
+Sphere’s **Geometry → Surface motion** picker also offers **Pole ripples**. Audio
+energy and rising hits launch circular crests and troughs that travel from the top
+pole toward the bottom pole. Adjust Travel speed, Ripple rate Hz, Damping, and
+Hit emphasis; Displacement controls their depth. Reverse history flow starts
+from the opposite pole. **Launch ripple** sends a manual wave, including in
+silence. The numeric ripple controls can be assigned to macros.
+
+Sphere rotation uses a free trackball: drag near the center to tilt, or around
+the silhouette to roll. The pivot follows the sphere when panned, and rotation
+remains free at the poles. The orientation gizmo reflects roll as well as yaw
+and elevation. Shift/right-drag still pans; double-click restores the camera.
