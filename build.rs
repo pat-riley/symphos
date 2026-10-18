@@ -13,6 +13,7 @@ fn sources(path: &Path, files: &mut Vec<std::path::PathBuf>) {
 fn build_macos_capture() {
     cc::Build::new()
         .file("src/audio/macos_capture.m")
+        .file("src/project_menu.m")
         .flag("-fobjc-arc")
         .flag("-std=c11")
         .flag("-mmacosx-version-min=14.2")
@@ -20,6 +21,8 @@ fn build_macos_capture() {
         .compile("symphos_capture");
     println!("cargo:rustc-link-lib=framework=CoreAudio");
     println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
 }
 
 fn main() {
