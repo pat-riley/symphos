@@ -14,6 +14,7 @@ fn build_macos_capture() {
     cc::Build::new()
         .file("src/audio/macos_capture.m")
         .file("src/project_menu.m")
+        .file("src/window_chrome.m")
         .flag("-fobjc-arc")
         .flag("-std=c11")
         .flag("-mmacosx-version-min=14.2")

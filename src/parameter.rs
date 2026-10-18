@@ -115,7 +115,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                 let color = if m.enabled { m.color } else { ui.visuals().weak_text_color() };
                 label_ui.painter().circle_stroke(badge.center(),3.5,egui::Stroke::new(1.0,color));
                 if m.enabled { label_ui.painter().circle_filled(badge.center(),2.0,color); }
-                response.on_hover_text(format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}",
+                response.help_text(format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}",
                     m.macro_index,m.source,if m.enabled {"Modulating"} else {"Bypassed"},m.depth*100.0,before,m.current));
             }
             label_ui.add(egui::Label::new(self.text.as_ref()).truncate());
@@ -123,7 +123,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                 && let Some(context)=ui.data(|d|d.get_temp::<crate::macros::ParameterContext>(egui::Id::new(crate::macros::CONTEXT))) {
                 let drag=label_ui.interact(label_rect,label_ui.id().with("macro-parameter-drag"),egui::Sense::drag())
                     .on_hover_cursor(egui::CursorIcon::Grab)
-                    .on_hover_text(modulation.as_ref().map_or_else(|| "Drag this parameter label onto a macro slot".into(), |m| {
+                    .help_text(modulation.as_ref().map_or_else(|| "Drag this parameter label onto a macro slot".into(), |m| {
                         format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}\nDrag this label onto a macro slot to reassign it.",
                             m.macro_index,m.source,if m.enabled {"Modulating"} else {"Bypassed"},m.depth*100.0,before,m.current)
                     }));
@@ -285,7 +285,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                     if value > *self.safe.start() { node.add_action(egui::accesskit::Action::Decrement); }
                 }
             });
-            response.help_text_with(|| format!("{}: Drag anywhere to adjust; Shift-drag for fine control. Click the number or press Enter for exact entry; double-click beside the number to reset to {}. Safe input: {} to {}.", self.text, self.default, self.safe.start(), self.safe.end()))
+            response.help_fallback(|| format!("{}\n{}\n\nDrag anywhere to adjust; Shift-drag for fine control. Click the number or press Enter for exact entry; double-click beside the number to reset to {}. Safe input: {} to {}.", self.text, crate::help::control_description(&self.text), self.default, self.safe.start(), self.safe.end()))
         });
         if T::INTEGRAL {
             value = value.round();

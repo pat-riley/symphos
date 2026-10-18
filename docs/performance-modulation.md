@@ -1,8 +1,11 @@
 # Assignable performance macros
 
 Every component has twelve macro slots in one horizontal row, including the
-scientific instruments. New projects show an empty macro bar. Macro banks belong
-to each pane and component type; switching types keeps their assignments separate.
+scientific instruments. New scenes show an empty macro bar. The twelve slots
+belong to the scene and can mix parameters from any of its components. Selecting
+a different component keeps the same macro bar. Each assigned macro shows its
+target component number and type; hover for the full name. A macro controls one
+parameter, identified by a stable component ID and settings field.
 
 ## Assigning parameters
 
@@ -14,15 +17,14 @@ units when stored values use radians; logarithmic and integer controls retain
 those behaviors.
 
 An occupied slot receives the new parameter while keeping its source connection,
-depth, polarity, range, and bypass state. A parameter can occupy only one slot
-in its component's bank: assigning it elsewhere clears its previous slot.
-Right-click a macro and choose **Remove macro** to reset the whole slot.
+depth, polarity, range, and bypass state. Multiple controls may target the same
+parameter; they share its manual value and enabled modulation depths add.
+Right-click a macro and choose **Delete** to reset the whole slot.
 
 ## Showing and hiding
 
 Use **Cmd-B** on Mac or **Ctrl-B** on Linux/Windows, or the **Macros** button in the
-bottom toolbar (compact **M** at narrow widths). **Hide** in the macro header also
-closes the bar. Cmd-K/Ctrl-K continues to open keyboard shortcuts. Shortcuts do
+bottom toolbar. Cmd-K/Ctrl-K continues to open keyboard shortcuts. Shortcuts do
 not fire while editing text or using a modal/menu.
 
 Macro visibility and assignments are saved with projects and full-view presets.
@@ -104,7 +106,7 @@ independent LFO sources keep running throughout.
 
 Flux's formation menu provides Cloud, Rings, Helix, Knot, Vortex and Petals;
 Shape morphs between the orbital forms and Magnetism attracts the cloud toward
-them. **Burst** creates a manual Impact accent. Audio onsets connected to
+them. Audio onsets connected to
 Expansion/Turbulence still provide bespoke Impact accents.
 
 Strata's Bend/Ripples/Shimmer retain **Automatic layer bands** as a source option.
@@ -144,3 +146,29 @@ source name, signed depth, and current value. Bypassed assignments use a muted
 marker. Right-click anywhere on an assigned macro, including its knob, value,
 source badge, or modulation row, and choose **Remove macro** to clear the slot
 and its modulation without changing the parameter’s manual setting.
+
+
+The Macros dock uses the same rounded frame, adjoining channel strips, bold
+headers, recessed fields, and spacing as Signals. Empty slots have neutral
+headers. Assigned parameters use the app accent, and connected parameters use
+their signal channel’s color in the header and modulation ring. The twelve
+columns remain in a single horizontally scrolling row on narrower windows.
+
+Macro headers can be dragged to reorder the fixed twelve slots; a thin insertion
+line marks the drop position. Right-click a slot for Cut, Copy, Paste, Duplicate,
+Delete, Rename, Insert empty macro, Undo last edit, and the same 70-color palette
+used by Signals. Custom names, colors, order, parameter bindings, and source
+mappings save with the scene. Automatic color follows the connected source.
+
+Duplicate uses an empty slot and starts its modulation bypassed. Duplicated
+controls share the parameter’s manual value. If multiple controls for that
+parameter have modulation enabled, their depths add before the final safe limits.
+The Macros dock is shown or hidden from the bottom toolbar or Cmd/Ctrl+B.
+
+Scene macros are included in projects, recovery files, scene duplication and full-view
+presets. Switching component type retains that component's assignments, which
+resume when their type is active again. Closing a component removes its parameter
+assignments from the scene bank; deleting a signal only removes the source link.
+Older per-component banks are consolidated on load, prioritizing the selected
+component and then other components, up to twelve slots. Original banks remain
+in older component data for recovery when more than twelve were assigned.

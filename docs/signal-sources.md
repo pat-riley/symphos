@@ -1,8 +1,9 @@
 # Signals, visual mappings, and projects
 
-Symphos has two workspaces. **Signals** prepares reusable musical controls from
-the main audio capture. **Visualize** assigns those controls to a component's
-behavior. Settings remains the place to select the actual capture device/source.
+The **Signals** bottom dock prepares reusable musical controls from the main
+audio capture while visualizations remain visible above it. **Macros** shares
+the same bottom area; opening either dock hides the other. Drag the Signals
+dock’s top edge to resize it; its height is remembered locally. Settings remains the place to select the actual capture device/source.
 
 ```mermaid
 flowchart LR
@@ -19,15 +20,15 @@ flowchart LR
 
 ## First use
 
-1. Choose system playback in Settings → Audio (or the synchronized navbar picker).
-2. Open **Signals** in the main navbar. Right-click the blank workspace to
+1. Choose system playback in Settings → Audio.
+2. Open **Signals** in the bottom toolbar. Right-click the blank workspace to
    manually add Overall intensity, Band energy, Bass hits, Spectral change,
    Stereo balance, or an LFO. New projects start with no sources.
 3. Click a channel name. Its right inspector edits the frequency range,
    sensitivity, and response. Input and output meters help distinguish capture
    from shaping. The input meter shows measured activity before envelopes, so
    centered stereo can show input while its balance output remains zero. Bass hits has a hit indicator, threshold, and retrigger/hold.
-4. Return to **Visualize**, open Flux, Veroni, or Strata's inspector, and select
+4. Click a visual pane (or its Inspect button), open Flux, Veroni, or Strata's inspector, and select
    Audio mappings. Choose a named signal and a destination. Depth, inversion,
    and range belong to this mapping only.
 5. **Edit signal** opens its shared configuration. To make an independent source,
@@ -37,7 +38,13 @@ Signals uses vivid channel colors, rounded cards and recessed controls matching
 the Visualize workspace. Bright meter fills and activity traces sit against darker
 plots, with clear text and field borders.
 
-Channel faders adjust **visual influence** (0–2). They do not change audible music.
+Channel knobs adjust **visual influence** (0–200%, with 100% as unity). Drag
+vertically, hold Shift for fine adjustment, double-click to reset, or type a percentage.
+**M** mutes a channel; **S** solos it. Multiple solos can be active together, and
+Mute still silences a soloed channel. These controls affect visual modulation.
+Mute and Solo are saved with each scene. The dock has a 320-point minimum height
+when space allows; graphs expand with its height. Horizontal scrolling appears
+only when existing channels exceed the available width.
 Right-click a track header or body for **Cut, Copy, Paste, Duplicate, Delete,
 Rename, Insert new channel**, and a 70-swatch channel color grid (14 columns × 5 rows). Paste and Duplicate
 insert after the clicked channel. Right-click the open workspace after the last
@@ -152,17 +159,27 @@ and control delivery must be evaluated separately when that milestone starts.
 
 ## Projects and presets
 
-Use **File → Open Project**, **Save Project**, or **Save Project As**. On macOS,
+Use **File → New Project**, **Open Project**, **Save Project**, or **Save Project As**. On macOS,
 these live in the native menu bar and use AppKit's file choosers. The shortcuts
-are Cmd+O, Cmd+S and Cmd+Shift+S. Save updates the current project; Save As chooses
+are Cmd+N, Cmd+O, Cmd+S and Cmd+Shift+S. Save updates the current project; Save As chooses
 a new location. Other desktops expose File in the app navbar with Ctrl shortcuts
 and the portable path dialog. The separate Project toolbar button has been removed.
 Save before opening a different creative setup if you want to keep that version.
-Projects use the version 1 `.symphos.json` document format.
+Projects use version 2 of the `.symphos.json` document format. Version 1 projects
+open as one initial scene without altering the original file until you save.
 
-A project contains logical input aliases, signal definitions/IDs/order, component
+The shared top **Scene** selector recalls Signals and Visualize together. Each
+scene stores its own logical input aliases, signal definitions/IDs/order, component
 instance IDs, pane layout, mappings, inline gradient stops, camera/geometry,
-manual macro values, and analysis configuration. It excludes GUI skin/zoom,
+manual macro values, and analysis configuration. A project stores every scene,
+their order, names, and the active scene. Switching retains outgoing edits; saving
+the project captures all scenes, including edits in inactive scenes. **+** duplicates
+the complete current setup; **New empty scene** creates an empty canvas and source
+bank. Rename, move earlier/later, and delete are in the scene menu. The last scene
+cannot be deleted. Scene recall resets detector/visual runtime while keeping the
+physical audio capture connection running. Scene transitions are immediate.
+
+Projects exclude GUI skin/zoom,
 physical device selection, window geometry, audio samples, visual histories,
 envelope runtime and event queues. Named local swatch/palette libraries remain
 local; the actual chosen custom gradient is embedded in component settings.
@@ -184,8 +201,16 @@ indices and survive project round-trips.
 Saved component/full-view presets embed referenced signal descriptions. Applying
 one reuses only matching sources already in the project; unavailable dependencies
 are unassigned and disabled. Presets do not import sources. Layout-only presets
-contain geometry only. Opening a full project explicitly restores its saved source
-bank and mappings together. Reaction presets preserve the user's source assignments.
+contain geometry only. Opening a project or recalling a scene explicitly restores its saved source
+bank and mappings together. Source edits in one scene do not affect other scenes. Reaction presets preserve the user's source assignments. Existing factory and
+user presets remain in **Scene → Visual preset library…**; component presets are
+also reachable from the component inspector. These are reusable pieces, not scenes.
+
+The recovery workspace retains every scene and the current project path across
+app restarts. New/Open Project offers Save all scenes, Discard changes, or Cancel
+when the current project has edits. Future project media will be owned by the
+project and referenced by scenes; media import/collection and crossfades are not
+implemented in this pass.
 
 ## Validation
 

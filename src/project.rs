@@ -8,20 +8,24 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Project {
-    pub format: String,
-    pub version: u32,
+pub struct SceneState {
+    #[serde(default)]
+    pub macros: Option<crate::macros::scene::SceneMacros>,
     pub signals: Bank,
     pub panes: Vec<PaneState>,
     pub layout: Option<Tile>,
     pub selected_pane: usize,
     pub analysis: AnalysisSettings,
 }
-impl Project {
+impl SceneState {
     pub fn capture(session: Session) -> Self {
         Self {
-            format: "symphos-project".into(),
-            version: 1,
+            macros: Some(session.macros.unwrap_or_else(|| {
+                crate::macros::scene::SceneMacros::from_legacy(
+                    &session.panes,
+                    session.selected_pane,
+                )
+            })),
             signals: session.signals,
             panes: session.panes,
             layout: session.layout,
@@ -31,6 +35,9 @@ impl Project {
     }
     pub fn validate(&self) -> bool {
         let session = Session {
+            macros: self.macros.clone(),
+            project_path: None,
+            scenes: None,
             version: 2,
             signals: self.signals.clone(),
             panes: self.panes.clone(),
@@ -41,6 +48,7 @@ impl Project {
             focused_pane: None,
             sidebar_open: true,
             sidebar_width: 300.0,
+            signals_height: crate::workspace::default_signals_height(),
             help_open: false,
             analysis: self.analysis.clone(),
             meter_stereo: true,
@@ -49,31 +57,80 @@ impl Project {
             window_position: None,
             active_preset: "custom".into(),
         };
-        self.format == "symphos-project" && self.version == 1 && session.validate()
+        session.validate()
+    }
+}
+/// The portable document owns all scenes. Source connections and GUI preferences stay local.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub format: String,
+    pub version: u32,
+    #[serde(flatten)]
+    pub scenes: crate::scenes::Book,
+}
+impl Project {
+    pub fn capture(session: Session) -> Self {
+        let mut scenes = session
+            .scenes
+            .clone()
+            .unwrap_or_else(|| crate::scenes::Book::new(SceneState::capture(session.clone())));
+        scenes.store(SceneState::capture(session));
+        Self {
+            format: "symphos-project".into(),
+            version: 2,
+            scenes,
+        }
+    }
+    pub fn validate(&self) -> bool {
+        self.format == "symphos-project" && self.version == 2 && self.scenes.valid()
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|e| format!("Could not read project: {e}"))?;
+        if value["format"] != "symphos-project" {
+            return Err("Not a Symphos project.".into());
+        }
+        let project = match value["version"].as_u64() {
+            Some(1) => {
+                let state: SceneState = serde_json::from_value(value).map_err(|e| e.to_string())?;
+                Self {
+                    format: "symphos-project".into(),
+                    version: 2,
+                    scenes: crate::scenes::Book::new(state),
+                }
+            }
+            Some(2) => serde_json::from_value(value).map_err(|e| e.to_string())?,
+            _ => return Err("Unsupported project version.".into()),
+        };
+        if !project.validate() {
+            return Err("Invalid project; current workspace unchanged.".into());
+        }
+        Ok(project)
     }
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if !self.validate() {
             return Err("Project contains invalid settings. No file was changed.".into());
         }
         let data = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        if data.len() > crate::scenes::MAX_DOCUMENT_BYTES {
+            return Err("Project exceeds the 64 MB document limit.".into());
+        }
         crate::workspace::atomic_write(path, &data).map_err(|e| e.to_string())
     }
     pub fn open(path: &Path) -> Result<Self, String> {
         let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-        if size > 8_000_000 {
-            return Err("Project exceeds 8 MB limit.".into());
+        if size > crate::scenes::MAX_DOCUMENT_BYTES as u64 {
+            return Err("Project exceeds the 64 MB document limit.".into());
         }
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let project: Self = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("Could not read project: {e}. Original file retained."))?;
-        if !project.validate() {
-            return Err("Invalid or unsupported project. Original file retained; current workspace unchanged.".into());
-        }
-        Ok(project)
+        Self::decode(&bytes)
     }
 }
 #[derive(Default)]
 pub struct Dialog {
+    pub pending_open: Option<std::path::PathBuf>,
+    pub pending_new: bool,
+    pub waiting_for_save: bool,
     pub current_path: Option<std::path::PathBuf>,
     pub open: bool,
     pub path: String,
@@ -106,7 +163,14 @@ pub fn dependencies(content: &PresetContent, bank: &Bank) -> Vec<Definition> {
             }
         }
     });
-    if let PresetContent::View { panes, .. } = content {
+    if let PresetContent::View { panes, macros, .. } = content {
+        if let Some(macros) = macros {
+            for slot in &macros.slots {
+                if let Some(id) = slot.signal {
+                    ids.insert(id);
+                }
+            }
+        }
         for pane in panes {
             if let Some(macros) = &pane.macros {
                 for slot in macros.banks.iter().flatten() {
@@ -145,7 +209,14 @@ pub fn bind_preset_sources(content: &mut PresetContent, definitions: &[Definitio
                 .map(|d| d.id)
         })
     };
-    if let PresetContent::View { panes, .. } = content {
+    if let PresetContent::View { panes, macros, .. } = content {
+        if let Some(macros) = macros {
+            for slot in &mut macros.slots {
+                if let Some(id) = slot.signal {
+                    slot.signal = resolve(id);
+                }
+            }
+        }
         for pane in panes {
             if let Some(macros) = &mut pane.macros {
                 for slot in macros.banks.iter_mut().flatten() {
@@ -199,13 +270,18 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
             let Some(layout) = &session.layout else {
                 return false;
             };
+            let panes: Vec<_> = layout
+                .ids()
+                .iter()
+                .map(|id| session.panes[*id].clone())
+                .collect();
             PresetContent::View {
+                macros: session
+                    .macros
+                    .as_ref()
+                    .map(|m| Box::new(m.for_panes(&panes))),
                 layout: layout.canonical(),
-                panes: layout
-                    .ids()
-                    .iter()
-                    .map(|id| session.panes[*id].clone())
-                    .collect(),
+                panes,
             }
         }
     };
@@ -255,7 +331,7 @@ mod tests {
         modulation::Target,
         modules::{ModuleKind, ModulePane},
     };
-    fn example() -> Project {
+    fn example() -> SceneState {
         let mut pane = ModulePane::new(ModuleKind::Flux);
         let mut signals = Bank::default();
         let mut settings = pane.copy_settings();
@@ -265,9 +341,8 @@ mod tests {
             route.signal = Some(id);
         }
         pane.paste_settings(&settings);
-        Project {
-            format: "symphos-project".into(),
-            version: 1,
+        SceneState {
+            macros: None,
             signals,
             panes: vec![pane.snapshot()],
             layout: Some(Tile::Pane(0)),
@@ -302,8 +377,14 @@ mod tests {
             "symphos-project-test-{}.symphos.json",
             std::process::id()
         ));
-        project.save(&path).unwrap();
-        let loaded = Project::open(&path).unwrap();
+        let document = Project {
+            format: "symphos-project".into(),
+            version: 2,
+            scenes: crate::scenes::Book::new(project.clone()),
+        };
+        document.save(&path).unwrap();
+        let restored = Project::open(&path).unwrap();
+        let loaded = &restored.scenes.current().unwrap().state;
         assert_eq!(project.signals, loaded.signals);
         assert_eq!(project.panes, loaded.panes);
         assert_eq!(project.layout, loaded.layout);
@@ -389,6 +470,9 @@ mod tests {
             pane.paste_settings(&s);
         }
         let mut session = Session {
+            macros: None,
+            project_path: None,
+            scenes: None,
             version: 2,
             signals: bank,
             panes: vec![pane.snapshot()],
@@ -399,6 +483,7 @@ mod tests {
             focused_pane: None,
             sidebar_open: true,
             sidebar_width: 300.0,
+            signals_height: crate::workspace::default_signals_height(),
             help_open: false,
             analysis: Default::default(),
             meter_stereo: true,

@@ -15,9 +15,11 @@ mod modules;
 mod parameter;
 mod project;
 mod project_menu;
+mod scenes;
 mod shortcuts;
 mod signals;
 mod theme;
+mod window_chrome;
 mod workspace;
 mod workspace_ui;
 

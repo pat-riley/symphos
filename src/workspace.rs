@@ -359,6 +359,12 @@ fn valid_pane(pane: &PaneState) -> bool {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     #[serde(default)]
+    pub macros: Option<crate::macros::scene::SceneMacros>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenes: Option<crate::scenes::Book>,
+    #[serde(default)]
     pub signals: crate::signals::Bank,
     #[serde(default)]
     pub appearance: crate::theme::AppearancePreferences,
@@ -372,6 +378,8 @@ pub struct Session {
     pub focused_pane: Option<usize>,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    #[serde(default = "default_signals_height")]
+    pub signals_height: f32,
     pub help_open: bool,
     pub analysis: AnalysisSettings,
     pub meter_stereo: bool,
@@ -380,6 +388,9 @@ pub struct Session {
     pub window_position: Option<[f32; 2]>,
     #[serde(default = "default_preset")]
     pub active_preset: String,
+}
+pub fn default_signals_height() -> f32 {
+    390.0
 }
 fn default_demo() -> bool {
     true
@@ -390,7 +401,9 @@ fn default_preset() -> String {
 impl Session {
     pub fn validate(&self) -> bool {
         let ids = self.layout.as_ref().map_or_else(Vec::new, Tile::ids);
-        self.signals.valid()
+        self.scenes.as_ref().is_none_or(crate::scenes::Book::valid)
+            && self.macros.as_ref().is_none_or(|m| m.valid(&self.panes))
+            && self.signals.valid()
             && self.appearance.valid()
             && self.version == 2
             && !self.panes.is_empty()
@@ -408,6 +421,7 @@ impl Session {
             && (ids.is_empty() || ids.contains(&self.selected_pane))
             && self.focused_pane.is_none_or(|id| ids.contains(&id))
             && (160.0..=640.0).contains(&self.sidebar_width)
+            && (180.0..=1000.0).contains(&self.signals_height)
             && FFT_SIZES.contains(&self.analysis.fft_size)
             && (1..=240).contains(&self.analysis.analysis_fps)
             && self.window_size.is_none_or(|size| {
@@ -445,7 +459,7 @@ impl Session {
         }
         let state = std::fs::read(&path)
             .ok()
-            .filter(|b| b.len() <= 4_000_000)
+            .filter(|b| b.len() <= crate::scenes::MAX_DOCUMENT_BYTES)
             .and_then(|bytes| Self::decode(&bytes));
         if state.is_none() {
             let _ = std::fs::copy(&path, dir.join("workspace.rejected.json"));
@@ -461,7 +475,12 @@ impl Session {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PresetContent {
     Layout(Tile),
-    View { layout: Tile, panes: Vec<PaneState> },
+    View {
+        layout: Tile,
+        panes: Vec<PaneState>,
+        #[serde(default)]
+        macros: Option<Box<crate::macros::scene::SceneMacros>>,
+    },
     Component(Box<ModuleSettings>),
 }
 impl PresetContent {
@@ -486,8 +505,10 @@ impl PresetContent {
                 tree.valid(ids.len())
                     && ids.iter().enumerate().all(|(i, id)| i == *id)
                     && match self {
-                        Self::View { panes, .. } => {
-                            panes.len() == ids.len() && panes.iter().all(valid_pane)
+                        Self::View { panes, macros, .. } => {
+                            panes.len() == ids.len()
+                                && panes.iter().all(valid_pane)
+                                && macros.as_ref().is_none_or(|m| m.valid(panes))
                         }
                         _ => true,
                     }
@@ -516,6 +537,7 @@ pub fn factory_presets() -> Vec<Preset> {
         id: format!("factory:{id}"),
         name: name.into(),
         content: PresetContent::View {
+            macros: None,
             layout,
             panes: kinds
                 .iter()
@@ -558,6 +580,18 @@ pub fn factory_presets() -> Vec<Preset> {
             "Spherical spectrum",
             Tile::Pane(0),
             &[ModuleKind::Sphere],
+        ),
+        view(
+            "cylinder",
+            "Cylindrical spectrum",
+            Tile::Pane(0),
+            &[ModuleKind::Cylinder],
+        ),
+        view(
+            "rings",
+            "Orbital waveforms",
+            Tile::Pane(0),
+            &[ModuleKind::Rings],
         ),
         view("flux", "Flux currents", Tile::Pane(0), &[ModuleKind::Flux]),
         view(
@@ -722,6 +756,13 @@ impl Storage {
         if let Ok(bytes) = serde_json::to_vec_pretty(session)
             && bytes != self.last_session
         {
+            if bytes.len() > crate::scenes::MAX_DOCUMENT_BYTES {
+                self.notice = Some(
+                    "Workspace exceeds the 64 MB document limit. Previous recovery file retained."
+                        .into(),
+                );
+                return;
+            }
             match atomic_write(&self.dir.join("workspace.json"), &bytes) {
                 Ok(()) => self.last_session = bytes,
                 Err(error) => self.notice = Some(format!("Workspace save failed: {error}")),
@@ -765,8 +806,13 @@ impl Session {
                 .layout
                 .as_ref()
                 .is_some_and(|current| current.canonical() == *tree),
-            PresetContent::View { layout, panes } => self.layout.as_ref().is_some_and(|current| {
+            PresetContent::View {
+                layout,
+                panes,
+                macros,
+            } => self.layout.as_ref().is_some_and(|current| {
                 current.canonical() == *layout
+                    && (macros.is_none() || self.macros.as_ref() == macros.as_deref())
                     && current.ids().iter().zip(panes).all(|(id, saved)| {
                         let current = &self.panes[*id];
                         current.kind == saved.kind
@@ -905,6 +951,8 @@ mod tests {
                     && entry.get("Strata").is_none()
                     && entry.get("Flux").is_none()
                     && entry.get("Sphere").is_none()
+                    && entry.get("Cylinder").is_none()
+                    && entry.get("Rings").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -936,6 +984,8 @@ mod tests {
                 entry.get("Strata").is_none()
                     && entry.get("Flux").is_none()
                     && entry.get("Sphere").is_none()
+                    && entry.get("Cylinder").is_none()
+                    && entry.get("Rings").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -958,10 +1008,12 @@ mod tests {
         let mut legacy = serde_json::to_value(&original).unwrap();
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(8);
-            pane["settings"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|entry| entry.get("Flux").is_none() && entry.get("Sphere").is_none());
+            pane["settings"].as_array_mut().unwrap().retain(|entry| {
+                entry.get("Flux").is_none()
+                    && entry.get("Sphere").is_none()
+                    && entry.get("Cylinder").is_none()
+                    && entry.get("Rings").is_none()
+            });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         assert_eq!(decoded.panes, original.panes);
@@ -977,16 +1029,15 @@ mod tests {
         let mut legacy = serde_json::to_value(&original).unwrap();
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(9);
-            pane["settings"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|s| s.get("Sphere").is_none());
+            pane["settings"].as_array_mut().unwrap().retain(|s| {
+                s.get("Sphere").is_none() && s.get("Cylinder").is_none() && s.get("Rings").is_none()
+            });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
             pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         for pane in &decoded.panes {
-            assert_eq!(pane.settings.len(), 10);
+            assert_eq!(pane.settings.len(), 12);
             let macros = pane.macros.as_ref().unwrap();
             assert_eq!(macros.banks[8][0].depth, -0.75);
             assert!(
@@ -997,6 +1048,81 @@ mod tests {
         }
         legacy["panes"][0]["settings"][1] = legacy["panes"][0]["settings"][0].clone();
         assert!(Session::decode(&serde_json::to_vec(&legacy).unwrap()).is_none());
+    }
+
+    #[test]
+    fn ten_component_projects_preserve_sphere_settings_and_macros_when_adding_cylinder() {
+        let mut original = session();
+        let mut pane = ModulePane::new(ModuleKind::Sphere);
+        let mut value = serde_json::to_value(pane.copy_settings()).unwrap();
+        value["Sphere"]["radius"] = 1.6.into();
+        pane.paste_settings(&serde_json::from_value(value).unwrap());
+        original.panes[0] = pane.snapshot();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(10);
+            pane["settings"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|s| s.get("Cylinder").is_none() && s.get("Rings").is_none());
+            for settings in pane["settings"].as_array_mut().unwrap() {
+                if let Some(sphere) = settings.get_mut("Sphere") {
+                    sphere.as_object_mut().unwrap().remove("cylinder");
+                }
+            }
+            pane["macros"]["banks"].as_array_mut().unwrap().truncate(10);
+            pane["macros"]["banks"][9][0]["depth"] = (-0.6).into();
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.panes[0].kind, ModuleKind::Sphere);
+        assert_eq!(decoded.panes[0].settings, original.panes[0].settings);
+        for pane in &decoded.panes {
+            let macros = pane.macros.as_ref().unwrap();
+            assert_eq!(macros.banks[9][0].depth, -0.6);
+            assert!(
+                macros.banks[10]
+                    .iter()
+                    .all(|slot| slot.parameter.is_none() && slot.signal.is_none())
+            );
+        }
+        legacy["panes"][0]["settings"][1] = legacy["panes"][0]["settings"][0].clone();
+        assert!(Session::decode(&serde_json::to_vec(&legacy).unwrap()).is_none());
+    }
+
+    #[test]
+    fn eleven_component_projects_keep_cylinder_settings_and_add_empty_rings_macros() {
+        let mut original = session();
+        let mut pane = ModulePane::new(ModuleKind::Cylinder);
+        let mut value = serde_json::to_value(pane.copy_settings()).unwrap();
+        value["Cylinder"]["cylinder"]["height"] = 3.6.into();
+        pane.paste_settings(&serde_json::from_value(value).unwrap());
+        original.panes[0] = pane.snapshot();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(11);
+            pane["settings"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|s| s.get("Rings").is_none());
+            pane["macros"]["banks"].as_array_mut().unwrap().truncate(11);
+            pane["macros"]["banks"][10][0]["depth"] = 0.7.into();
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.panes[0].kind, ModuleKind::Cylinder);
+        assert_eq!(decoded.panes[0].settings, original.panes[0].settings);
+        for pane in &decoded.panes {
+            let macros = pane.macros.as_ref().unwrap();
+            assert_eq!(macros.banks[10][0].depth, 0.7);
+            assert!(
+                macros.banks[11]
+                    .iter()
+                    .all(|s| s.parameter.is_none() && s.signal.is_none())
+            );
+        }
+        assert_eq!(
+            decoded.signals.channels.len(),
+            original.signals.channels.len()
+        );
     }
 
     #[test]
@@ -1015,6 +1141,9 @@ mod tests {
 
     fn session() -> Session {
         Session {
+            macros: None,
+            project_path: None,
+            scenes: None,
             signals: crate::signals::Bank::default(),
             appearance: crate::theme::AppearancePreferences::default(),
             version: 2,
@@ -1033,6 +1162,7 @@ mod tests {
             focused_pane: None,
             sidebar_open: true,
             sidebar_width: 236.0,
+            signals_height: default_signals_height(),
             help_open: false,
             analysis: AnalysisSettings::default(),
             meter_stereo: true,

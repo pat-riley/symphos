@@ -22,6 +22,86 @@ fn sidebar_blend(a: Color32, b: Color32, amount: f32) -> Color32 {
         channel(a.b(), b.b()),
     )
 }
+pub fn dock_style(ui: &mut egui::Ui) {
+    let panel = ui.visuals().panel_fill;
+    let text = ui.visuals().text_color();
+    let field = sidebar_blend(panel, egui::Color32::BLACK, 0.32);
+    let visuals = ui.visuals_mut();
+    visuals.override_text_color = Some(sidebar_blend(text, egui::Color32::WHITE, 0.65));
+    visuals.weak_text_color = Some(sidebar_blend(text, egui::Color32::WHITE, 0.15));
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, text.gamma_multiply(0.30));
+    visuals.extreme_bg_color = field;
+    visuals.widgets.inactive.bg_fill = field;
+    visuals.widgets.inactive.weak_bg_fill = field;
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, text.gamma_multiply(0.30));
+    for widget in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        widget.corner_radius = egui::CornerRadius::same(4);
+    }
+}
+
+pub fn rounded_content_corners(ui: &egui::Ui, rect: Rect, radius: f32, color: egui::Color32) {
+    let radius = radius
+        .min(rect.width() * 0.5)
+        .min(rect.height() * 0.5)
+        .max(0.0);
+    let mut mesh = egui::Mesh::default();
+    for (corner, direction) in [
+        (rect.left_top(), egui::vec2(1.0, 1.0)),
+        (rect.right_top(), egui::vec2(-1.0, 1.0)),
+        (rect.left_bottom(), egui::vec2(1.0, -1.0)),
+        (rect.right_bottom(), egui::vec2(-1.0, -1.0)),
+    ] {
+        let start = mesh.vertices.len() as u32;
+        mesh.colored_vertex(corner, color);
+        for i in 0..=12 {
+            let angle = std::f32::consts::PI + i as f32 / 12.0 * std::f32::consts::FRAC_PI_2;
+            let offset = egui::vec2(radius + radius * angle.cos(), radius + radius * angle.sin());
+            mesh.colored_vertex(corner + offset * direction, color);
+        }
+        for i in 0..12 {
+            mesh.add_triangle(start, start + i + 1, start + i + 2);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
+pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: bool) {
+    let body = sidebar_blend(
+        ui.visuals().panel_fill,
+        ui.visuals().text_color(),
+        if selected { 0.16 } else { 0.075 },
+    );
+    ui.painter().rect_filled(rect, 0.0, body);
+    let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 28.0));
+    ui.painter().rect_filled(header, 0.0, color);
+    let divider = egui::Stroke::new(
+        1.0,
+        sidebar_blend(ui.visuals().panel_fill, egui::Color32::BLACK, 0.5),
+    );
+    ui.painter()
+        .vline(rect.right() - 0.5, rect.y_range(), divider);
+    ui.painter().hline(rect.x_range(), header.bottom(), divider);
+}
+
+pub fn strip_title(ui: &egui::Ui, rect: Rect, text: String, color: egui::Color32) {
+    let galley = egui::WidgetText::from(egui::RichText::new(text).size(13.0).strong().color(color))
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            rect.width(),
+            egui::FontId::proportional(13.0),
+        );
+    let origin = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
+    let painter = ui.painter_at(rect);
+    // The bundled proportional face is light; a subtle second pass adds portable header weight.
+    painter.galley(origin, galley.clone(), color);
+    painter.galley(origin + egui::vec2(0.35, 0.0), galley, color);
+}
 
 pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
     ui.spacing_mut().item_spacing = Vec2::new(5.0, 3.0);
@@ -234,8 +314,8 @@ struct SaveDialog {
 }
 #[derive(Default)]
 pub struct Manager {
+    presets_open: bool,
     pub library_open: bool,
-    logo: Option<egui::TextureHandle>,
     preset_search: String,
     scope: Option<Scope>,
     save: Option<SaveDialog>,
@@ -243,46 +323,13 @@ pub struct Manager {
     delete: Option<String>,
 }
 impl Manager {
+    pub fn open_presets(&mut self, scope: Scope) {
+        self.presets_open = true;
+        self.scope = Some(scope);
+    }
+
     pub fn modal_open(&self) -> bool {
         self.save.is_some() || self.rename.is_some() || self.delete.is_some()
-    }
-    pub fn left_toolbar(&mut self, ui: &mut egui::Ui) {
-        let logo = self.logo.get_or_insert_with(|| {
-            // Rasterized from assets/symphos-logo.svg at ample resolution for HiDPI displays.
-            let image =
-                eframe::icon_data::from_png_bytes(include_bytes!("../assets/symphos-logo.png"))
-                    .expect("embedded Symphos logo is a valid PNG");
-            ui.ctx().load_texture(
-                "symphos-logo",
-                egui::ColorImage::from_rgba_unmultiplied(
-                    [image.width as usize, image.height as usize],
-                    &image.rgba,
-                ),
-                egui::TextureOptions::LINEAR,
-            )
-        });
-        ui.horizontal_centered(|ui| {
-            let image = egui::Image::new((logo.id(), Vec2::new(20.0 * 1197.0 / 761.0, 20.0)))
-                .tint(ui.visuals().text_color());
-            let response = ui
-                .add(
-                    egui::Button::image(image)
-                        .min_size(Vec2::new(0.0, NAV_CONTROL_HEIGHT))
-                        .frame(false)
-                        .selected(self.library_open),
-                )
-                .help_text("Show or hide the component browser.");
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    true,
-                    "Toggle component browser",
-                )
-            });
-            if response.clicked() {
-                self.library_open = !self.library_open;
-            }
-        });
     }
     pub fn preset_toolbar(
         &mut self,
@@ -293,13 +340,15 @@ impl Manager {
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         let current = storage.presets.iter().find(|p| p.id == storage.active);
-        let current_scope = current
-            .map(|p| match p.content {
-                PresetContent::Layout(_) => Scope::Layout,
-                PresetContent::View { .. } => Scope::View,
-                PresetContent::Component(_) => Scope::Component,
-            })
-            .unwrap_or(Scope::View);
+        let current_scope = self.scope.unwrap_or_else(|| {
+            current
+                .map(|p| match p.content {
+                    PresetContent::Layout(_) => Scope::Layout,
+                    PresetContent::View { .. } => Scope::View,
+                    PresetContent::Component(_) => Scope::Component,
+                })
+                .unwrap_or(Scope::View)
+        });
         let cycling: Vec<_> = storage
             .presets
             .iter()
@@ -373,7 +422,7 @@ impl Manager {
                                 let width = ui.available_width() - if preset.factory() { 0.0 } else { 34.0 };
                                 let response = ui.add_enabled_ui(compatible, |ui| ui.add_sized([width, 30.0], egui::Button::selectable(storage.active == preset.id, text).truncate())).inner;
                                 if response.clicked() { actions.push(Action::Apply(preset.id.clone())); ui.close(); }
-                                if !compatible { response.on_hover_text("Select a pane with this component type to apply its preset."); }
+                                if !compatible { response.help_text("Select a pane with this component type to apply its preset."); }
                                 if !preset.factory() && ui.small_button("···").clicked() { self.rename = Some((preset.id.clone(), preset.name.clone())); ui.close(); }
                             });
                         });
@@ -390,7 +439,7 @@ impl Manager {
                 actions.push(Action::Apply(cycle(&cycling, &storage.active, 1)));
             }
             if ui.add_enabled(has_panes, egui::Button::new("Save").min_size(Vec2::new(save_width, NAV_CONTROL_HEIGHT))).clicked() {
-                self.save = Some(SaveDialog { name: String::new(), scope: Scope::Layout });
+                self.save = Some(SaveDialog { name: String::new(), scope: current_scope });
             }
         });
         actions
@@ -443,7 +492,7 @@ impl Manager {
         }
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux] {
+            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux] {
                 if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
                     egui::Frame::new().inner_margin(12).show(ui, |ui| {
                         ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));
@@ -487,6 +536,21 @@ impl Manager {
         selected_kind: ModuleKind,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
+        let mut open = self.presets_open;
+        if open {
+            egui::Window::new("Visual preset library")
+                .open(&mut open)
+                .default_width(560.0)
+                .show(ctx, |ui| {
+                    ui.label("Reusable visual settings for the current scene.");
+                    ui.small("Signal channels are preserved. Use scenes for complete setups.");
+                    ui.allocate_ui(egui::vec2(ui.available_width(), NAV_HEIGHT), |ui| {
+                        actions.extend(self.preset_toolbar(ui, storage, selected_kind, true));
+                    });
+                });
+        }
+        self.presets_open = open;
+
         let mut finish = false;
         if let Some(save) = &mut self.save {
             let response =

@@ -1,4 +1,5 @@
 //! Persistent per-component performance bindings. No audio/runtime data is saved.
+use crate::help::HoverHelp;
 use crate::{
     modules::{ModuleKind, ModuleSettings},
     signals,
@@ -6,8 +7,17 @@ use crate::{
 };
 use egui::{self, Rect, Vec2};
 use serde::{Deserialize, Serialize};
+mod inspector;
+mod menu;
+pub mod scene;
+pub const INSPECT_REQUEST: &str = "macro-inspect-request";
+pub const INSPECT_SELECTION: &str = "macro-inspect-selection";
+use menu::*;
+pub(crate) fn clear_clipboard(ctx: &egui::Context) {
+    menu::clear_clipboard(ctx);
+}
 pub const CONTEXT: &str = "macro-parameter-context";
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParameterContext {
     pub pane: String,
     pub kind: ModuleKind,
@@ -76,6 +86,9 @@ pub struct ParameterDrag {
 #[serde(default)]
 pub struct Slot {
     pub parameter: Option<ParameterSpec>,
+    pub target: Option<ParameterContext>,
+    pub name: Option<String>,
+    pub color: Option<[u8; 3]>,
     pub signal: Option<u64>,
     pub depth: f32,
     pub enabled: bool,
@@ -87,6 +100,9 @@ impl Default for Slot {
     fn default() -> Self {
         Self {
             parameter: None,
+            target: None,
+            name: None,
+            color: None,
             signal: None,
             depth: 0.35,
             enabled: true,
@@ -101,13 +117,15 @@ impl Default for Slot {
 pub struct State {
     pub open: bool,
     #[serde(deserialize_with = "decode_banks")]
-    pub banks: [[Slot; 12]; 10],
+    pub banks: [[Slot; 12]; 12],
 }
-// Preserve the first nine component banks in projects saved before Sphere.
-fn decode_banks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[[Slot; 12]; 10], D::Error> {
+// Preserve older component banks when adding new primitives.
+fn decode_banks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[[Slot; 12]; 12], D::Error> {
     let banks = Vec::<[Slot; 12]>::deserialize(d)?;
-    if !(9..=10).contains(&banks.len()) {
-        return Err(serde::de::Error::custom("expected nine or ten macro banks"));
+    if !(9..=12).contains(&banks.len()) {
+        return Err(serde::de::Error::custom(
+            "expected nine to twelve macro banks",
+        ));
     }
     let mut result = std::array::from_fn(|_| std::array::from_fn(|_| Slot::default()));
     for (out, bank) in result.iter_mut().zip(banks) {
@@ -126,9 +144,11 @@ impl Default for State {
 impl State {
     pub fn valid(&self, settings: &[ModuleSettings]) -> bool {
         self.banks.iter().enumerate().all(|(i, bank)| {
-            let mut fields = std::collections::HashSet::new();
             bank.iter().all(|slot| {
-                slot.depth.is_finite()
+                slot.name
+                    .as_ref()
+                    .is_none_or(|name| crate::workspace::valid_name(name))
+                    && slot.depth.is_finite()
                     && (-12.0..=12.0).contains(&slot.depth)
                     && slot.output_min.is_finite()
                     && slot.output_max.is_finite()
@@ -137,7 +157,6 @@ impl State {
                     && slot.signal.is_none_or(|id| id > 0)
                     && slot.parameter.as_ref().is_none_or(|p| {
                         p.valid()
-                            && fields.insert(&p.field)
                             && settings
                                 .iter()
                                 .find(|s| s.kind() == ModuleKind::ALL[i])
@@ -148,16 +167,6 @@ impl State {
         })
     }
     pub fn assign(&mut self, kind: ModuleKind, index: usize, spec: ParameterSpec) {
-        for (i, slot) in self.banks[kind as usize].iter_mut().enumerate() {
-            if i != index
-                && slot
-                    .parameter
-                    .as_ref()
-                    .is_some_and(|p| p.field == spec.field)
-            {
-                *slot = Slot::default();
-            }
-        }
         self.banks[kind as usize][index].parameter = Some(spec); // Keep this slot's modulation connection.
     }
     pub fn reconcile(&mut self, bank: &signals::Bank) {
@@ -230,33 +239,40 @@ impl State {
         document: &serde_json::Value,
         snapshot: Option<&signals::Snapshot>,
     ) -> Vec<(String, f64)> {
-        self.banks[kind as usize]
-            .iter()
-            .filter_map(|slot| {
-                let p = slot.parameter.as_ref()?;
-                if !slot.enabled {
-                    return None;
-                }
-                let sample = snapshot?.values.get(&slot.signal?)?;
-                let base = field(document, &p.field)?.as_f64()? / p.scale;
-                let input = if slot.invert {
-                    -sample.value
-                } else {
-                    sample.value
-                };
-                let modulation = (slot.output_min * sample.availability
-                    + input * (slot.output_max - slot.output_min))
-                    * slot.depth;
+        // Duplicate controls share a manual value; active modulation depths add.
+        // Resolve each destination once so the live apply/restore pair stays exact.
+        let mut destinations: std::collections::BTreeMap<&str, (&ParameterSpec, f64)> =
+            Default::default();
+        for slot in &self.banks[kind as usize] {
+            let Some(p) = slot.parameter.as_ref().filter(|_| slot.enabled) else {
+                continue;
+            };
+            let Some(sample) = snapshot.and_then(|s| slot.signal.and_then(|id| s.values.get(&id)))
+            else {
+                continue;
+            };
+            let input = if slot.invert {
+                -sample.value
+            } else {
+                sample.value
+            };
+            let modulation = (slot.output_min * sample.availability
+                + input * (slot.output_max - slot.output_min))
+                * slot.depth;
+            destinations.entry(&p.field).or_insert((p, 0.0)).1 += f64::from(modulation);
+        }
+        destinations
+            .into_iter()
+            .filter_map(|(path, (p, modulation))| {
+                let base = field(document, path)?.as_f64()? / p.scale;
                 let value = if p.logarithmic {
-                    p.min
-                        * (p.max / p.min)
-                            .powf(f64::from(p.normalized(base)) + f64::from(modulation))
+                    p.min * (p.max / p.min).powf(f64::from(p.normalized(base)) + modulation)
                 } else {
-                    base + f64::from(modulation) * (p.max - p.min)
+                    base + modulation * (p.max - p.min)
                 };
                 let value = value.clamp(p.safe_min, p.safe_max);
                 Some((
-                    p.field.clone(),
+                    path.to_owned(),
                     if p.integer {
                         value.round() * p.scale
                     } else {
@@ -312,8 +328,13 @@ pub fn inspector_indicators(
                 InspectorIndicator {
                     macro_index: i + 1,
                     source: source.map_or_else(|| "Unavailable source".into(), |d| d.name.clone()),
-                    color: source
-                        .map_or(ui.visuals().selection.bg_fill, signals::ui::channel_color),
+                    color: slot
+                        .color
+                        .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                        .unwrap_or_else(|| {
+                            source
+                                .map_or(ui.visuals().selection.bg_fill, signals::ui::channel_color)
+                        }),
                     enabled: slot.enabled,
                     current: effective
                         .iter()
@@ -397,6 +418,7 @@ fn edit_field(document: &mut serde_json::Value, path: &str, value: f64) -> bool 
     true
 }
 
+#[cfg(test)]
 pub fn bar(
     ui: &mut egui::Ui,
     rect: Rect,
@@ -406,280 +428,443 @@ pub fn bar(
     state: &mut State,
     settings: &mut ModuleSettings,
 ) -> (bool, bool) {
-    ui.painter().rect_filled(rect, 0.0, theme.panel);
-    ui.painter().hline(
-        rect.x_range(),
-        rect.top(),
-        egui::Stroke::new(1.0, theme.foreground.gamma_multiply(0.18)),
-    );
+    bar_impl(ui, rect, theme, pane, kind, state, settings, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bar_impl(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    theme: &AppTheme,
+    pane: &str,
+    kind: ModuleKind,
+    state: &mut State,
+    settings: &mut ModuleSettings,
+    mut scene: Option<&mut [scene::Component]>,
+) -> (bool, bool) {
+    let rect = rect.shrink2(Vec2::new(0.0, 8.0));
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(("assignable-macros", pane, kind as usize))
-            .max_rect(rect.shrink2(Vec2::new(8.0, 6.0))),
+            .max_rect(rect.shrink(1.0)),
     );
-    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    child.set_clip_rect(rect.shrink(1.0).intersect(ui.clip_rect()));
+    crate::workspace_ui::dock_style(&mut child);
+    ui.painter()
+        .rect_filled(rect, 7.0, child.visuals().extreme_bg_color);
     child.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    child.spacing_mut().item_spacing = Vec2::new(6.0, 4.0);
+    child.spacing_mut().item_spacing = Vec2::new(0.0, 4.0);
     child.spacing_mut().interact_size.y = 24.0;
-    let mut inspect = false;
-    let mut burst = false;
-    child.horizontal(|ui| {
-        ui.strong("Macros");
-        ui.weak(kind.label());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_sized([56.0, 24.0], egui::Button::new("Hide"))
-                .clicked()
-            {
-                state.open = false;
-            }
-            inspect = ui
-                .add_sized([80.0, 24.0], egui::Button::new("Advanced"))
-                .clicked();
-            if kind == ModuleKind::Flux {
-                burst = ui
-                    .add_sized([56.0, 24.0], egui::Button::new("Burst"))
-                    .clicked();
-            }
-        });
-    });
+    let ui_key = egui::Id::new(("macro-menu-ui", pane, kind as usize));
+    let mut menu_state = ui
+        .data(|d| d.get_temp::<MacroMenuState>(ui_key))
+        .unwrap_or_default();
+    menu_state.sync(&state.banks[kind as usize]);
+    let mut action = None;
     let shared =
         ui.data(|d| d.get_temp::<signals::ui::Shared>(egui::Id::new(signals::ui::CONTEXT_KEY)));
     let snapshot = shared
         .as_ref()
         .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).snapshot.clone());
     let effective = state.effective(kind, settings, snapshot.as_deref());
+    if let Some(components) = scene.as_deref_mut() {
+        for component in components {
+            component.effective = scene::state_for(&state.banks[kind as usize], &component.target)
+                .effective(
+                    component.target.kind,
+                    &component.settings,
+                    snapshot.as_deref(),
+                );
+        }
+    }
     let document = state.banks[kind as usize]
         .iter()
         .any(|s| s.parameter.is_some())
         .then(|| serde_json::to_value(&*settings).ok().unwrap_or_default());
-    let width = ((child.available_width() - 66.0) / 12.0).max(96.0);
+    let width = ((child.available_width() - 1.0) / 12.0).max(116.0);
+    let row_bounds = Rect::from_min_max(
+        child.available_rect_before_wrap().min,
+        rect.max - Vec2::splat(1.0),
+    );
+    let mut row = child.new_child(
+        egui::UiBuilder::new()
+            .id_salt("macro-strips")
+            .max_rect(row_bounds),
+    );
+    row.set_clip_rect(row_bounds.intersect(child.clip_rect()));
     egui::ScrollArea::horizontal()
         .id_salt("assignable-macro-row")
-        .max_height(174.0)
-        .auto_shrink([false, true])
-        .show(&mut child, |ui| {
+        .auto_shrink([false, false])
+        .show(&mut row, |ui| {
+            let row_height = ui.available_height();
+            let mut insertion = None;
             ui.horizontal_top(|ui| {
                 for i in 0..12 {
                     ui.push_id(i, |ui| {
                         let start = ui.next_widget_position();
                         let slot = &mut state.banks[kind as usize][i];
+                        let strip = Rect::from_min_size(start, Vec2::new(width, row_height));
+                        let header_color = slot
+                            .color
+                            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                            .or_else(|| {
+                                shared.as_ref().and_then(|shared| {
+                                    let panel = shared.lock().unwrap_or_else(|e| e.into_inner());
+                                    slot.signal
+                                        .and_then(|id| {
+                                            panel.bank.channels.iter().find(|d| d.id == id)
+                                        })
+                                        .map(signals::ui::channel_color)
+                                })
+                            })
+                            .unwrap_or(if slot.parameter.is_some() {
+                                theme.accent
+                            } else {
+                                theme.card
+                            });
+                        crate::workspace_ui::strip_surface(
+                            ui,
+                            strip,
+                            header_color,
+                            ui.data(|d| d.get_temp::<usize>(egui::Id::new(INSPECT_SELECTION)))
+                                == Some(i),
+                        );
+                        let luma = 0.2126 * f32::from(header_color.r())
+                            + 0.7152 * f32::from(header_color.g())
+                            + 0.0722 * f32::from(header_color.b());
+                        let title_color = if luma < 110.0 {
+                            egui::Color32::from_gray(245)
+                        } else {
+                            egui::Color32::from_rgb(12, 18, 26)
+                        };
                         let column = ui.vertical(|ui| {
                             ui.set_width(width);
-                            if let Some(p) = slot.parameter.clone() {
-                                let base = document
-                                    .as_ref()
-                                    .and_then(|d| field(d, &p.field))
-                                    .and_then(serde_json::Value::as_f64)
-                                    .unwrap_or(p.default * p.scale)
-                                    / p.scale;
-                                let normalized = p.normalized(base);
-                                let current = effective
-                                    .iter()
-                                    .find(|(key, _)| key == &p.field)
-                                    .map_or(base, |(_, v)| *v / p.scale);
-                                let mut value = normalized;
-                                let (source, color, range) = shared.as_ref().map_or(
-                                    ("Connect…".to_owned(), theme.accent, (0.0, 1.0)),
-                                    |shared| {
-                                        let panel =
-                                            shared.lock().unwrap_or_else(|e| e.into_inner());
-                                        slot.signal
-                                            .and_then(|id| {
-                                                panel.bank.channels.iter().find(|d| d.id == id)
-                                            })
-                                            .map_or(
-                                                ("Connect…".to_owned(), theme.accent, (0.0, 1.0)),
-                                                |d| {
-                                                    let peak = d.influence
-                                                        * if d.input == signals::Input::Lfo
-                                                            && !d.normalization.enabled
-                                                        {
-                                                            d.lfo.depth
-                                                        } else {
-                                                            1.0
-                                                        };
-                                                    let low = if d.kind()
-                                                        == signals::OutputKind::Bipolar
-                                                    {
-                                                        -peak
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    (
-                                                        d.name.clone(),
-                                                        signals::ui::channel_color(d),
-                                                        (low, peak),
-                                                    )
-                                                },
-                                            )
-                                    },
-                                );
-                                let map = |v: f32| {
-                                    slot.output_min
-                                        + (if slot.invert { -v } else { v })
-                                            * (slot.output_max - slot.output_min)
-                                };
-                                let range = (map(range.0), map(range.1));
-                                if crate::modules::performance::knob(
-                                    ui,
-                                    &p.label,
-                                    &mut value,
-                                    p.normalized(p.default),
-                                    p.normalized(current),
-                                    &mut slot.depth,
-                                    if slot.enabled && slot.signal.is_some() {
-                                        1.0
-                                    } else {
-                                        0.0
-                                    },
-                                    width,
-                                    theme,
-                                    color,
-                                    range,
+                            ui.set_min_height(row_height);
+                            let (header, _) = ui
+                                .allocate_exact_size(Vec2::new(width, 28.0), egui::Sense::hover());
+                            let title = slot_title(slot, i);
+                            let drag = ui
+                                .interact(
+                                    header,
+                                    ui.id().with("macro-header"),
+                                    egui::Sense::click_and_drag(),
                                 )
-                                .changed()
-                                {
-                                    set(settings, &p.field, p.value(value) * p.scale);
-                                }
-                                let badge = ui.add_sized(
-                                    [width, 24.0],
-                                    egui::Button::new(egui::RichText::new(source).color(color))
-                                        .truncate(),
+                                .help_text(
+                                    "Click to inspect · drag to reorder · double-click to rename",
                                 );
-                                let editor_key = egui::Id::new("assignable-macro-source-popup");
-                                let mut opened = ui.data(|d| d.get_temp::<egui::Id>(editor_key))
-                                    == Some(badge.id);
-                                if badge.clicked() {
-                                    opened = !opened;
-                                    if opened {
-                                        ui.data_mut(|d| d.insert_temp(editor_key, badge.id));
-                                    }
-                                }
-                                let nested = egui::Popup::is_any_open(ui.ctx());
-                                let popup = egui::Popup::from_response(&badge)
-                                    .open_bool(&mut opened)
-                                    .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
-                                    .width(280.0)
-                                    .show(|ui| {
-                                        ui.strong(&p.label);
-                                        if let Some(shared) = &shared {
-                                            let panel =
-                                                shared.lock().unwrap_or_else(|e| e.into_inner());
-                                            let mut signal = slot.signal;
-                                            let selected = signal
-                                                .and_then(|id| {
-                                                    panel.bank.channels.iter().find(|d| d.id == id)
-                                                })
-                                                .map_or("Choose source", |d| d.name.as_str());
-                                            ui.label("Source");
-                                            egui::ComboBox::from_id_salt("source")
-                                                .width(260.0)
-                                                .selected_text(selected)
-                                                .show_ui(ui, |ui| {
-                                                    ui.selectable_value(
-                                                        &mut signal,
-                                                        None,
-                                                        "No modulation",
-                                                    );
-                                                    for d in &panel.bank.channels {
-                                                        ui.selectable_value(
-                                                            &mut signal,
-                                                            Some(d.id),
-                                                            &d.name,
-                                                        );
-                                                    }
-                                                });
-                                            if signal != slot.signal {
-                                                slot.signal = signal;
-                                                slot.enabled = true;
-                                            }
-                                            if panel.bank.channels.is_empty() {
-                                                ui.weak("Add sources in Signals.");
-                                            }
-                                            if ui
-                                                .add_enabled(
-                                                    slot.signal.is_some(),
-                                                    egui::Button::new("Disconnect"),
-                                                )
-                                                .clicked()
-                                            {
-                                                slot.signal = None;
-                                                ui.close();
-                                            }
-                                        }
-                                    });
-                                if !badge.clicked()
-                                    && !nested
-                                    && !egui::Popup::is_any_open(ui.ctx())
-                                    && popup
-                                        .as_ref()
-                                        .is_some_and(|p| p.response.clicked_elsewhere())
-                                {
-                                    opened = false;
-                                }
-                                if !opened
-                                    && ui.data(|d| d.get_temp::<egui::Id>(editor_key))
-                                        == Some(badge.id)
-                                {
-                                    ui.data_mut(|d| d.remove::<egui::Id>(editor_key));
-                                }
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().interact_size.y = 20.0;
-                                    if slot.signal.is_some() {
-                                        ui.checkbox(&mut slot.enabled, "Mod");
-                                        let mut depth = slot.depth * 100.0;
-                                        if ui
-                                            .add_sized(
-                                                [ui.available_width().max(52.0), 20.0],
-                                                egui::DragValue::new(&mut depth)
-                                                    .range(-1200.0..=1200.0)
-                                                    .speed(1.0)
-                                                    .fixed_decimals(0)
-                                                    .custom_formatter(|v, _| format!("{v:+.0}"))
-                                                    .suffix("%"),
-                                            )
-                                            .changed()
-                                        {
-                                            slot.depth = depth / 100.0;
-                                        }
-                                    } else {
-                                        ui.weak("No modulation");
-                                    }
+                            if drag.drag_started() {
+                                drag.dnd_set_drag_payload(MacroDrag {
+                                    pane: pane.to_owned(),
+                                    kind,
+                                    index: i,
                                 });
-                            } else {
-                                let (area, _) = ui.allocate_exact_size(
-                                    Vec2::new(width, 159.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().rect_stroke(
-                                    area.shrink(1.0),
-                                    4.0,
-                                    egui::Stroke::new(1.0, theme.foreground.gamma_multiply(0.16)),
-                                    egui::StrokeKind::Inside,
-                                );
+                            }
+                            if drag.double_clicked() {
+                                action = Some(MacroAction::Rename(i));
+                            }
+                            if slot.parameter.is_some() {
                                 ui.painter().text(
-                                    area.center_top() + Vec2::new(0.0, 9.0),
-                                    egui::Align2::CENTER_TOP,
-                                    format!("Macro {}", i + 1),
+                                    header.left_center() + Vec2::new(7.0, 0.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    format!("{}", i + 1),
                                     egui::FontId::proportional(11.0),
-                                    theme.muted,
-                                );
-                                ui.painter().text(
-                                    area.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    "Drop parameter",
-                                    egui::FontId::proportional(10.0),
-                                    theme.muted,
+                                    title_color,
                                 );
                             }
+                            let header = Rect::from_min_max(
+                                header.min
+                                    + Vec2::new(
+                                        if slot.parameter.is_some() { 24.0 } else { 8.0 },
+                                        0.0,
+                                    ),
+                                header.max - Vec2::new(6.0, 0.0),
+                            );
+                            crate::workspace_ui::strip_title(ui, header, title, title_color);
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(8, 3))
+                                .show(ui, |ui| {
+                                    let width = width - 16.0;
+                                    ui.set_width(width);
+                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                                    if let Some(p) = slot.parameter.clone() {
+                                        let component = scene.as_deref().and_then(|components| {
+                                            slot.target.as_ref().and_then(|target| {
+                                                components.iter().find(|c| &c.target == target)
+                                            })
+                                        });
+                                        if scene.is_some() {
+                                            let owner = component.map_or_else(
+                                                || "Component unavailable".into(),
+                                                |c| c.label.clone(),
+                                            );
+                                            ui.add_sized(
+                                                [width, 14.0],
+                                                egui::Label::new(
+                                                    egui::RichText::new(owner.clone())
+                                                        .small()
+                                                        .color(theme.muted),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .help_text(owner);
+                                        }
+                                        let base = component
+                                            .map(|c| &c.document)
+                                            .or(document.as_ref())
+                                            .and_then(|d| field(d, &p.field))
+                                            .and_then(serde_json::Value::as_f64)
+                                            .unwrap_or(p.default * p.scale)
+                                            / p.scale;
+                                        let normalized = p.normalized(base);
+                                        let current = component
+                                            .map_or(&effective, |c| &c.effective)
+                                            .iter()
+                                            .find(|(key, _)| key == &p.field)
+                                            .map_or(base, |(_, v)| *v / p.scale);
+                                        let mut value = normalized;
+                                        let (source, color, range) = shared.as_ref().map_or(
+                                            ("Connect…".to_owned(), theme.accent, (0.0, 1.0)),
+                                            |shared| {
+                                                let panel = shared
+                                                    .lock()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                slot.signal
+                                                    .and_then(|id| {
+                                                        panel
+                                                            .bank
+                                                            .channels
+                                                            .iter()
+                                                            .find(|d| d.id == id)
+                                                    })
+                                                    .map_or(
+                                                        (
+                                                            "Connect…".to_owned(),
+                                                            theme.accent,
+                                                            (0.0, 1.0),
+                                                        ),
+                                                        |d| {
+                                                            let peak = d.influence
+                                                                * if d.input == signals::Input::Lfo
+                                                                    && !d.normalization.enabled
+                                                                {
+                                                                    d.lfo.depth
+                                                                } else {
+                                                                    1.0
+                                                                };
+                                                            let low = if d.kind()
+                                                                == signals::OutputKind::Bipolar
+                                                            {
+                                                                -peak
+                                                            } else {
+                                                                0.0
+                                                            };
+                                                            (
+                                                                d.name.clone(),
+                                                                signals::ui::channel_color(d),
+                                                                (low, peak),
+                                                            )
+                                                        },
+                                                    )
+                                            },
+                                        );
+                                        let color = slot
+                                            .color
+                                            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                                            .unwrap_or(color);
+                                        let map = |v: f32| {
+                                            slot.output_min
+                                                + (if slot.invert { -v } else { v })
+                                                    * (slot.output_max - slot.output_min)
+                                        };
+                                        let range = (map(range.0), map(range.1));
+                                        if crate::modules::performance::knob(
+                                            ui,
+                                            "",
+                                            &mut value,
+                                            p.normalized(p.default),
+                                            p.normalized(current),
+                                            &mut slot.depth,
+                                            if slot.enabled && slot.signal.is_some() {
+                                                1.0
+                                            } else {
+                                                0.0
+                                            },
+                                            width,
+                                            theme,
+                                            color,
+                                            range,
+                                        )
+                                        .changed()
+                                        {
+                                            if let Some(components) = scene.as_deref_mut() {
+                                                if let Some(component) =
+                                                    slot.target.as_ref().and_then(|target| {
+                                                        components
+                                                            .iter_mut()
+                                                            .find(|c| &c.target == target)
+                                                    })
+                                                {
+                                                    set(
+                                                        &mut component.settings,
+                                                        &p.field,
+                                                        p.value(value) * p.scale,
+                                                    );
+                                                }
+                                            } else {
+                                                set(settings, &p.field, p.value(value) * p.scale);
+                                            }
+                                        }
+                                        let badge = ui.add_sized(
+                                            [width, 24.0],
+                                            egui::Button::new(
+                                                egui::RichText::new(source).color(color),
+                                            )
+                                            .truncate(),
+                                        );
+                                        let editor_key =
+                                            egui::Id::new("assignable-macro-source-popup");
+                                        let mut opened = ui
+                                            .data(|d| d.get_temp::<egui::Id>(editor_key))
+                                            == Some(badge.id);
+                                        if badge.clicked() {
+                                            opened = !opened;
+                                            if opened {
+                                                ui.data_mut(|d| {
+                                                    d.insert_temp(editor_key, badge.id)
+                                                });
+                                            }
+                                        }
+                                        let nested = egui::Popup::is_any_open(ui.ctx());
+                                        let popup = egui::Popup::from_response(&badge)
+                                            .open_bool(&mut opened)
+                                            .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+                                            .width(280.0)
+                                            .show(|ui| {
+                                                ui.strong(&p.label);
+                                                if let Some(shared) = &shared {
+                                                    let panel = shared
+                                                        .lock()
+                                                        .unwrap_or_else(|e| e.into_inner());
+                                                    let mut signal = slot.signal;
+                                                    let selected = signal
+                                                        .and_then(|id| {
+                                                            panel
+                                                                .bank
+                                                                .channels
+                                                                .iter()
+                                                                .find(|d| d.id == id)
+                                                        })
+                                                        .map_or("Choose source", |d| {
+                                                            d.name.as_str()
+                                                        });
+                                                    ui.label("Source");
+                                                    egui::ComboBox::from_id_salt("source")
+                                                        .width(260.0)
+                                                        .selected_text(selected)
+                                                        .show_ui(ui, |ui| {
+                                                            ui.selectable_value(
+                                                                &mut signal,
+                                                                None,
+                                                                "No modulation",
+                                                            );
+                                                            for d in &panel.bank.channels {
+                                                                ui.selectable_value(
+                                                                    &mut signal,
+                                                                    Some(d.id),
+                                                                    &d.name,
+                                                                );
+                                                            }
+                                                        });
+                                                    if signal != slot.signal {
+                                                        slot.signal = signal;
+                                                        slot.enabled = true;
+                                                    }
+                                                    if panel.bank.channels.is_empty() {
+                                                        ui.weak("Add sources in Signals.");
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            slot.signal.is_some(),
+                                                            egui::Button::new("Disconnect"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        slot.signal = None;
+                                                        ui.close();
+                                                    }
+                                                }
+                                            });
+                                        if !badge.clicked()
+                                            && !nested
+                                            && !egui::Popup::is_any_open(ui.ctx())
+                                            && popup
+                                                .as_ref()
+                                                .is_some_and(|p| p.response.clicked_elsewhere())
+                                        {
+                                            opened = false;
+                                        }
+                                        if !opened
+                                            && ui.data(|d| d.get_temp::<egui::Id>(editor_key))
+                                                == Some(badge.id)
+                                        {
+                                            ui.data_mut(|d| d.remove::<egui::Id>(editor_key));
+                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().interact_size.y = 20.0;
+                                            if slot.signal.is_some() {
+                                                ui.checkbox(&mut slot.enabled, "Mod");
+                                                let mut depth = slot.depth * 100.0;
+                                                if ui
+                                                    .add_sized(
+                                                        [ui.available_width().max(1.0), 20.0],
+                                                        egui::DragValue::new(&mut depth)
+                                                            .range(-1200.0..=1200.0)
+                                                            .speed(1.0)
+                                                            .fixed_decimals(0)
+                                                            .custom_formatter(|v, _| {
+                                                                format!("{v:+.0}")
+                                                            })
+                                                            .suffix("%"),
+                                                    )
+                                                    .changed()
+                                                {
+                                                    slot.depth = depth / 100.0;
+                                                }
+                                            } else {
+                                                ui.weak("No modulation");
+                                            }
+                                        });
+                                    } else {
+                                        let (area, _) = ui.allocate_exact_size(
+                                            Vec2::new(width, (row_height - 38.0).max(30.0)),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().text(
+                                            area.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "Drop parameter",
+                                            egui::FontId::proportional(10.0),
+                                            theme.muted,
+                                        );
+                                    }
+                                });
                         });
-                        let area = column
-                            .response
-                            .rect
-                            .union(Rect::from_min_size(start, Vec2::new(width, 159.0)));
+                        let area = column.response.rect.union(strip);
+                        if ui.rect_contains_pointer(area)
+                            && ui.input(|input| input.pointer.primary_clicked())
+                        {
+                            ui.data_mut(|d| d.insert_temp(egui::Id::new(INSPECT_REQUEST), i));
+                        }
                         let response =
                             ui.interact(area, ui.id().with("macro-drop"), egui::Sense::hover());
+                        response.clone().help_fallback(|| {
+                            let slot = &state.banks[kind as usize][i];
+                            if let Some(parameter) = &slot.parameter {
+                                format!("{}\nScene macro {} controls {}. Click to inspect; drag the knob vertically to adjust its manual value. Drag the outer ring for modulation strength, or Shift-drag for fine control. Use the source button to connect a signal. Drag the header to reorder; right-click for names, colors and editing.", slot_title(slot, i), i + 1, parameter.label)
+                            } else {
+                                format!("Macro {} · empty\nDrag a numeric parameter label from any component’s inspector onto this slot. One macro controls one parameter across the scene. Dropping onto an occupied slot replaces its parameter and keeps its modulation source and strength. Click to inspect; right-click for editing and color.", i + 1)
+                            }
+                        });
                         // The knob, value and source badge own their input responses.
                         // Observe a secondary click across the slot without stealing
                         // their primary drags/clicks from the children.
@@ -689,25 +874,47 @@ pub fn bar(
                             .open_memory(right_click.then_some(egui::SetOpenCommand::Bool(true)))
                             .at_pointer_fixed()
                             .show(|ui| {
-                                if ui
-                                    .add_enabled(
-                                        state.banks[kind as usize][i].parameter.is_some(),
-                                        egui::Button::new("Remove macro"),
-                                    )
-                                    .clicked()
-                                {
-                                    state.banks[kind as usize][i] = Slot::default();
-                                    ui.close();
+                                if let Some(a) = macro_menu(
+                                    ui,
+                                    i,
+                                    &state.banks[kind as usize],
+                                    pane,
+                                    kind,
+                                    header_color,
+                                    menu_state.undo_available(),
+                                ) {
+                                    action = Some(a);
                                 }
                             });
+                        if ui.rect_contains_pointer(area)
+                            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                        {
+                            let (boundary, x) = if pos.x < strip.center().x {
+                                (i, strip.left())
+                            } else {
+                                (i + 1, strip.right())
+                            };
+                            insertion = Some((
+                                boundary,
+                                egui::pos2(x, strip.top()),
+                                egui::pos2(x, strip.bottom()),
+                            ));
+                        }
                         if ui.rect_contains_pointer(area)
                             && let Some(payload) =
                                 egui::DragAndDrop::payload::<ParameterDrag>(ui.ctx())
                         {
-                            let accepted = payload.context.pane == pane
-                                && payload.context.kind == kind
-                                && payload.spec.valid()
-                                && get(settings, &payload.spec.field).is_some();
+                            let accepted = payload.spec.valid()
+                                && if let Some(components) = scene.as_deref() {
+                                    components.iter().any(|c| {
+                                        c.target == payload.context
+                                            && get(&c.settings, &payload.spec.field).is_some()
+                                    })
+                                } else {
+                                    payload.context.pane == pane
+                                        && payload.context.kind == kind
+                                        && get(settings, &payload.spec.field).is_some()
+                                };
                             ui.painter().rect_stroke(
                                 area,
                                 4.0,
@@ -723,25 +930,50 @@ pub fn bar(
                             );
                             if accepted && ui.input(|input| input.pointer.any_released()) {
                                 state.assign(kind, i, payload.spec.clone());
+                                if scene.is_some() {
+                                    state.banks[kind as usize][i].target =
+                                        Some(payload.context.clone());
+                                }
                                 egui::DragAndDrop::take_payload::<ParameterDrag>(ui.ctx());
                             }
                         }
                     });
                 }
             });
+            if let Some((boundary, top, bottom)) = insertion
+                && let Some(payload) = egui::DragAndDrop::payload::<MacroDrag>(ui.ctx())
+                && payload.pane == pane
+                && payload.kind == kind
+            {
+                ui.painter().line_segment(
+                    [top, bottom],
+                    egui::Stroke::new(1.5, ui.visuals().text_color()),
+                );
+                if ui.input(|i| i.pointer.any_released()) {
+                    action = Some(MacroAction::Move(payload.index, boundary));
+                    egui::DragAndDrop::take_payload::<MacroDrag>(ui.ctx());
+                }
+            }
         });
-    let hint = Rect::from_min_max(
-        egui::pos2(rect.left() + 8.0, rect.bottom() - 20.0),
-        rect.max - Vec2::new(8.0, 4.0),
+    if let Some(action) = action {
+        apply_macro_action(ui, pane, kind, state, action, &mut menu_state);
+    }
+    macro_rename_dialog(ui.ctx(), kind, state, &mut menu_state);
+    menu_state.remember(&state.banks[kind as usize]);
+    ui.data_mut(|d| d.insert_temp(ui_key, menu_state));
+    crate::workspace_ui::rounded_content_corners(
+        &child,
+        rect.shrink(1.0),
+        6.0,
+        child.visuals().extreme_bg_color,
     );
-    ui.painter_at(hint).text(
-        hint.left_center(),
-        egui::Align2::LEFT_CENTER,
-        "Drag parameter labels here · Ring: depth · Shift: fine · Right-click: clear",
-        egui::FontId::proportional(10.0),
-        theme.muted,
+    ui.painter().rect_stroke(
+        rect,
+        7.0,
+        egui::Stroke::new(1.0, child.visuals().text_color().gamma_multiply(0.22)),
+        egui::StrokeKind::Inside,
     );
-    (inspect, burst)
+    (false, false)
 }
 
 #[cfg(test)]
@@ -922,7 +1154,7 @@ mod tests {
                 |ui| {
                     pane.performance_bar(
                         ui,
-                        Rect::from_min_size(egui::pos2(0.0, 650.0), egui::vec2(1400.0, 234.0)),
+                        Rect::from_min_size(egui::pos2(0.0, 650.0), egui::vec2(1400.0, 220.0)),
                         &theme,
                         0,
                     );
@@ -986,6 +1218,118 @@ mod tests {
         assert_eq!(shared.lock().unwrap().bank, source_bank);
     }
     #[test]
+    fn header_drag_shows_insertion_and_context_menu_uses_the_signal_palette() {
+        use super::source_picker_tests::position;
+        let ctx = egui::Context::default();
+        ctx.style_mut_of(egui::Theme::Dark, |s| s.animation_time = 0.0);
+        ctx.style_mut_of(egui::Theme::Light, |s| s.animation_time = 0.0);
+        let kind = ModuleKind::Waterfall;
+        let mut pane = ModulePane::new(kind);
+        pane.macros.assign(kind, 0, spec("height", "Height"));
+        pane.macros.assign(kind, 1, spec("length_x", "Width"));
+        pane.macros.banks[0][0].signal = Some(42);
+        let saved = pane.copy_settings();
+        let render = |pane: &mut ModulePane, events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1500.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    pane.performance_bar(
+                        ui,
+                        Rect::from_min_size(egui::pos2(0.0, 450.0), egui::vec2(1450.0, 220.0)),
+                        &AppTheme::default(),
+                        0,
+                    );
+                },
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let button = |pos, pressed, button| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button,
+            modifiers: egui::Modifiers::NONE,
+        };
+        render(&mut pane, vec![]);
+        let out = render(&mut pane, vec![]);
+        let start = position(&out, "Height");
+        let end = egui::pos2(350.0, start.y);
+        render(
+            &mut pane,
+            vec![
+                egui::Event::PointerMoved(start),
+                button(start, true, egui::PointerButton::Primary),
+            ],
+        );
+        let guide = render(&mut pane, vec![egui::Event::PointerMoved(end)]);
+        assert!(guide.shapes.iter().any(|s|matches!(&s.shape, egui::Shape::LineSegment{points,stroke} if stroke.width == 1.5 && points[0].x == points[1].x && points[1].y - points[0].y > 150.0)));
+        render(
+            &mut pane,
+            vec![button(end, false, egui::PointerButton::Primary)],
+        );
+        assert_eq!(
+            pane.macros.banks[0][2].parameter.as_ref().unwrap().field,
+            "height"
+        );
+        assert_eq!(pane.macros.banks[0][2].signal, Some(42));
+        let out = render(&mut pane, vec![]);
+        let pos = position(&out, "Height");
+        for pressed in [true, false] {
+            render(
+                &mut pane,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    button(pos, pressed, egui::PointerButton::Secondary),
+                ],
+            );
+        }
+        let out = render(&mut pane, vec![]);
+        for label in [
+            "Cut",
+            "Copy",
+            "Paste",
+            "Duplicate",
+            "Delete",
+            "Rename",
+            "Insert empty macro",
+            "Macro color",
+        ] {
+            position(&out, label);
+        }
+        let swatch = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.fill == egui::Color32::from_rgb(255, 148, 166)
+                        && r.rect.size() == egui::vec2(16.0, 16.0) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .expect("same first swatch as Signals");
+        for pressed in [true, false] {
+            render(
+                &mut pane,
+                vec![
+                    egui::Event::PointerMoved(swatch),
+                    button(swatch, pressed, egui::PointerButton::Primary),
+                ],
+            );
+        }
+        assert_eq!(pane.macros.banks[0][2].color, Some([255, 148, 166]));
+        assert_eq!(pane.copy_settings(), saved);
+    }
+
+    #[test]
     fn right_click_removes_macros_over_knob_value_source_and_modulation_row() {
         use super::source_picker_tests::position;
         for target in 0..5 {
@@ -1008,7 +1352,7 @@ mod tests {
                     |ui| {
                         pane.performance_bar(
                             ui,
-                            Rect::from_min_size(egui::pos2(0.0, 650.0), egui::vec2(1400.0, 234.0)),
+                            Rect::from_min_size(egui::pos2(0.0, 650.0), egui::vec2(1400.0, 220.0)),
                             &AppTheme::default(),
                             0,
                         );
@@ -1037,7 +1381,7 @@ mod tests {
                 }]);
             }
             let out = render(vec![]);
-            let remove = position(&out, "Remove macro");
+            let remove = position(&out, "Delete");
             render(vec![egui::Event::PointerMoved(remove)]);
             for pressed in [true, false] {
                 render(vec![egui::Event::PointerButton {
@@ -1120,6 +1464,8 @@ mod tests {
             "height",
             "speed",
             "radius",
+            "cylinder.height",
+            "amplitude",
         ];
         for (kind, field) in ModuleKind::ALL.into_iter().zip(fields) {
             let mut pane = ModulePane::new(kind);
@@ -1252,7 +1598,7 @@ mod source_picker_tests {
                 |ui| {
                     pane.performance_bar(
                         ui,
-                        Rect::from_min_size(egui::pos2(0.0, 650.0), egui::vec2(1400.0, 234.0)),
+                        Rect::from_min_size(egui::pos2(0.0, 650.0), egui::vec2(1400.0, 220.0)),
                         &AppTheme::default(),
                         0,
                     );

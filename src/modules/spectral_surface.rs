@@ -1,5 +1,6 @@
-//! A spherical waterfall: longitude is mirrored frequency, latitude is history,
-//! and audio level displaces the radius. Shares Waterfall's capture/FFT processing.
+//! Shared spherical/cylindrical spectral surface renderer. Frequency wraps around
+//! the surface, history flows along it, and audio level displaces the radius.
+//! Both primitives use Waterfall's capture/FFT processing and a free trackball.
 use super::{
     Palette,
     camera_gizmo::{self, Axis},
@@ -69,7 +70,36 @@ fn default_ripple_impulse() -> f32 {
     0.65
 }
 
-pub struct Sphere {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Sphere,
+    Cylinder,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct CylinderGeometry {
+    height: f32,
+    top_radius: f32,
+    bottom_radius: f32,
+    edge_falloff: f32,
+    caps: bool,
+}
+impl Default for CylinderGeometry {
+    fn default() -> Self {
+        Self {
+            height: 2.4,
+            top_radius: 1.0,
+            bottom_radius: 1.0,
+            edge_falloff: 0.15,
+            caps: true,
+        }
+    }
+}
+
+pub struct SpectralSurface {
+    shape: Shape,
+    cylinder: CylinderGeometry,
     history: History,
     radius: f32,
     displacement: f32,
@@ -119,7 +149,8 @@ pub struct Sphere {
     show_gizmo: bool,
     last_draw: Option<Instant>,
 }
-module_settings!(Sphere, SphereSettings, {
+module_settings!(SpectralSurface, SurfaceSettings, {
+    #[serde(default)] cylinder: CylinderGeometry => cylinder,
     frequency: super::frequency::FrequencySettings => history.data.settings,
     radius: f32 => radius, displacement: f32 => displacement,
     stretch_x: f32 => stretch_x, stretch_y: f32 => stretch_y, stretch_z: f32 => stretch_z,
@@ -143,9 +174,11 @@ module_settings!(Sphere, SphereSettings, {
     orbit_speed: f32 => orbit_speed, orbit_reverse: bool => orbit_reverse,
     guides: bool => guides, show_gizmo: bool => show_gizmo,
 });
-impl Default for Sphere {
+impl Default for SpectralSurface {
     fn default() -> Self {
         Self {
+            shape: Shape::Sphere,
+            cylinder: CylinderGeometry::default(),
             history: History::default(),
             radius: 1.0,
             displacement: 0.65,
@@ -197,7 +230,17 @@ impl Default for Sphere {
         }
     }
 }
-impl Sphere {
+impl SpectralSurface {
+    pub fn cylinder() -> Self {
+        Self {
+            shape: Shape::Cylinder,
+            ..Self::default()
+        }
+    }
+    fn is_cylinder(&self) -> bool {
+        self.shape == Shape::Cylinder
+    }
+
     pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
         self.ripple_origin.get_or_insert(now);
         self.history.ingest(frame, now);
@@ -213,6 +256,7 @@ impl Sphere {
         history.data.settings = Default::default();
         *self = Self {
             history,
+            shape: self.shape,
             ..Self::default()
         };
     }
@@ -230,17 +274,9 @@ impl Sphere {
         let (sin, cos) = self.roll.sin_cos();
         [pos.x * cos - pos.y * sin, pos.x * sin + pos.y * cos, depth]
     }
+    #[cfg(test)]
     fn orientation_axes(&self) -> [[f64; 3]; 3] {
-        // Double precision keeps the composed orientation orthogonal when
-        // converting back through nearly pole-on Euler representations.
-        let (sy, cy) = f64::from(self.yaw).sin_cos();
-        let (se, ce) = f64::from(self.elevation).sin_cos();
-        let (sr, cr) = f64::from(self.roll).sin_cos();
-        [
-            [cr * cy + sr * se * sy, sr * cy - cr * se * sy, -ce * sy],
-            [sr * ce, -cr * ce, se],
-            [cr * sy - sr * se * cy, sr * sy + cr * se * cy, ce * cy],
-        ]
+        super::trackball::orientation_axes(self.yaw, self.elevation, self.roll)
     }
     fn trackball_bounds(&self, rect: Rect) -> (Pos2, f32) {
         let plot = rect.shrink(24.0);
@@ -251,50 +287,38 @@ impl Sphere {
                 .max(self.stretch_y)
                 .max(self.stretch_z)
                 .clamp(0.1, 4.0);
+        let extent = if self.is_cylinder() {
+            extent
+                .max(self.cylinder.height.clamp(0.2, 8.0) * 0.5 * self.stretch_y.clamp(0.1, 4.0))
+                .max(
+                    self.radius.clamp(0.05, 4.0)
+                        * self
+                            .cylinder
+                            .top_radius
+                            .max(self.cylinder.bottom_radius)
+                            .clamp(0.1, 3.0)
+                        * self.stretch_x.max(self.stretch_z).clamp(0.1, 4.0),
+                )
+        } else {
+            extent
+        };
         let radius = (plot.width().min(plot.height()) * 0.27 * self.zoom.clamp(0.25, 8.0) * extent)
             .max(40.0);
         (center, radius)
     }
     fn trackball_drag(&mut self, from: Pos2, to: Pos2, center: Pos2, radius: f32) {
-        if from == to {
-            return;
+        super::trackball::drag(
+            &mut self.yaw,
+            &mut self.elevation,
+            &mut self.roll,
+            from,
+            to,
+            center,
+            radius,
+        );
+        if from != to {
+            self.auto_orbit = false;
         }
-        let a = trackball_point(from, center, radius);
-        let b = trackball_point(to, center, radius);
-        let turn = cross(a, b);
-        let length = dot(turn, turn).sqrt();
-        let cosine = dot(a, b).clamp(-1.0, 1.0);
-        let (axis, angle) = if length > 1e-6 {
-            (turn.map(|v| v / length), length.atan2(cosine))
-        } else if cosine < 0.0 {
-            let helper = if a[0].abs() < 0.9 {
-                [1.0, 0.0, 0.0]
-            } else {
-                [0.0, 1.0, 0.0]
-            };
-            let axis = cross(a, helper);
-            let length = dot(axis, axis).sqrt();
-            (axis.map(|v| v / length), std::f64::consts::PI)
-        } else {
-            return;
-        };
-        // Compose in camera space. Rebuilding Euler controls from the resulting
-        // orientation keeps old projects/macros compatible without constraining
-        // drag movement to world yaw/elevation axes (including at either pole).
-        let columns = self
-            .orientation_axes()
-            .map(|basis| rotate_vector(basis, axis, angle));
-        let m: [[f64; 3]; 3] = std::array::from_fn(|r| std::array::from_fn(|c| columns[c][r]));
-        let horizontal = m[2][0].hypot(m[2][2]);
-        self.elevation = m[2][1].atan2(horizontal) as f32;
-        if horizontal > 1e-10 {
-            self.yaw = (-m[2][0]).atan2(m[2][2]) as f32;
-            self.roll = m[0][1].atan2(-m[1][1]) as f32;
-        } else {
-            self.yaw = 0.0;
-            self.roll = m[1][0].atan2(m[0][0]) as f32;
-        }
-        self.auto_orbit = false;
     }
     fn advance_camera(&mut self, now: Instant) {
         let dt = self.last_draw.map_or(0.0, |last| {
@@ -310,6 +334,12 @@ impl Sphere {
         }
     }
     pub fn controls(&mut self, ui: &mut egui::Ui) {
+        let cylinder = self.is_cylinder();
+        let ripple_label = if cylinder {
+            "Axial ripples"
+        } else {
+            "Pole ripples"
+        };
         macro_rules! p {
             ($ui:ident, $field:ident, $range:expr, $default:expr, $label:expr, $help:expr) => {
                 $ui.add(
@@ -325,7 +355,7 @@ impl Sphere {
                 egui::ComboBox::from_id_salt("sphere-motion")
                     .selected_text(match self.motion {
                         Motion::WrappedSpectrum => "Wrapped spectrum",
-                        Motion::PoleRipples => "Pole ripples",
+                        Motion::PoleRipples => ripple_label,
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
@@ -333,17 +363,21 @@ impl Sphere {
                             Motion::WrappedSpectrum,
                             "Wrapped spectrum",
                         );
-                        ui.selectable_value(&mut self.motion, Motion::PoleRipples, "Pole ripples");
+                        ui.selectable_value(&mut self.motion, Motion::PoleRipples, ripple_label);
                     });
                 if self.motion == Motion::PoleRipples {
-                    ui.small("Audio launches circular waves from pole to pole.");
+                    ui.small(if cylinder {
+                        "Audio launches rings along the cylinder."
+                    } else {
+                        "Audio launches circular waves from pole to pole."
+                    });
                     p!(
                         ui,
                         ripple_speed,
                         0.25..=4.0,
                         1.0,
                         "Travel speed",
-                        "Speed multiplier for pole-to-pole travel. History s sets the travel time at 1×."
+                        "Speed multiplier for end-to-end travel. History s sets the travel time at 1×."
                     );
                     p!(
                         ui,
@@ -359,7 +393,7 @@ impl Sphere {
                         0.0..=4.0,
                         1.0,
                         "Damping",
-                        "How quickly ripples weaken as they travel toward the opposite pole."
+                        "How quickly ripples weaken as they travel toward the opposite end."
                     );
                     p!(
                         ui,
@@ -369,8 +403,8 @@ impl Sphere {
                         "Hit emphasis",
                         "Blend sustained sound energy with sharp changes in energy. Raise this for distinct rings on drums and impacts."
                     );
-                    ui.small(format!("Pole-to-pole: {:.2} s", self.ripple_travel_time()));
-                    if ui.button("Launch ripple").on_hover_text("Send one manual ripple from the source pole. Audio-driven waves continue alongside it.").clicked() {
+                    ui.small(format!("Travel time: {:.2} s", self.ripple_travel_time()));
+                    if ui.button("Launch ripple").help_text("Send one manual ripple from the source end. Audio-driven waves continue alongside it.").clicked() {
                         self.ripple_trigger = Some(self.last_draw.unwrap_or_else(Instant::now));
                     }
                 }
@@ -382,7 +416,7 @@ impl Sphere {
                     0.2..=2.0,
                     1.0,
                     "Radius",
-                    "The resting sphere radius. Independent of audio level and camera zoom."
+                    "The resting radius. Independent of audio level and camera zoom."
                 );
                 p!(
                     ui,
@@ -390,7 +424,7 @@ impl Sphere {
                     0.0..=2.0,
                     0.65,
                     "Displacement",
-                    "Depth of the audio-driven surface and pole ripples. Zero produces a smooth sphere."
+                    "Depth of the audio-driven surface and traveling ripples. Zero produces a smooth surface."
                 );
                 p!(
                     ui,
@@ -398,15 +432,15 @@ impl Sphere {
                     0.2..=3.0,
                     1.0,
                     "Width X",
-                    "Stretch the sphere along its X axis."
+                    "Stretch the surface along its X axis."
                 );
                 p!(
                     ui,
                     stretch_y,
                     0.2..=3.0,
                     1.0,
-                    "Height Z",
-                    "Stretch the sphere vertically."
+                    "Vertical stretch",
+                    "Stretch the surface vertically."
                 );
                 p!(
                     ui,
@@ -414,16 +448,59 @@ impl Sphere {
                     0.2..=3.0,
                     1.0,
                     "Depth Y",
-                    "Stretch the sphere front to back."
+                    "Stretch the surface front to back."
                 );
-                p!(
-                    ui,
-                    pole_taper,
-                    0.1..=4.0,
-                    1.0,
-                    "Pole taper",
-                    "Smoothly reduce displacement at both poles to keep the surface closed. Higher values concentrate peaks around the equator."
-                );
+                if cylinder {
+                    for (key, label, value, range, default, help) in [
+                        (
+                            "cylinder.height",
+                            "Height",
+                            &mut self.cylinder.height,
+                            0.2..=6.0,
+                            2.4,
+                            "Length of the cylinder along its axis.",
+                        ),
+                        (
+                            "cylinder.top_radius",
+                            "Top radius ×",
+                            &mut self.cylinder.top_radius,
+                            0.0..=3.0,
+                            1.0,
+                            "Scale the top radius. Zero tapers the top to a point, including while audio displaces the surface.",
+                        ),
+                        (
+                            "cylinder.bottom_radius",
+                            "Bottom radius ×",
+                            &mut self.cylinder.bottom_radius,
+                            0.0..=3.0,
+                            1.0,
+                            "Scale the bottom radius independently. Zero tapers the bottom to a point.",
+                        ),
+                        (
+                            "cylinder.edge_falloff",
+                            "Edge falloff",
+                            &mut self.cylinder.edge_falloff,
+                            0.0..=1.0,
+                            0.15,
+                            "Fade displacement near both rims. Zero lets audio move the complete surface.",
+                        ),
+                    ] {
+                        ui.add(Parameter::new(value, range, default).key(key).text(label))
+                            .help_text(help);
+                    }
+                    ui.checkbox(&mut self.cylinder.caps, "Show end caps").help_text(
+                        "Turn off to remove both end faces and their radial grid lines, leaving an open tube. Pointed ends have no cap geometry.",
+                    );
+                } else {
+                    p!(
+                        ui,
+                        pole_taper,
+                        0.1..=4.0,
+                        1.0,
+                        "Pole taper",
+                        "Smoothly reduce displacement at both poles to keep the surface closed. Higher values concentrate peaks around the equator."
+                    );
+                }
             });
             if self.motion == Motion::WrappedSpectrum {
                 settings_group(ui, "Frequency wrap", |ui| {
@@ -441,41 +518,43 @@ impl Sphere {
                         -360.0..=360.0,
                         35.0,
                         "Twist °",
-                        "Twist the frequency meridians progressively from one pole to the other."
+                        "Twist the frequency grid progressively along the surface."
                     );
                     p!(
                         ui,
                         offset,
                         -180.0..=180.0,
                         0.0,
-                        "Longitude °",
-                        "Rotate the frequency map around the sphere without moving the camera."
+                        "Wrap offset °",
+                        "Rotate the frequency map around the surface without moving the camera."
                     );
                 });
             }
             settings_group(ui, "History & resolution", |ui| {
                 ui.add(Parameter::new(&mut self.seconds, 0.1..=30.0, 3.0).key("seconds").logarithmic(true).text("History s"))
-                    .help_text("Pole-to-pole history time. For ripples, divide this duration by Travel speed to get the wave travel time.");
+                    .help_text("End-to-end history time. For ripples, divide this duration by Travel speed to get the wave travel time.");
                 p!(
                     ui,
                     latitudes,
                     12..=128,
                     64,
                     "History rings",
-                    "Number of time slices from pole to pole. Higher resolution uses more rendering work."
+                    "Number of time slices along the surface. Higher resolution uses more rendering work."
                 );
                 p!(
                     ui,
                     longitudes,
                     24..=256,
                     128,
-                    "Around sphere",
+                    if cylinder {
+                        "Around cylinder"
+                    } else {
+                        "Around sphere"
+                    },
                     "Number of samples around each ring. Display interpolation does not increase FFT resolution."
                 );
                 ui.checkbox(&mut self.reverse_flow, "Reverse history flow")
-                    .help_text(
-                        "Start history and ripples at the south pole instead of the north pole.",
-                    );
+                    .help_text("Start history and ripples at the bottom instead of the top.");
             });
         });
         settings_panel(ui, "Frequency Range", |ui| {
@@ -519,7 +598,7 @@ impl Sphere {
                             0.5..=4.0,
                             1.0,
                             "Spike width px",
-                            "Thickness of radial spikes from the resting sphere to the audio surface."
+                            "Thickness of radial spikes from the resting shape to the audio surface."
                         );
                         p!(
                             ui,
@@ -540,7 +619,7 @@ impl Sphere {
                             0.3..=3.0,
                             0.85,
                             "Line width px",
-                            "Thickness of the spherical frequency and history grid."
+                            "Thickness of the frequency and history grid."
                         );
                         p!(
                             ui,
@@ -548,7 +627,7 @@ impl Sphere {
                             1..=8,
                             1,
                             "Ring spacing",
-                            "Display every Nth latitude. Does not change captured history."
+                            "Display every Nth history ring. Does not change captured history."
                         );
                         p!(
                             ui,
@@ -556,7 +635,7 @@ impl Sphere {
                             1..=8,
                             2,
                             "Meridian spacing",
-                            "Display every Nth longitude."
+                            "Display every Nth column around the surface."
                         );
                     }
                 }
@@ -604,7 +683,7 @@ impl Sphere {
                     0.0..=1.0,
                     0.18,
                     "Rear visibility",
-                    "Dim the back hemisphere for readable depth, or raise it for a transparent wire globe."
+                    "Dim the back surface for readable depth, or raise it for a transparent wireframe."
                 );
                 p!(
                     ui,
@@ -612,7 +691,7 @@ impl Sphere {
                     0.0..=1.0,
                     0.18,
                     "Resting grid",
-                    "Visibility of the unexcited sphere. Set to zero to show only audio activity."
+                    "Visibility of the unexcited surface. Set to zero to show only audio activity."
                 );
                 self.history.data.settings.level_controls(ui);
             });
@@ -666,7 +745,7 @@ impl Sphere {
                     0.25..=8.0,
                     1.0,
                     "Zoom",
-                    "Magnify the view; scroll over the sphere to adjust."
+                    "Magnify the view; scroll over the surface to adjust."
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Center view").clicked() {
@@ -1011,7 +1090,24 @@ impl Sphere {
             let levels = self.levels_at(now, age * self.seconds.clamp(0.1, 30.0));
             let ripple = (self.motion == Motion::PoleRipples).then(|| self.ripple_at(now, age));
             let (sin_phi, cos_phi) = (v * PI).sin_cos();
-            let taper = sin_phi.max(0.0).powf(self.pole_taper.clamp(0.1, 4.0));
+            let taper = if self.is_cylinder() {
+                let edge = self.cylinder.edge_falloff.clamp(0.0, 1.0) * 0.5;
+                if edge > 0.0 {
+                    let t = (v.min(1.0 - v) / edge).clamp(0.0, 1.0);
+                    t * t * (3.0 - 2.0 * t)
+                } else {
+                    1.0
+                }
+            } else {
+                sin_phi.max(0.0).powf(self.pole_taper.clamp(0.1, 4.0))
+            };
+            let row_radius = if self.is_cylinder() {
+                radius
+                    * (self.cylinder.top_radius.clamp(0.0, 3.0) * (1.0 - v)
+                        + self.cylinder.bottom_radius.clamp(0.0, 3.0) * v)
+            } else {
+                radius
+            };
             for &(u, f, lo, hi, fraction) in &columns {
                 let level = ripple.map_or_else(
                     || {
@@ -1028,13 +1124,21 @@ impl Sphere {
                     u * TAU + self.offset.to_radians() + self.twist.to_radians() * (v - 0.5);
                 let (sin_theta, cos_theta) = theta.sin_cos();
                 let position = |r: f32| {
-                    [
-                        r * sin_phi * cos_theta * stretch[0],
-                        r * cos_phi * stretch[1],
-                        r * sin_phi * sin_theta * stretch[2],
-                    ]
+                    if self.is_cylinder() {
+                        [
+                            r * cos_theta * stretch[0],
+                            self.cylinder.height.clamp(0.2, 8.0) * (0.5 - v) * stretch[1],
+                            r * sin_theta * stretch[2],
+                        ]
+                    } else {
+                        [
+                            r * sin_phi * cos_theta * stretch[0],
+                            r * cos_phi * stretch[1],
+                            r * sin_phi * sin_theta * stretch[2],
+                        ]
+                    }
                 };
-                let r = (radius
+                let r = (row_radius
                     + level.clamp(
                         if self.motion == Motion::PoleRipples {
                             -1.0
@@ -1043,10 +1147,22 @@ impl Sphere {
                         },
                         1.0,
                     ) * displacement
-                        * taper)
-                    .max(0.05);
+                        * taper
+                        // Narrow ends reduce displacement continuously, so a zero-radius
+                        // tip stays closed even with edge falloff disabled and loud audio.
+                        * if self.is_cylinder() {
+                            (row_radius / radius).min(1.0)
+                        } else {
+                            1.0
+                        })
+                .max(if self.is_cylinder() { 0.0 } else { 0.05 });
                 let (pos, depth) = project(position(r));
-                let (base, facing) = project(position(radius));
+                let (base, facing) = project(position(row_radius));
+                let facing = if self.is_cylinder() {
+                    ce * (-sy * cos_theta / stretch[0] + cy * sin_theta / stretch[2])
+                } else {
+                    facing
+                };
                 let color_t = match self.color_by {
                     ColorBy::Level => level.abs(),
                     ColorBy::Frequency => ripple.map_or(f, |(_, tone)| tone),
@@ -1101,9 +1217,71 @@ impl Sphere {
                 (r, c, depth)
             })
             .collect();
+        let cap_start = vertices.len();
+        if self.is_cylinder() && self.cylinder.caps {
+            for end in [0, rows] {
+                let v = end as f32 / rows as f32;
+                let (pos, depth) = project([
+                    0.0,
+                    self.cylinder.height.clamp(0.2, 8.0) * (0.5 - v) * stretch[1],
+                    0.0,
+                ]);
+                vertices.push(Vertex {
+                    pos,
+                    base: pos,
+                    depth,
+                    color: vertices[end * stride].color,
+                });
+                let end_radius = if end == 0 {
+                    self.cylinder.top_radius
+                } else {
+                    self.cylinder.bottom_radius
+                };
+                if end_radius <= 0.0 {
+                    continue;
+                }
+                for col in 0..cols {
+                    cells.push((
+                        rows + 1 + usize::from(end > 0),
+                        col,
+                        depth * 2.0
+                            + vertices[end * stride + col].depth
+                            + vertices[end * stride + col + 1].depth,
+                    ));
+                }
+            }
+        }
         cells.sort_unstable_by(|a, b| a.2.total_cmp(&b.2));
         let mut mesh = egui::Mesh::default();
         for (row, col, _) in cells {
+            if row > rows {
+                let end = row - rows - 1;
+                let center = vertices[cap_start + end];
+                let a = vertices[end * rows * stride + col];
+                let b = vertices[end * rows * stride + col + 1];
+                if self.style == Style::Surface {
+                    let start = mesh.vertices.len() as u32;
+                    for v in [center, a, b] {
+                        mesh.colored_vertex(v.pos, v.color.gamma_multiply(0.7));
+                    }
+                    mesh.add_triangle(start, start + 1, start + 2);
+                }
+                if (self.style == Style::Wireframe
+                    || self.style == Style::Meridians
+                    || (self.style == Style::Surface && self.surface_mesh))
+                    && col.is_multiple_of(self.meridian_spacing.clamp(1, 8))
+                {
+                    mesh_segment(
+                        &mut mesh,
+                        center.pos,
+                        a.pos,
+                        a.color,
+                        a.color,
+                        self.line_width.clamp(0.3, 3.0),
+                    );
+                }
+                continue;
+            }
             let a = vertices[row * stride + col];
             let b = vertices[row * stride + col + 1];
             let c = vertices[(row + 1) * stride + col];
@@ -1152,6 +1330,9 @@ impl Sphere {
                 && row.is_multiple_of(self.ring_spacing.clamp(1, 8))
             {
                 line(&mut mesh, a, b, self.line_width.clamp(0.3, 3.0));
+            }
+            if self.is_cylinder() && row + 1 == rows && (grid || self.style == Style::Rings) {
+                line(&mut mesh, c, d, self.line_width.clamp(0.3, 3.0));
             }
             if (grid || self.style == Style::Meridians)
                 && col.is_multiple_of(self.meridian_spacing.clamp(1, 8))
@@ -1239,7 +1420,13 @@ impl Sphere {
                 label(
                     &painter,
                     rect.left_top() + Vec2::new(12.0, 10.0),
-                    if self.motion == Motion::PoleRipples {
+                    if self.is_cylinder() {
+                        if self.motion == Motion::PoleRipples {
+                            "AXIAL RIPPLES · TRAVELING AUDIO RINGS"
+                        } else {
+                            "AROUND = FREQUENCY · HEIGHT = HISTORY · RADIUS = LEVEL"
+                        }
+                    } else if self.motion == Motion::PoleRipples {
                         "POLE RIPPLES · CIRCULAR AUDIO WAVES · RADIUS = DISPLACEMENT"
                     } else {
                         "LONGITUDE = FREQUENCY · LATITUDE = HISTORY · RADIUS = LEVEL"
@@ -1267,7 +1454,13 @@ impl Sphere {
                         } else {
                             self.seconds
                         },
-                        if self.reverse_flow {
+                        if self.is_cylinder() {
+                            if self.reverse_flow {
+                                "BOTTOM TO TOP"
+                            } else {
+                                "TOP TO BOTTOM"
+                            }
+                        } else if self.reverse_flow {
                             "SOUTH TO NORTH"
                         } else {
                             "NORTH TO SOUTH"
@@ -1290,48 +1483,16 @@ fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(TAU) - PI
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
-}
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-fn trackball_point(pointer: Pos2, center: Pos2, radius: f32) -> [f64; 3] {
-    let p = (pointer - center) / radius.max(1.0);
-    let x = f64::from(p.x);
-    let y = f64::from(p.y);
-    let length = x * x + y * y;
-    // A hyperbolic rim lets drags outside the silhouette produce roll smoothly
-    // instead of clamping the pointer to an equator or locking an axis.
-    let z = if length <= 0.5 {
-        (1.0 - length).sqrt()
-    } else {
-        0.5 / length.sqrt()
-    };
-    let v = [x, y, z];
-    let length = dot(v, v).sqrt();
-    v.map(|v| v / length)
-}
-fn rotate_vector(v: [f64; 3], axis: [f64; 3], angle: f64) -> [f64; 3] {
-    let (sin, cos) = angle.sin_cos();
-    let side = cross(axis, v);
-    let along = dot(axis, v) * (1.0 - cos);
-    std::array::from_fn(|i| v[i] * cos + side[i] * sin + axis[i] * along)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::frequency::HistoryRow;
+    use super::super::trackball::dot;
     use super::*;
-    fn populated(now: Instant) -> Sphere {
-        let mut sphere = Sphere {
+    fn populated(now: Instant) -> SpectralSurface {
+        let mut sphere = SpectralSurface {
             latitudes: 24,
             longitudes: 48,
-            ..Sphere::default()
+            ..SpectralSurface::default()
         };
         for n in 0..=90 {
             sphere.history.rows.push_back(HistoryRow {
@@ -1344,6 +1505,155 @@ mod tests {
             });
         }
         sphere
+    }
+    #[test]
+    fn cylinder_dimensions_taper_and_caps_define_a_cylinder_not_a_sphere() {
+        let now = Instant::now();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let mut cylinder = SpectralSurface::cylinder();
+        cylinder.latitudes = 24;
+        cylinder.longitudes = 48;
+        cylinder.style = Style::Surface;
+        cylinder.surface_mesh = false;
+        cylinder.displacement = 0.0;
+        cylinder.twist = 0.0;
+        cylinder.yaw = 0.0;
+        cylinder.elevation = 0.0;
+        let mesh = cylinder.build_mesh(rect, now, &theme);
+        assert_eq!(mesh.indices.len(), 24 * 48 * 6 + 2 * 48 * 3);
+        let bounds = mesh.vertices.iter().fold(Rect::NOTHING, |mut bounds, v| {
+            bounds.extend_with(v.pos);
+            bounds
+        });
+        let scale = 600.0 * 0.27;
+        assert!((bounds.width() - 2.0 * cylinder.radius * scale).abs() < 0.001);
+        assert!((bounds.height() - cylinder.cylinder.height * scale).abs() < 0.001);
+        cylinder.cylinder.caps = false;
+        cylinder.cylinder.top_radius = 0.5;
+        cylinder.cylinder.bottom_radius = 1.5;
+        let mesh = cylinder.build_mesh(rect, now, &theme);
+        assert_eq!(mesh.indices.len(), 24 * 48 * 6);
+        for (y, radius) in [(bounds.top(), 0.5), (bounds.bottom(), 1.5)] {
+            let width = mesh
+                .vertices
+                .iter()
+                .filter(|v| (v.pos.y - y).abs() < 0.001)
+                .map(|v| (v.pos.x - rect.center().x).abs())
+                .fold(0.0_f32, f32::max);
+            assert!((width - radius * scale).abs() < 0.001);
+        }
+    }
+    #[test]
+    fn cylinder_tips_stay_pointed_with_audio_and_caps_skip_zero_radius_ends() {
+        let now = Instant::now();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let mut cylinder = populated(now);
+        cylinder.shape = Shape::Cylinder;
+        cylinder.latitudes = 24;
+        cylinder.longitudes = 48;
+        cylinder.style = Style::Surface;
+        cylinder.surface_mesh = false;
+        cylinder.cylinder.edge_falloff = 0.0;
+        cylinder.displacement = 4.0;
+        cylinder.yaw = 0.0;
+        cylinder.elevation = 0.0;
+        cylinder.roll = 0.0;
+        for motion in [Motion::WrappedSpectrum, Motion::PoleRipples] {
+            cylinder.motion = motion;
+            for (top, bottom) in [(0.0, 1.0), (1.0, 0.0), (0.0, 0.0)] {
+                cylinder.cylinder.top_radius = top;
+                cylinder.cylinder.bottom_radius = bottom;
+                for caps in [false, true] {
+                    cylinder.cylinder.caps = caps;
+                    let mesh = cylinder.build_mesh(rect, now, &theme);
+                    assert!(mesh.is_valid());
+                    assert!(
+                        mesh.vertices
+                            .iter()
+                            .all(|v| v.pos.x.is_finite() && v.pos.y.is_finite())
+                    );
+                    let cap_count = if caps {
+                        usize::from(top > 0.0) + usize::from(bottom > 0.0)
+                    } else {
+                        0
+                    };
+                    assert_eq!(mesh.indices.len(), 24 * 48 * 6 + cap_count * 48 * 3);
+                    for (radius, direction) in [(top, -1.0), (bottom, 1.0)] {
+                        if radius != 0.0 {
+                            continue;
+                        }
+                        let tip_y = rect.center().y
+                            + direction * cylinder.cylinder.height * 0.5 * 600.0 * 0.27;
+                        let tip: Vec<_> = mesh
+                            .vertices
+                            .iter()
+                            .filter(|v| (v.pos.y - tip_y).abs() < 0.001)
+                            .collect();
+                        assert!(!tip.is_empty());
+                        assert!(
+                            tip.iter()
+                                .all(|v| (v.pos.x - rect.center().x).abs() < 0.001)
+                        );
+                    }
+                }
+            }
+        }
+        let saved = cylinder.settings_snapshot();
+        let decoded = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut restored = SpectralSurface::cylinder();
+        restored.apply_settings(&decoded);
+        assert_eq!(saved, restored.settings_snapshot());
+    }
+
+    #[test]
+    fn cylinder_audio_styles_and_ripples_are_finite_and_keep_history_through_reset() {
+        let now = Instant::now();
+        let mut cylinder = populated(now);
+        cylinder.shape = Shape::Cylinder;
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let audio = cylinder.build_mesh(rect, now, &theme);
+        let silent = cylinder.build_mesh(rect, now + Duration::from_secs(35), &theme);
+        assert_ne!(audio.vertices, silent.vertices);
+        for motion in [Motion::WrappedSpectrum, Motion::PoleRipples] {
+            cylinder.motion = motion;
+            for style in Style::ALL {
+                cylinder.style = style;
+                for caps in [false, true] {
+                    cylinder.cylinder.caps = caps;
+                    cylinder.cylinder.edge_falloff = 0.0;
+                    cylinder.cylinder.top_radius = 0.1;
+                    cylinder.cylinder.bottom_radius = 3.0;
+                    cylinder.displacement = 4.0;
+                    let mesh = cylinder.build_mesh(rect, now, &theme);
+                    assert!(mesh.is_valid() && !mesh.vertices.is_empty());
+                    assert!(mesh.vertices.iter().all(|v| v.pos.is_finite()));
+                }
+            }
+        }
+        cylinder.trackball_drag(
+            Pos2::new(400.0, 200.0),
+            Pos2::new(350.0, 300.0),
+            rect.center(),
+            160.0,
+        );
+        let orientation = cylinder.orientation_axes();
+        let settings = cylinder.settings_snapshot();
+        let decoded: SurfaceSettings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        let mut restored = SpectralSurface::cylinder();
+        restored.apply_settings(&decoded);
+        assert_eq!(restored.orientation_axes(), orientation);
+        assert_eq!(restored.settings_snapshot(), settings);
+        cylinder.reset_settings();
+        assert!(cylinder.is_cylinder());
+        assert_eq!(cylinder.history.rows.len(), 91);
+        assert_eq!(
+            cylinder.settings_snapshot(),
+            SpectralSurface::cylinder().settings_snapshot()
+        );
     }
     #[test]
     #[ignore = "manual sphere CPU mesh timing, not a frame-rate test"]
@@ -1371,7 +1681,7 @@ mod tests {
                         std::hint::black_box(mesh());
                     }
                     eprintln!(
-                        "Sphere {rows}x{cols} {motion:?} {}: {:.3} ms/mesh",
+                        "SpectralSurface {rows}x{cols} {motion:?} {}: {:.3} ms/mesh",
                         if optimized { "optimized" } else { "reference" },
                         start.elapsed().as_secs_f64() * 10.0
                     );
@@ -1428,11 +1738,11 @@ mod tests {
         let basis = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         for elevation in [-PI * 0.5, -PI * 0.4999, 0.0, PI * 0.4999, PI * 0.5] {
             for roll in [-2.0, 0.0, 1.2] {
-                let mut sphere = Sphere {
+                let mut sphere = SpectralSurface {
                     yaw: 0.8,
                     elevation,
                     roll,
-                    ..Sphere::default()
+                    ..SpectralSurface::default()
                 };
                 let before = basis.map(|v| sphere.view_vector(v));
                 let from = center + Vec2::new(70.0, 10.0);
@@ -1452,11 +1762,11 @@ mod tests {
                 }
             }
         }
-        let mut sphere = Sphere {
+        let mut sphere = SpectralSurface {
             yaw: 0.0,
             elevation: 0.0,
             roll: 0.0,
-            ..Sphere::default()
+            ..SpectralSurface::default()
         };
         sphere.trackball_drag(
             center + Vec2::new(100.0, 0.0),
@@ -1495,7 +1805,7 @@ mod tests {
         assert_eq!(b.pan, original_pan);
         assert_eq!(a.history.rows.len(), 91);
         let settings = b.settings_snapshot();
-        let mut restored = Sphere::default();
+        let mut restored = SpectralSurface::default();
         restored.apply_settings(&settings);
         assert_eq!(
             restored.view_vector([1.0, 2.0, 3.0]),
@@ -1511,10 +1821,10 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             let now = Instant::now();
-            let mut sphere = Sphere {
+            let mut sphere = SpectralSurface {
                 show_gizmo: false,
                 pan: Vec2::new(0.15, -0.1),
-                ..Sphere::default()
+                ..SpectralSurface::default()
             };
             let before = sphere.settings_snapshot();
             let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0));
@@ -1573,10 +1883,10 @@ mod tests {
     #[test]
     fn manual_ripple_travels_between_poles_at_selected_speed_and_damps() {
         let now = Instant::now();
-        let mut sphere = Sphere {
+        let mut sphere = SpectralSurface {
             motion: Motion::PoleRipples,
             ripple_trigger: Some(now),
-            ..Sphere::default()
+            ..SpectralSurface::default()
         };
         let quarter = now + Duration::from_secs_f32(sphere.ripple_travel_time() * 0.25);
         let (crest, _) = sphere.ripple_at(quarter, 0.25);
@@ -1618,18 +1928,19 @@ mod tests {
     }
     #[test]
     fn ripple_settings_roundtrip_and_older_spheres_keep_wrapped_spectrum() {
-        let sphere = Sphere {
+        let sphere = SpectralSurface {
             motion: Motion::PoleRipples,
             ripple_speed: 2.3,
             ripple_damping: 0.7,
-            ..Sphere::default()
+            ..SpectralSurface::default()
         };
         let settings = sphere.settings_snapshot();
-        let decoded: SphereSettings =
+        let decoded: SurfaceSettings =
             serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
         assert_eq!(settings, decoded);
-        let mut old = serde_json::to_value(Sphere::default().settings_snapshot()).unwrap();
+        let mut old = serde_json::to_value(SpectralSurface::default().settings_snapshot()).unwrap();
         for key in [
+            "cylinder",
             "motion",
             "ripple_speed",
             "ripple_rate",
@@ -1638,12 +1949,12 @@ mod tests {
         ] {
             old.as_object_mut().unwrap().remove(key);
         }
-        let decoded: SphereSettings = serde_json::from_value(old).unwrap();
-        assert_eq!(decoded, Sphere::default().settings_snapshot());
+        let decoded: SurfaceSettings = serde_json::from_value(old).unwrap();
+        assert_eq!(decoded, SpectralSurface::default().settings_snapshot());
     }
     #[test]
     fn spherical_mapping_closes_seam_and_poles_and_moves_only_excited_frequencies() {
-        let mut sphere = Sphere::default();
+        let mut sphere = SpectralSurface::default();
         for repeats in 1..=4 {
             sphere.repeats = repeats;
             for v in [0.0, 0.1, 0.5, 0.9, 1.0] {
@@ -1676,7 +1987,7 @@ mod tests {
     #[test]
     fn history_interpolates_real_samples_and_leaves_dropouts_unexcited() {
         let now = Instant::now();
-        let mut sphere = Sphere::default();
+        let mut sphere = SpectralSurface::default();
         for (age, db, sequence) in [(0.1, -80.0, 1), (0.0, -20.0, 2)] {
             sphere.history.rows.push_back(HistoryRow {
                 time: now - Duration::from_secs_f32(age),
@@ -1751,7 +2062,7 @@ mod tests {
         assert_eq!(sphere.history.rows.len(), 91);
         assert_eq!(
             sphere.settings_snapshot(),
-            Sphere::default().settings_snapshot()
+            SpectralSurface::default().settings_snapshot()
         );
     }
 }
@@ -1763,7 +2074,12 @@ mod preview {
     #[ignore = "manual visual review: writes the actual renderer mesh to /tmp"]
     fn export_sphere_mesh() {
         let now = Instant::now();
-        let mut sphere = Sphere::default();
+        let cylinder = std::env::var_os("SYMPHOS_PREVIEW_CYLINDER").is_some();
+        let mut sphere = if cylinder {
+            SpectralSurface::cylinder()
+        } else {
+            SpectralSurface::default()
+        };
         if std::env::var_os("SYMPHOS_PREVIEW_RIPPLES").is_some() {
             sphere.motion = Motion::PoleRipples;
         }
@@ -1794,7 +2110,11 @@ mod preview {
             "indices": mesh.indices
         });
         std::fs::write(
-            "/tmp/symphos-sphere-mesh.json",
+            if cylinder {
+                "/tmp/symphos-cylinder-mesh.json"
+            } else {
+                "/tmp/symphos-sphere-mesh.json"
+            },
             serde_json::to_vec(&value).unwrap(),
         )
         .unwrap();

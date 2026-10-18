@@ -1,4 +1,5 @@
 //! One manual value + one modulation source, shared by the three artistic visualizers.
+use crate::help::HoverHelp;
 use crate::{modulation::Target, theme::AppTheme};
 #[cfg(test)]
 use crate::{
@@ -297,9 +298,7 @@ pub(super) fn bar(
                                     egui::Button::new(egui::RichText::new(source).color(color))
                                         .truncate(),
                                 )
-                                .on_hover_text(
-                                    "Assign or disconnect this macro’s modulation source",
-                                );
+                                .help_text("Assign or disconnect this macro’s modulation source");
                             // The editor owns its open state. Nested ComboBoxes use
                             // egui's single memory-backed popup slot for their menus.
                             let editor_key = egui::Id::new("active-macro-source-editor");
@@ -491,7 +490,7 @@ pub(super) fn bar(
 #[cfg(test)]
 fn modulation_depth(ui: &mut egui::Ui, route: &mut Route) -> egui::Response {
     ui.checkbox(&mut route.enabled, "Mod")
-        .on_hover_text("Enable or bypass this macro's modulation");
+        .help_text("Enable or bypass this macro's modulation");
     let mut percent = route.amount * 100.0;
     let response = ui.add_sized(
         [ui.available_width().max(52.0), 20.0],
@@ -501,7 +500,7 @@ fn modulation_depth(ui: &mut egui::Ui, route: &mut Route) -> egui::Response {
             .fixed_decimals(0)
             .custom_formatter(|value, _| format!("{value:+.0}"))
             .suffix("%"),
-    ).on_hover_text("Modulation amount for this macro. Drag up/right to increase, down/left to decrease; Shift for fine adjustment. Click to type.");
+    ).help_text("Modulation amount for this macro. Drag up/right to increase, down/left to decrease; Shift for fine adjustment. Click to type.");
     if response.changed() {
         route.amount = percent / 100.0;
     }
@@ -522,8 +521,10 @@ pub(crate) fn knob(
     color: egui::Color32,
     range: (f32, f32),
 ) -> egui::Response {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 107.0), egui::Sense::hover());
-    let center = Pos2::new(rect.center().x, rect.top() + 46.0);
+    let label_height = if label.is_empty() { 0.0 } else { 17.0 };
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(width, 90.0 + label_height), egui::Sense::hover());
+    let center = Pos2::new(rect.center().x, rect.top() + 29.0 + label_height);
     // Annulus owns the pointer only outside the knob body; dragging cannot change both.
     let pointer = ui.input(|i| i.pointer.interact_pos());
     let ring_id = ui.id().with("modulation-ring");
@@ -538,14 +539,15 @@ pub(crate) fn knob(
     };
     let ring = ui
         .interact(ring_rect, ring_id, egui::Sense::click_and_drag())
-        .on_hover_text("Drag vertically to change modulation strength; Shift for fine adjustment.");
+        .help_text("Drag vertically to change modulation strength; Shift for fine adjustment.");
     let mut response = ui
         .interact(
             Rect::from_center_size(center, Vec2::splat(39.0)),
             ui.id().with("base-knob"),
             egui::Sense::click_and_drag(),
         )
-        .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        .help_text("Macro value\nClick to inspect this macro. Drag vertically to change the manual base value; Shift-drag for fine control, double-click to reset. The outer ring shows modulation and its moving dot shows the live value. Drag the ring to change modulation strength.");
     let before = *value;
     let scale = if ui.input(|i| i.modifiers.shift) {
         1000.0

@@ -1,8 +1,7 @@
 use crate::{
-    analysis::{AnalysisFrame, AnalysisSettings, ChannelMode, FFT_SIZES},
+    analysis::{AnalysisFrame, ChannelMode},
     audio::AudioStatus,
     help::{self, HoverHelp},
-    icons::{self, Icon},
     theme::AppTheme,
 };
 use eframe::egui::{self, Align, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2};
@@ -59,18 +58,16 @@ impl GlobalBar {
         }
     }
 
-    /// Returns whether shared signal interpretation changed and histories need clearing.
+    /// Bottom dock toggles and capture meters.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        settings: &mut AnalysisSettings,
         help_open: &mut bool,
-        settings_open: &mut bool,
+        signals_open: &mut bool,
         macros_open: &mut bool,
         info: BarInfo<'_>,
-    ) -> bool {
+    ) {
         self.update_meter_hold(&info);
-        let before = (settings.fft_size, settings.window, settings.channel_mode);
         ui.spacing_mut().item_spacing = Vec2::new(7.0, 4.0);
         ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
         ui.spacing_mut().interact_size.y = 26.0;
@@ -78,42 +75,47 @@ impl GlobalBar {
         let compact = ui.available_width() < 900.0;
         ui.horizontal_centered(|ui| {
             help::toggle(ui, help_open);
-            if ui.add(egui::Button::selectable(*macros_open,"Macros")).help_text(crate::shortcuts::platform_label("Show / hide macros · Ctrl + B").as_ref()).clicked() {*macros_open = !*macros_open;}
-
-            ui.separator();
-            ui.label("FFT");
-            egui::ComboBox::from_id_salt("global-fft").width(72.0)
-                .selected_text(settings.fft_size.to_string()).show_ui(ui, |ui| {
-                    for size in FFT_SIZES {
-                        ui.selectable_value(&mut settings.fft_size, size, size.to_string())
-                            .help_text("Larger FFT sizes give finer frequency detail and a longer analysis window. Changing this clears all histories.");
-                    }
-                }).response.help_text("Shared FFT sample count. Larger sizes give finer frequency detail and a longer capture window.");
-            ui.label("Rate");
-            egui::ComboBox::from_id_salt("global-rate").width(66.0)
-                .selected_text(format!("{} Hz", settings.analysis_fps)).show_ui(ui, |ui| {
-                    for rate in [30, 60, 90, 120] {
-                        ui.selectable_value(&mut settings.analysis_fps, rate, format!("{rate} Hz"))
-                            .help_text("Target analysis and display update rate. Higher rates use more CPU/GPU resources.");
-                    }
-                }).response.help_text("Shared target analysis/display update rate. Does not change history duration.");
-            if icons::button(ui, if self.stereo { Icon::Stereo } else { Icon::Mix }, !self.stereo,
-                if self.stereo { "Stereo meters: separate L/R level bars. Click for a single meter. Waveform lanes have independent per-pane channel settings." }
-                else { "Single meter: show the selected mix, left, or right level. Click for separate L/R meters. Waveform lanes are unchanged." }).clicked() {
-                self.stereo = !self.stereo;
+            if ui
+                .add(egui::Button::selectable(*macros_open, "Macros"))
+                .help_text(
+                    crate::shortcuts::platform_label("Show / hide macros · Ctrl + B").as_ref(),
+                )
+                .clicked()
+            {
+                *macros_open = !*macros_open;
+                if *macros_open {
+                    *signals_open = false;
+                }
             }
-            if icons::button(ui, Icon::Settings, *settings_open, "Open Settings: Analysis & Meters, audio, display, and app themes.").clicked() { *settings_open = true; }
+
+            if ui
+                .add(egui::Button::selectable(*signals_open, "Signals"))
+                .help_text("Signals\nShow the scene’s modulation sources. Create audio detectors or LFOs, shape their output, then connect them to macros. The Signals and Macros docks share this space.")
+                .clicked()
+            {
+                *signals_open = !*signals_open;
+                if *signals_open {
+                    *macros_open = false;
+                }
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.meters(ui, &info, if compact { 160.0 } else { 220.0 });
                 if !compact {
-                ui.label(RichText::new(format!("{:.1} kHz", info.frame.sample_rate as f32 / 1000.0)).small().color(info.theme.muted))
+                    ui.label(
+                        RichText::new(format!("{:.1} kHz", info.frame.sample_rate as f32 / 1000.0))
+                            .small()
+                            .color(info.theme.muted),
+                    )
                     .help_text("Sample rate of the selected audio source.");
-                ui.label(RichText::new(format!("{:.0} FPS", info.fps)).small().color(info.theme.muted))
+                    ui.label(
+                        RichText::new(format!("{:.0} FPS", info.fps))
+                            .small()
+                            .color(info.theme.muted),
+                    )
                     .help_text("Measured display frame rate.");
                 }
             });
         });
-        before != (settings.fft_size, settings.window, settings.channel_mode)
     }
 
     fn meters(&self, ui: &mut egui::Ui, info: &BarInfo<'_>, width: f32) {
@@ -258,7 +260,6 @@ mod tests {
         for width in [540.0, 740.0, 1000.0, 1416.0] {
             let context = egui::Context::default();
             let mut bar = GlobalBar::default();
-            let mut settings = AnalysisSettings::default();
             let mut help = false;
             let mut inspector = false;
             let bounds = Rect::from_min_size(Pos2::new(12.0, 600.0), Vec2::new(width, 40.0));
@@ -273,9 +274,8 @@ mod tests {
                 },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-                    assert!(!bar.show(
+                    bar.show(
                         &mut child,
-                        &mut settings,
                         &mut help,
                         &mut inspector,
                         &mut true,
@@ -284,8 +284,8 @@ mod tests {
                             status: &AudioStatus::Idle,
                             theme: &AppTheme::default(),
                             fps: 60.0,
-                        }
-                    ));
+                        },
+                    );
                     actual = child.min_rect();
                 },
             );
@@ -303,8 +303,13 @@ mod tests {
                 })
                 .collect();
             let x = |name| labels.iter().find(|(label, _)| *label == name).unwrap().1.x;
-            assert!(x("? Help") < x("FFT"));
-            assert!(x("FFT") < x("Rate"));
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Circle(c) if (c.radius - 9.5).abs() < 0.01 && c.center.x < x("Macros"))));
+            assert!(x("Macros") < x("Signals"));
+            assert!(
+                !labels
+                    .iter()
+                    .any(|(label, _)| ["FFT", "Rate"].contains(label))
+            );
             assert!(x("L") > bounds.center().x && x("R") > bounds.center().x);
             assert!(!labels.iter().any(|(label, _)| {
                 [
@@ -316,73 +321,6 @@ mod tests {
                 .contains(label)
             }));
         }
-    }
-
-    #[test]
-    fn stereo_icon_switches_meters_without_changing_fft_or_requesting_history_reset() {
-        let context = egui::Context::default();
-        let mut bar = GlobalBar::default();
-        let mut settings = AnalysisSettings::default();
-        let mut help = false;
-        let mut inspector = false;
-        let mut render = |bar: &mut GlobalBar, events| {
-            let mut output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 100.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    assert!(!bar.show(
-                        ui,
-                        &mut settings,
-                        &mut help,
-                        &mut inspector,
-                        &mut true,
-                        BarInfo {
-                            frame: &AnalysisFrame::default(),
-                            status: &AudioStatus::Streaming,
-                            theme: &AppTheme::default(),
-                            fps: 60.0,
-                        }
-                    ));
-                },
-            );
-            output.textures_delta.clear();
-            output
-        };
-        let output = render(&mut bar, vec![]);
-        let position = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Circle(circle) if (circle.radius - 5.0).abs() < 0.001 => {
-                    Some(circle.center)
-                }
-                _ => None,
-            })
-            .expect("stereo icon");
-        for pressed in [true, false] {
-            render(
-                &mut bar,
-                vec![
-                    egui::Event::PointerMoved(position),
-                    egui::Event::PointerButton {
-                        pos: position,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-        }
-        assert!(!bar.stereo);
-        let output = render(&mut bar, vec![]);
-        assert!(output.shapes.iter().any(
-            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "M")
-        ));
-        assert_eq!(settings.fft_size, 4096);
-        assert_eq!(settings.channel_mode, ChannelMode::StereoMix);
     }
 
     #[test]

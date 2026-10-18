@@ -432,7 +432,7 @@ fn tile(ui: &mut egui::Ui, name: &str, g: Gradient, selected: bool, width: f32) 
         );
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
-    response.on_hover_text(name).clicked()
+    response.help_text(name).clicked()
 }
 impl Palette {
     pub fn controls(&mut self, ui: &mut egui::Ui) {
@@ -669,7 +669,7 @@ impl Palette {
                             if response.clicked() {
                                 editor.gradient.colors[editor.selected] = s.color;
                             }
-                            response.clone().on_hover_text(&s.name);
+                            response.clone().help_text(&s.name);
                             response.context_menu(|ui| {
                                 ui.label(&s.name);
                                 if ui.button("Delete swatch").clicked() {
@@ -705,7 +705,7 @@ impl Palette {
                                                 rect,
                                                 egui::Button::new(&p.name).small().truncate(),
                                             )
-                                            .on_hover_text(&p.name)
+                                            .help_text(&p.name)
                                             .clicked()
                                         {
                                             editor.gradient = p.gradient;
@@ -713,7 +713,7 @@ impl Palette {
                                         }
                                         if ui
                                             .small_button("×")
-                                            .on_hover_text("Delete saved palette")
+                                            .help_text("Delete saved palette")
                                             .clicked()
                                         {
                                             remove = Some(i);

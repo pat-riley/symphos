@@ -23,6 +23,8 @@ mod flux;
 mod frequency;
 mod oscilloscope;
 pub(crate) mod performance;
+mod rings;
+mod trackball;
 
 fn new_instance_id() -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -38,9 +40,9 @@ fn new_instance_id() -> String {
 
 #[cfg(test)]
 mod reactive;
+mod spectral_surface;
 mod spectrogram;
 mod spectrum;
-mod sphere;
 mod stereometer;
 mod strata;
 mod veroni;
@@ -57,9 +59,10 @@ use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 use flux::Flux;
 use oscilloscope::Oscilloscope;
+use rings::Rings;
+use spectral_surface::SpectralSurface;
 use spectrogram::Spectrogram;
 use spectrum::Spectrum;
-use sphere::Sphere;
 use stereometer::Stereometer;
 use strata::Strata;
 use veroni::Veroni;
@@ -84,10 +87,12 @@ pub enum ModuleKind {
     Strata,
     Flux,
     Sphere,
+    Cylinder,
+    Rings,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
@@ -98,10 +103,14 @@ impl ModuleKind {
         Self::Strata,
         Self::Flux,
         Self::Sphere,
+        Self::Cylinder,
+        Self::Rings,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Rings => "3D Rings",
+            Self::Cylinder => "3D Cylinder",
             Self::Sphere => "3D Sphere",
             Self::Waterfall => "3D Waterfall",
             Self::Spectrum => "Frequency spectrum",
@@ -117,6 +126,8 @@ impl ModuleKind {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Rings => Icon::Rings,
+            Self::Cylinder => Icon::Cylinder,
             Self::Sphere => Icon::Sphere,
             Self::Waterfall => Icon::Waterfall,
             Self::Spectrum => Icon::Bars,
@@ -132,6 +143,8 @@ impl ModuleKind {
 
     pub fn subtitle(self) -> &'static str {
         match self {
+            Self::Rings => "Orbital waveform rings",
+            Self::Cylinder => "Cylindrical frequency history",
             Self::Sphere => "Spherical frequency history",
             Self::Waterfall => "3D frequency history",
             Self::Spectrum => "Frequency levels",
@@ -147,6 +160,12 @@ impl ModuleKind {
 
     pub fn description(self) -> &'static str {
         match self {
+            Self::Rings => {
+                "Live waveforms flow around configurable orbital, concentric, or stacked rings. Choose stereo or Mid/Side input, shape the audio displacement, and rotate freely in 3D."
+            }
+            Self::Cylinder => {
+                "Frequency wraps around the cylinder; history flows down its length; level displaces the radius. Shape the rims, launch axial ripples, and drag to rotate freely."
+            }
             Self::Sphere => {
                 "Frequency wraps around the sphere; history flows from pole to pole; level displaces the surface. Drag to orbit, Shift-drag to pan, scroll to zoom."
             }
@@ -184,9 +203,12 @@ impl ModuleKind {
 pub struct ModulePane {
     instance_id: String,
     pub(crate) macros: crate::macros::State,
+    scene_macros: Option<crate::macros::State>,
     pub kind: ModuleKind,
     waterfall: Waterfall,
-    sphere: Sphere,
+    sphere: SpectralSurface,
+    cylinder: SpectralSurface,
+    rings: Rings,
     spectrum: Spectrum,
     waveform: Waveform,
     spectrogram: Spectrogram,
@@ -195,7 +217,7 @@ pub struct ModulePane {
     veroni: Veroni,
     strata: Strata,
     flux: Flux,
-    active_sections: [usize; 10],
+    active_sections: [usize; 12],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -205,7 +227,9 @@ pub struct ModulePane {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ModuleSettings {
     Waterfall(waterfall::WaterfallSettings),
-    Sphere(sphere::SphereSettings),
+    Sphere(spectral_surface::SurfaceSettings),
+    Cylinder(spectral_surface::SurfaceSettings),
+    Rings(rings::RingsSettings),
     Spectrum(spectrum::SpectrumSettings),
     Waveform(waveform::WaveformSettings),
     Spectrogram(spectrogram::SpectrogramSettings),
@@ -228,6 +252,8 @@ impl ModuleSettings {
 
     pub fn kind(&self) -> ModuleKind {
         match self {
+            Self::Rings(_) => ModuleKind::Rings,
+            Self::Cylinder(_) => ModuleKind::Cylinder,
             Self::Sphere(_) => ModuleKind::Sphere,
             Self::Waterfall(_) => ModuleKind::Waterfall,
             Self::Spectrum(_) => ModuleKind::Spectrum,
@@ -250,23 +276,23 @@ pub struct PaneState {
     pub instance_id: String,
     pub kind: ModuleKind,
     #[serde(deserialize_with = "decode_sections")]
-    pub sections: [usize; 10],
+    pub sections: [usize; 12],
     #[serde(deserialize_with = "decode_module_settings")]
     pub settings: Vec<ModuleSettings>,
 }
 
-// Upgrade workspaces and view presets from earlier six- through nine-component schemas.
+// Upgrade workspaces and view presets from earlier six- through eleven-component schemas.
 // Only complete known legacy sets are upgraded; malformed sets still fail validation.
 fn decode_sections<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<[usize; 10], D::Error> {
+) -> Result<[usize; 12], D::Error> {
     let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
-    if !(6..=10).contains(&values.len()) {
+    if !(6..=12).contains(&values.len()) {
         return Err(serde::de::Error::custom(
-            "expected six to ten module sections",
+            "expected six to twelve module sections",
         ));
     }
-    let mut sections = [0; 10];
+    let mut sections = [0; 12];
     sections[..values.len()].copy_from_slice(&values);
     Ok(sections)
 }
@@ -275,7 +301,7 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<ModuleSettings>, D::Error> {
     let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
     let legacy_len = settings.len();
-    if (6..=9).contains(&legacy_len)
+    if (6..=11).contains(&legacy_len)
         && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
             settings
                 .iter()
@@ -297,9 +323,17 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
         if legacy_len <= 8 {
             settings.push(ModuleSettings::Flux(Flux::default().settings_snapshot()));
         }
-        settings.push(ModuleSettings::Sphere(
-            Sphere::default().settings_snapshot(),
-        ));
+        if legacy_len <= 9 {
+            settings.push(ModuleSettings::Sphere(
+                SpectralSurface::default().settings_snapshot(),
+            ));
+        }
+        if legacy_len <= 10 {
+            settings.push(ModuleSettings::Cylinder(
+                SpectralSurface::cylinder().settings_snapshot(),
+            ));
+        }
+        settings.push(ModuleSettings::Rings(Rings::default().settings_snapshot()));
     }
     Ok(settings)
 }
@@ -401,6 +435,8 @@ impl ModulePane {
             ModuleKind::Veroni => ModuleSettings::Veroni(self.veroni.settings_snapshot()),
             ModuleKind::Strata => ModuleSettings::Strata(self.strata.settings_snapshot()),
             ModuleKind::Flux => ModuleSettings::Flux(self.flux.settings_snapshot()),
+            ModuleKind::Rings => ModuleSettings::Rings(self.rings.settings_snapshot()),
+            ModuleKind::Cylinder => ModuleSettings::Cylinder(self.cylinder.settings_snapshot()),
             ModuleKind::Sphere => ModuleSettings::Sphere(self.sphere.settings_snapshot()),
             ModuleKind::Waterfall => ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
             ModuleKind::Spectrum => ModuleSettings::Spectrum(self.spectrum.settings_snapshot()),
@@ -425,6 +461,8 @@ impl ModulePane {
             ModuleSettings::Veroni(settings) => self.veroni.apply_settings(settings),
             ModuleSettings::Strata(settings) => self.strata.apply_settings(settings),
             ModuleSettings::Flux(settings) => self.flux.apply_settings(settings),
+            ModuleSettings::Rings(settings) => self.rings.apply_settings(settings),
+            ModuleSettings::Cylinder(settings) => self.cylinder.apply_settings(settings),
             ModuleSettings::Sphere(settings) => self.sphere.apply_settings(settings),
             ModuleSettings::Waterfall(settings) => self.waterfall.apply_settings(settings),
             ModuleSettings::Spectrum(settings) => self.spectrum.apply_settings(settings),
@@ -453,6 +491,8 @@ impl ModulePane {
                 ModuleSettings::Strata(self.strata.settings_snapshot()),
                 ModuleSettings::Flux(self.flux.settings_snapshot()),
                 ModuleSettings::Sphere(self.sphere.settings_snapshot()),
+                ModuleSettings::Cylinder(self.cylinder.settings_snapshot()),
+                ModuleSettings::Rings(self.rings.settings_snapshot()),
             ],
         }
     }
@@ -476,9 +516,12 @@ impl ModulePane {
         Self {
             instance_id: new_instance_id(),
             macros: crate::macros::State::default(),
+            scene_macros: None,
             kind,
             waterfall: Waterfall::default(),
-            sphere: Sphere::default(),
+            sphere: SpectralSurface::default(),
+            cylinder: SpectralSurface::cylinder(),
+            rings: Rings::default(),
             spectrum: Spectrum::default(),
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
@@ -487,7 +530,7 @@ impl ModulePane {
             veroni: Veroni::default(),
             strata: Strata::default(),
             flux: Flux::default(),
-            active_sections: [0; 10],
+            active_sections: [0; 12],
             inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
@@ -499,6 +542,8 @@ impl ModulePane {
         self.last_capture = 0;
         self.waterfall.clear();
         self.sphere.clear();
+        self.cylinder.clear();
+        self.rings.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -511,6 +556,8 @@ impl ModulePane {
         self.paused_duration = Duration::ZERO;
         self.waterfall.clear();
         self.sphere.clear();
+        self.cylinder.clear();
+        self.rings.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -541,8 +588,10 @@ impl ModulePane {
         }
     }
 
-    fn reset_settings(&mut self) {
+    pub(crate) fn reset_settings(&mut self) {
         match self.kind {
+            ModuleKind::Rings => self.rings.reset_settings(),
+            ModuleKind::Cylinder => self.cylinder.reset_settings(),
             ModuleKind::Sphere => self.sphere.reset_settings(),
             ModuleKind::Waterfall => self.waterfall.reset_settings(),
             ModuleKind::Spectrum => self.spectrum.reset_settings(),
@@ -574,7 +623,7 @@ impl ModulePane {
         }
     }
 
-    fn import_legacy_macros(&mut self) {
+    pub(crate) fn import_legacy_macros(&mut self) {
         for kind in [ModuleKind::Flux, ModuleKind::Veroni, ModuleKind::Strata] {
             if self.macros.banks[kind as usize]
                 .iter()
@@ -682,6 +731,7 @@ impl ModulePane {
                         invert: r.invert,
                         output_min: r.output_min,
                         output_max: r.output_max,
+                        ..Default::default()
                     };
                     imported.push(c.target);
                 }
@@ -692,12 +742,42 @@ impl ModulePane {
             }
         }
     }
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+    pub(crate) fn set_scene_macros(&mut self, macros: &crate::macros::scene::SceneMacros) {
+        let mut state = crate::macros::State::default();
+        for kind in ModuleKind::ALL {
+            for (index, slot) in macros.slots.iter().enumerate() {
+                if slot
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.pane == self.instance_id && target.kind == kind)
+                {
+                    state.banks[kind as usize][index] = slot.clone();
+                }
+            }
+        }
+        self.scene_macros = Some(state);
+    }
+    fn performance_state(&self) -> &crate::macros::State {
+        self.scene_macros.as_ref().unwrap_or(&self.macros)
+    }
+    pub(crate) fn apply_macro_settings(&mut self, settings: &ModuleSettings) {
+        let kind = self.kind;
+        self.kind = settings.kind();
+        self.apply_live_settings(settings);
+        self.kind = kind;
+    }
+    #[cfg(test)]
     pub fn toggle_performance(&mut self) {
         self.macros.open = !self.macros.open;
     }
+    #[cfg(test)]
     pub fn performance_height(&self, _width: f32) -> Option<f32> {
-        self.macros.open.then_some(234.0)
+        self.macros.open.then_some(220.0)
     }
+    #[cfg(test)]
     pub fn performance_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -739,7 +819,7 @@ impl ModulePane {
             ui,
             &self.instance_id,
             self.kind,
-            &self.macros,
+            self.performance_state(),
             &self.copy_settings(),
         );
         ui.data_mut(|d| {
@@ -754,6 +834,8 @@ impl ModulePane {
         });
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         match self.kind {
+            ModuleKind::Rings => self.rings.controls(ui),
+            ModuleKind::Cylinder => self.cylinder.controls(ui),
             ModuleKind::Sphere => self.sphere.controls(ui),
             ModuleKind::Waterfall => self.waterfall.controls(ui),
             ModuleKind::Spectrum => self.spectrum.controls(ui, frame),
@@ -778,7 +860,7 @@ impl ModulePane {
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, section.title())
             });
-            if response.clone().on_hover_text(section.title()).clicked() {
+            if response.clone().help_text(section.title()).clicked() {
                 self.select_section(section);
             }
         }
@@ -792,24 +874,16 @@ impl ModulePane {
                 ui.data_mut(|d| d.insert_temp(ui.id().with("active-module-section"), section));
                 self.section_controls(ui, frame);
             });
-            egui::Frame::new().inner_margin(8).show(ui, |ui| {
-                if ui
-                    .small_button("Reset component")
-                    .help_text("Reset all parameters of this component; keep captured history.")
-                    .clicked()
-                {
-                    self.reset_settings();
-                }
-            });
         });
     }
 
     pub fn sections(&self) -> &'static [SettingsSection] {
         use SettingsSection::*;
         match self.kind {
-            ModuleKind::Waterfall | ModuleKind::Sphere => {
+            ModuleKind::Waterfall | ModuleKind::Sphere | ModuleKind::Cylinder => {
                 &[Geometry, Frequency, Response, Appearance, Camera]
             }
+            ModuleKind::Rings => &[Geometry, Channels, TimeWindow, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
             ModuleKind::Waveform => &[Channels, TimeWindow, Amplitude, Appearance],
@@ -847,6 +921,7 @@ impl ModulePane {
             }
             let time = frame.time - self.paused_duration;
             match self.kind {
+                ModuleKind::Cylinder => self.cylinder.ingest(frame, time),
                 ModuleKind::Sphere => self.sphere.ingest(frame, time),
                 ModuleKind::Waterfall => self.waterfall.ingest(frame, time),
                 ModuleKind::Spectrogram => self.spectrogram.ingest(frame, time),
@@ -872,13 +947,13 @@ impl ModulePane {
         let frozen = self.frozen.is_some();
         let live = live || self.frozen.is_some();
         let restore = if self
-            .macros
+            .performance_state()
             .has_modulation(self.kind, frame.signals.as_deref())
         {
             let mut settings = self.copy_settings();
-            let restore = self
-                .macros
-                .apply(self.kind, &mut settings, frame.signals.as_deref());
+            let restore =
+                self.performance_state()
+                    .apply(self.kind, &mut settings, frame.signals.as_deref());
             if !restore.is_empty() {
                 self.apply_live_settings(&settings);
             }
@@ -891,6 +966,8 @@ impl ModulePane {
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
+            ModuleKind::Rings => self.rings.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Cylinder => self.cylinder.draw(ui, rect, frame, theme, now),
             ModuleKind::Sphere => self.sphere.draw(ui, rect, frame, theme, now),
             ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, false),
             ModuleKind::Spectrum => self
@@ -1172,7 +1249,7 @@ pub(crate) fn property_row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(
         );
         label_ui
             .add(egui::Label::new(label).truncate())
-            .on_hover_text(label);
+            .help_fallback(|| format!("{label}\n{}", crate::help::control_description(label)));
         let (rect, _) = ui.allocate_exact_size(
             egui::vec2((width * 0.57 - ui.spacing().item_spacing.x).max(30.0), 22.0),
             egui::Sense::hover(),
@@ -1184,7 +1261,9 @@ pub(crate) fn property_row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         control(&mut field);
-    });
+    })
+    .response
+    .help_fallback(|| format!("{label}\n{}", crate::help::control_description(label)));
 }
 
 fn label(painter: &egui::Painter, position: Pos2, text: impl ToString, color: Color32) {
@@ -1792,9 +1871,19 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(rows.len(), 12);
+                let names: std::collections::HashSet<_> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text.starts_with("Macro ") => {
+                            Some(t.galley.job.text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(names.len(), 12);
                 assert!(rows.iter().all(|y| (*y - rows[0]).abs() < 0.01));
-                assert!(out.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.starts_with("Drag parameter labels"))));
+                assert!(!out.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if ["Hide", "Advanced", "Macros"].contains(&t.galley.job.text.as_str()) || t.galley.job.text.starts_with("Drag parameter labels"))));
                 pane.toggle_performance();
                 assert!(pane.performance_height(width).is_none());
                 pane.toggle_performance();

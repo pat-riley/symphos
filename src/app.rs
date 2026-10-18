@@ -23,6 +23,10 @@ pub struct SymphosApp {
     signal_runtime: Option<crate::signals::Runtime>,
     signal_ui: crate::signals::ui::Shared,
     project_dialog: crate::project::Dialog,
+    scenes: crate::scenes::Book,
+    saved_project: Option<Vec<u8>>,
+    scene_browser: crate::scenes::Browser,
+    pending_scene: Option<crate::scenes::Action>,
     engine: AudioEngine,
     #[cfg(feature = "development")]
     development: Option<crate::development::Development>,
@@ -48,6 +52,7 @@ pub struct SymphosApp {
     display_fps: f32,
     last_frame: Instant,
     panes: Vec<ModulePane>,
+    scene_macros: crate::macros::scene::SceneMacros,
     tiles: Option<Tile>,
     storage: Storage,
     manager: Manager,
@@ -56,6 +61,9 @@ pub struct SymphosApp {
     selected_pane: usize,
     sidebar_open: bool,
     sidebar_width: f32,
+    signals_height: f32,
+    inspecting_signal: bool,
+    inspecting_macro: Option<usize>,
     help_open: bool,
     global_bar: GlobalBar,
 }
@@ -74,7 +82,12 @@ impl SymphosApp {
         let mut app = Self {
             signal_runtime,
             signal_ui: Default::default(),
+            scene_macros: Default::default(),
             project_dialog: Default::default(),
+            scenes: Default::default(),
+            saved_project: None,
+            scene_browser: Default::default(),
+            pending_scene: None,
             engine,
             #[cfg(feature = "development")]
             development: crate::development::Development::new(),
@@ -108,6 +121,9 @@ impl SymphosApp {
             selected_pane: 0,
             sidebar_open: true,
             sidebar_width: DEFAULT_SETTINGS_WIDTH,
+            signals_height: workspace::default_signals_height(),
+            inspecting_signal: false,
+            inspecting_macro: None,
             help_open: false,
             global_bar: GlobalBar::default(),
             tiles: Some(Tile::default_view()),
@@ -117,6 +133,17 @@ impl SymphosApp {
             pending_close: None,
         };
         if let Some(state) = session {
+            app.scene_macros = state.macros.clone().unwrap_or_else(|| {
+                crate::macros::scene::SceneMacros::from_legacy(&state.panes, state.selected_pane)
+            });
+            app.scenes = state.scenes.clone().unwrap_or_default();
+            app.project_dialog.current_path = state.project_path.clone();
+            if let Some(path) = &state.project_path {
+                app.project_dialog.path = path.display().to_string();
+                app.saved_project = crate::project::Project::open(path)
+                    .ok()
+                    .and_then(|p| serde_json::to_vec(&p).ok());
+            }
             app.signal_ui
                 .lock()
                 .unwrap()
@@ -134,6 +161,7 @@ impl SymphosApp {
             app.selected_pane = state.selected_pane;
             app.sidebar_open = state.sidebar_open;
             app.sidebar_width = state.sidebar_width;
+            app.signals_height = state.signals_height;
             app.help_open = state.help_open;
             app.storage.active = state.active_preset;
             *app.engine
@@ -145,6 +173,7 @@ impl SymphosApp {
             app.global_bar.stereo = state.meter_stereo;
             app.global_bar.channel = state.meter_channel;
         }
+        app.scenes.store(app.capture_scene());
         app.apply_appearance(&context.egui_ctx);
         app
     }
@@ -165,7 +194,10 @@ impl SymphosApp {
                     .map(|rect| [(rect.left() * zoom).round(), (rect.top() * zoom).round()]),
             )
         });
-        Session {
+        let mut state = Session {
+            macros: Some(self.scene_macros.clone()),
+            project_path: self.project_dialog.current_path.clone(),
+            scenes: None,
             signals: self
                 .signal_ui
                 .lock()
@@ -191,6 +223,7 @@ impl SymphosApp {
             focused_pane: None,
             sidebar_open: self.sidebar_open,
             sidebar_width: self.sidebar_width,
+            signals_height: self.signals_height,
             help_open: self.help_open,
             analysis: self
                 .engine
@@ -203,10 +236,206 @@ impl SymphosApp {
             meter_channel: self.global_bar.channel,
             window_size: size,
             window_position: position,
+        };
+        let mut scenes = self.scenes.clone();
+        scenes.store(crate::project::SceneState::capture(state.clone()));
+        state.scenes = Some(scenes);
+        state
+    }
+
+    fn capture_scene(&self) -> crate::project::SceneState {
+        crate::project::SceneState {
+            macros: Some(self.scene_macros.clone()),
+            signals: self
+                .signal_ui
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bank
+                .clone(),
+            panes: self.panes.iter().map(ModulePane::snapshot).collect(),
+            layout: self.tiles.clone(),
+            selected_pane: self.selected_pane,
+            analysis: self
+                .engine
+                .analysis()
+                .settings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        }
+    }
+
+    fn apply_scene(&mut self, state: crate::project::SceneState) {
+        self.inspecting_macro = None;
+        self.scene_macros = state.macros.clone().unwrap_or_else(|| {
+            crate::macros::scene::SceneMacros::from_legacy(&state.panes, state.selected_pane)
+        });
+        if let Some(ctx) = &self.context {
+            crate::macros::clear_clipboard(ctx);
+        }
+        self.panes = state
+            .panes
+            .iter()
+            .map(|state| {
+                let mut pane = ModulePane::new(state.kind);
+                pane.restore(state);
+                pane
+            })
+            .collect();
+        self.tiles = state.layout;
+        self.selected_pane = state.selected_pane;
+        self.signal_ui
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace_bank(state.signals);
+        // Detector/envelope state belongs to the scene; the underlying audio engine
+        // and physical input connection remain running throughout the switch.
+        if self.signal_runtime.is_some() {
+            self.signal_runtime = Some(crate::signals::Runtime::start(
+                self.engine.analysis().snapshot.clone(),
+            ));
+        }
+        *self
+            .engine
+            .analysis()
+            .settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = state.analysis;
+        self.panel_fullscreen = None;
+        self.pending_close = None;
+        self.storage.active = "custom".into();
+        self.storage.modified = false;
+        self.scene_browser = Default::default();
+    }
+
+    fn scene_action(&mut self, action: crate::scenes::Action) {
+        use crate::scenes::Action;
+        self.scenes.store(self.capture_scene());
+        let state = match action {
+            Action::Switch(id) => {
+                if id == self.scenes.active_scene {
+                    return;
+                }
+                self.scenes.switch(id)
+            }
+            Action::New => {
+                let state = crate::project::SceneState {
+                    macros: Some(Default::default()),
+                    signals: Default::default(),
+                    panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
+                    layout: None,
+                    selected_pane: 0,
+                    analysis: self.capture_scene().analysis,
+                };
+                let name = format!("Scene {}", self.scenes.next_scene_id);
+                self.scenes.insert(name, state.clone()).map(|_| state)
+            }
+            Action::Duplicate => {
+                let Some(scene) = self.scenes.current().cloned() else {
+                    return;
+                };
+                let name = format!("{} copy", scene.name.chars().take(24).collect::<String>());
+                self.scenes
+                    .insert(name, scene.state.clone())
+                    .map(|_| scene.state)
+            }
+            Action::Rename(id, name) => {
+                self.scenes.rename(id, &name);
+                None
+            }
+            Action::Move(id, step) => {
+                self.scenes.move_by(id, step);
+                None
+            }
+            Action::Delete(id) => self.scenes.remove(id),
+            Action::Presets => {
+                self.manager.open_presets(Scope::View);
+                None
+            }
+        };
+        if let Some(state) = state {
+            self.apply_scene(state);
+        }
+    }
+
+    fn project_changed(&self, ctx: &egui::Context) -> bool {
+        let current = crate::project::Project::capture(self.workspace(ctx));
+        self.saved_project
+            .as_ref()
+            .is_none_or(|saved| serde_json::to_vec(&current).as_ref().ok() != Some(saved))
+    }
+    fn new_project(&mut self, ctx: &egui::Context) {
+        let state = crate::project::SceneState {
+            macros: Some(Default::default()),
+            signals: Default::default(),
+            panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
+            layout: None,
+            selected_pane: 0,
+            analysis: Default::default(),
+        };
+        self.scenes = crate::scenes::Book::new(state.clone());
+        self.apply_scene(state);
+        self.project_dialog = Default::default();
+        self.saved_project =
+            serde_json::to_vec(&crate::project::Project::capture(self.workspace(ctx))).ok();
+    }
+    fn confirm_project_replacement(&mut self, ctx: &egui::Context) {
+        if !self.project_dialog.pending_new && self.project_dialog.pending_open.is_none() {
+            return;
+        }
+        if self.project_dialog.waiting_for_save {
+            if !self.project_changed(ctx) {
+                self.finish_project_replacement(ctx);
+                return;
+            }
+            if self.project_dialog.open {
+                return;
+            }
+            self.project_dialog.waiting_for_save = false;
+        }
+        let mut choice = 0;
+        egui::Modal::new(egui::Id::new("replace-project")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("Save project changes?");
+            ui.label("This replaces the current project and all of its scenes.");
+            ui.horizontal(|ui| {
+                if ui.button("Save all scenes").clicked() {
+                    choice = 1;
+                }
+                if ui.button("Discard changes").clicked() {
+                    choice = 2;
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = 3;
+                }
+            });
+        });
+        if choice == 1 {
+            self.project_action(ctx, crate::project_menu::Action::Save);
+            self.project_dialog.waiting_for_save = self.project_dialog.open;
+        }
+        if choice == 2 || (choice == 1 && !self.project_changed(ctx)) {
+            self.finish_project_replacement(ctx);
+        } else if choice == 3 {
+            self.project_dialog.pending_open = None;
+            self.project_dialog.pending_new = false;
+            self.project_dialog.waiting_for_save = false;
+        }
+    }
+    fn finish_project_replacement(&mut self, ctx: &egui::Context) {
+        self.project_dialog.waiting_for_save = false;
+        self.project_dialog.open = false;
+        let path = self.project_dialog.pending_open.take();
+        let new = std::mem::take(&mut self.project_dialog.pending_new);
+        if new {
+            self.new_project(ctx);
+        } else if let Some(path) = path {
+            self.open_project(&path);
         }
     }
 
     fn project_controls(&mut self, ctx: &egui::Context) {
+        self.confirm_project_replacement(ctx);
         if !self.project_dialog.open {
             return;
         }
@@ -224,7 +453,7 @@ impl SymphosApp {
         let mut save = false;
         let mut open = false;
         egui::Window::new("Project").collapsible(false).default_width(560.0).open(&mut self.project_dialog.open).show(ctx,|ui| {
-            ui.label("Save signals, mappings, components, layout, palettes and performance controls together.");
+            ui.label("Save every scene, including its signals, mappings, visuals and macros.");
             ui.small("GUI and device preferences stay on this computer.");
             ui.label("Project file (.symphos.json)");
             ui.add(egui::TextEdit::singleline(&mut self.project_dialog.path).desired_width(f32::INFINITY));
@@ -259,7 +488,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let project = crate::project::Project::capture(self.workspace(ctx));
         match project.save(path) {
             Ok(()) => {
-                self.project_dialog.message = "Project saved.".into();
+                self.saved_project = serde_json::to_vec(&project).ok();
+                self.project_dialog.message = "All scenes saved.".into();
                 self.project_dialog.current_path = Some(path.into());
                 self.remember_project(path);
             }
@@ -272,32 +502,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     fn open_project(&mut self, path: &std::path::Path) {
         match crate::project::Project::open(path) {
             Ok(project) => {
-                self.panes = project
-                    .panes
-                    .iter()
-                    .map(|state| {
-                        let mut p = ModulePane::new(state.kind);
-                        p.restore(state);
-                        p
-                    })
-                    .collect();
-                self.tiles = project.layout;
-                self.selected_pane = project.selected_pane;
-                self.signal_ui
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .replace_bank(project.signals);
-                self.signal_runtime = Some(crate::signals::Runtime::start(
-                    self.engine.analysis().snapshot.clone(),
-                ));
-                *self
-                    .engine
-                    .analysis()
-                    .settings
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = project.analysis;
-                self.panel_fullscreen = None;
-                self.storage.active = "custom".into();
+                self.saved_project = serde_json::to_vec(&project).ok();
+                self.scenes = project.scenes;
+                let state = self
+                    .scenes
+                    .current()
+                    .expect("validated project has an active scene")
+                    .state
+                    .clone();
+                self.apply_scene(state);
                 self.project_dialog.message = "Project opened.".into();
                 self.project_dialog.current_path = Some(path.into());
                 self.remember_project(path);
@@ -316,15 +529,27 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         );
     }
     fn project_action(&mut self, ctx: &egui::Context, action: crate::project_menu::Action) {
+        if action == crate::project_menu::Action::Settings {
+            self.settings_window.open = true;
+            return;
+        }
+        if action == crate::project_menu::Action::New {
+            if self.project_changed(ctx) {
+                self.project_dialog.pending_new = true;
+            } else {
+                self.new_project(ctx);
+            }
+            return;
+        }
+        if action == crate::project_menu::Action::Save
+            && let Some(path) = self.project_dialog.current_path.clone()
+        {
+            self.save_project(ctx, &path);
+            return;
+        }
         #[cfg(target_os = "macos")]
         {
             use crate::project_menu::Action;
-            if action == Action::Save
-                && let Some(path) = self.project_dialog.current_path.clone()
-            {
-                self.save_project(ctx, &path);
-                return;
-            }
             let save = action != Action::Open;
             let initial = if self.project_dialog.path.is_empty() {
                 self.storage
@@ -338,6 +563,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             if let Some(path) = crate::project_menu::choose(save, &initial) {
                 if save {
                     self.save_project(ctx, &path);
+                } else if self.project_changed(ctx) {
+                    self.project_dialog.pending_open = Some(path);
                 } else {
                     self.open_project(&path);
                 }
@@ -426,6 +653,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 
     fn apply_appearance(&mut self, context: &egui::Context) {
         let theme = self.appearance.theme.resolve(&self.automatic_theme);
+        crate::window_chrome::apply(&theme);
         if self.theme != theme {
             self.theme = theme;
             apply_style(context, &self.theme);
@@ -475,6 +703,40 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if settings_header(ui, self.panes[self.selected_pane].kind, &metadata).clicked() {
             self.sidebar_open = false;
         }
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button("Component presets…").clicked() {
+                        self.manager.open_presets(Scope::Component);
+                    }
+                    if ui.small_button("Reset component")
+                        .help_text("Reset all parameters of this component; keep captured history.")
+                        .clicked()
+                    {
+                        self.panes[self.selected_pane].reset_settings();
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button("Copy settings")
+                        .help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.")
+                        .clicked()
+                    {
+                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
+                    }
+                    let compatible = self.settings_clipboard.as_ref()
+                        .is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
+                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
+                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.")
+                        .clicked()
+                    {
+                        self.paste_module_settings();
+                    }
+                });
+                if let Some(settings) = &self.settings_clipboard {
+                    ui.weak(format!("Clipboard: {}", settings.kind().label()));
+                }
+            });
         let bounds = ui.available_rect_before_wrap();
         let content_rect = workspace_ui::inspector_rail(
             ui,
@@ -492,8 +754,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         );
         properties.set_clip_rect(content_rect.intersect(ui.clip_rect()));
         properties.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), content_rect));
-        settings_scroll_area(self.selected_pane, &self.panes[self.selected_pane])
-            .show(&mut properties, |ui| {
+        settings_scroll_area(self.selected_pane, &self.panes[self.selected_pane]).show(
+            &mut properties,
+            |ui| {
                 ui.push_id(self.selected_pane, |ui| {
                     ui.data_mut(|d| {
                         d.insert_temp(
@@ -507,20 +770,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     });
                     self.panes[self.selected_pane].inspector_controls(ui, frame)
                 });
-                egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.small_button("Copy settings").help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.").clicked() {
-                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
-                    }
-                    let compatible = self.settings_clipboard.as_ref().is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
-                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
-                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.").clicked() {
-                        self.paste_module_settings();
-                    }
-                });
-                if let Some(settings) = &self.settings_clipboard { ui.weak(format!("Clipboard: {}", settings.kind().label())); }
-                });
-            });
+            },
+        );
         ui.data_mut(|data| {
             data.remove::<Rect>(egui::Id::new("inspector-bounds"));
             data.remove::<crate::macros::InspectorIndicators>(egui::Id::new(
@@ -547,6 +798,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     }
 
     fn inspect_panel(&mut self, index: usize) {
+        self.inspecting_signal = false;
+        self.inspecting_macro = None;
         self.selected_pane = index;
         self.sidebar_open = true;
         self.panel_fullscreen = None;
@@ -573,6 +826,16 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             match crate::shortcuts::take_action(ctx, self.manager.modal_open()) {
                 Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
                 Some(Action::Help) => self.help_open = !self.help_open,
+                Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
+                Some(Action::Performance) => {
+                    let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+                    if panel.show_signals {
+                        panel.show_signals = false;
+                        self.scene_macros.open = true;
+                    } else {
+                        self.scene_macros.open = !self.scene_macros.open;
+                    }
+                }
                 Some(Action::Bindings) => self.show_shortcuts = true,
                 Some(Action::Settings) => self.settings_window.open = true,
                 _ => {}
@@ -607,11 +870,18 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 if self.panel_fullscreen.is_some() {
                     self.fullscreen_macros = !self.fullscreen_macros;
                     if self.fullscreen_macros {
-                        self.panes[self.selected_pane].macros.open = true;
+                        self.scene_macros.open = true;
                     }
                     self.fullscreen_hint_started = None;
                 } else {
-                    self.panes[self.selected_pane].toggle_performance();
+                    let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+                    if panel.show_signals {
+                        panel.show_signals = false;
+                        self.scene_macros.open = true;
+                    } else {
+                        self.scene_macros.open = !self.scene_macros.open;
+                    }
+                    self.inspecting_signal = false;
                 }
             }
             Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
@@ -689,6 +959,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }) && ui.rect_contains_pointer(rect)
         {
             self.selected_pane = index;
+            self.inspecting_signal = false;
+            self.inspecting_macro = None;
         }
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -711,7 +983,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 if icons::sized_button(ui, Icon::Close, false, 24.0, "Close pane. Its neighbor expands to fill the space.").clicked() {
                     self.pending_close = Some(index);
                 }
-                if icons::sized_button(ui, Icon::Eye, self.sidebar_open && self.selected_pane == index,
+                if icons::sized_button(ui, Icon::Eye, self.sidebar_open && !self.inspecting_signal && self.inspecting_macro.is_none() && self.selected_pane == index,
                     24.0, "Inspect this panel. Open all its parameters in the right sidebar.").clicked() {
                     self.inspect_panel(index);
                 }
@@ -745,6 +1017,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     }
 
     fn close_pane(&mut self, id: usize) {
+        self.scene_macros
+            .remove_component(self.panes[id].instance_id());
         self.panel_fullscreen = None;
         self.fullscreen_hint_started = None;
         if let Some(tree) = self.tiles.take() {
@@ -905,14 +1179,18 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let tree = self.tiles.as_ref()?;
         Some(match scope {
             Scope::Layout => PresetContent::Layout(tree.canonical()),
-            Scope::View => PresetContent::View {
-                layout: tree.canonical(),
-                panes: tree
+            Scope::View => {
+                let panes: Vec<_> = tree
                     .ids()
                     .iter()
                     .map(|id| self.panes[*id].snapshot())
-                    .collect(),
-            },
+                    .collect();
+                PresetContent::View {
+                    macros: Some(Box::new(self.scene_macros.for_panes(&panes))),
+                    layout: tree.canonical(),
+                    panes,
+                }
+            }
             Scope::Component => {
                 PresetContent::Component(Box::new(self.panes[self.selected_pane].copy_settings()))
             }
@@ -946,7 +1224,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     return;
                 }
             }
-            PresetContent::View { layout, panes } => {
+            PresetContent::View {
+                layout,
+                panes,
+                macros,
+            } => {
+                self.scene_macros = macros
+                    .clone()
+                    .map(|m| *m)
+                    .unwrap_or_else(|| crate::macros::scene::SceneMacros::from_legacy(panes, 0));
                 self.panes = panes
                     .iter()
                     .map(|state| {
@@ -1038,18 +1324,19 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         now: Instant,
     ) {
+        for pane in &mut self.panes {
+            pane.set_scene_macros(&self.scene_macros);
+        }
         if let Some(index) = self.panel_fullscreen {
             let mut panel_rect = rect;
             if self.fullscreen_macros
-                && let Some(height) = self.panes[index].performance_height(rect.width())
+                && let Some(height) = self.scene_macros.height()
             {
                 let height = height.min((rect.height() - 150.0).max(30.0));
                 let bar_rect =
                     Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - height), rect.max);
                 panel_rect.max.y = bar_rect.top() - 6.0;
-                if self.panes[index].performance_bar(ui, bar_rect, &self.theme, index) {
-                    self.inspect_panel(index);
-                }
+                self.scene_macro_bar(ui, bar_rect);
             }
             self.pane(ui, index, panel_rect, snapshot);
             if let Some(id) = self.pending_close.take() {
@@ -1099,6 +1386,35 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         );
     }
 
+    fn scene_macro_bar(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        ui.data_mut(|d| {
+            let key = egui::Id::new(crate::macros::INSPECT_SELECTION);
+            if let Some(index) = self.inspecting_macro.filter(|_| self.sidebar_open) {
+                d.insert_temp(key, index);
+            } else {
+                d.remove::<usize>(key);
+            }
+        });
+        self.scene_macros.bar(
+            ui,
+            rect,
+            &self.theme,
+            &format!("scene-{}", self.scenes.active_scene),
+            &mut self.panes,
+        );
+        if let Some(index) =
+            ui.data_mut(|d| d.remove_temp::<usize>(egui::Id::new(crate::macros::INSPECT_REQUEST)))
+        {
+            self.inspecting_macro = Some(index);
+            self.inspecting_signal = false;
+            self.sidebar_open = true;
+            self.panel_fullscreen = None;
+            self.fullscreen_hint_started = None;
+        }
+        for pane in &mut self.panes {
+            pane.set_scene_macros(&self.scene_macros);
+        }
+    }
     fn normal_workspace(&mut self, ui: &mut egui::Ui, rect: Rect, snapshot: &AnalysisFrame) {
         let navigation = Rect::from_min_max(
             rect.min,
@@ -1130,9 +1446,11 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             #[cfg(not(target_os = "macos"))]
             ui.menu_button("File", |ui| {
                 for (label, action) in [
+                    ("New Project", crate::project_menu::Action::New),
                     ("Open Project…", crate::project_menu::Action::Open),
                     ("Save Project", crate::project_menu::Action::Save),
                     ("Save Project As…", crate::project_menu::Action::SaveAs),
+                    ("Settings…", crate::project_menu::Action::Settings),
                 ] {
                     if ui.button(label).clicked() {
                         file_action = Some(action);
@@ -1140,25 +1458,32 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     }
                 }
             });
-            self.manager.left_toolbar(ui);
-            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-            if ui
-                .add_sized(
-                    [65.0, workspace_ui::NAV_CONTROL_HEIGHT],
-                    egui::Button::selectable(panel.show_signals, "Signals"),
-                )
-                .clicked()
-            {
-                panel.show_signals = true;
-            }
-            if ui
-                .add_sized(
-                    [76.0, workspace_ui::NAV_CONTROL_HEIGHT],
-                    egui::Button::selectable(!panel.show_signals, "Visualize"),
-                )
-                .clicked()
-            {
-                panel.show_signals = false;
+            let mut add = None;
+            ui.menu_button("Add New", |ui| {
+                for (heading, kinds) in [
+                    ("Instruments", &ModuleKind::ALL[..6]),
+                    ("Visualizers", &ModuleKind::ALL[6..]),
+                ] {
+                    ui.weak(heading);
+                    for &kind in kinds {
+                        if ui
+                            .add_enabled(
+                                self.open_panes().len() < MAX_PANES,
+                                egui::Button::new(kind.label()),
+                            )
+                            .clicked()
+                        {
+                            add = Some(kind);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                }
+            });
+            if let Some(kind) = add {
+                self.add_component(kind, self.selected_pane, Edge::Right);
+                self.inspecting_signal = false;
+                self.inspecting_macro = None;
             }
         });
         if let Some(action) = file_action.take() {
@@ -1169,72 +1494,69 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .show_signals;
-        if !signals_open && center.width() > 180.0 {
-            let actions = self.manager.preset_toolbar(
-                &mut workspace_ui::navigation_region(ui, center, "preset-toolbar", &self.theme),
-                &self.storage,
-                self.panes[self.selected_pane].kind,
-                self.tiles.is_some(),
-            );
-            self.manager_actions(actions);
+        if signals_open && self.tiles.is_none() {
+            self.inspecting_signal = true;
+            self.inspecting_macro = None;
+        }
+        if self.scenes.scenes.is_empty() {
+            self.scenes.store(self.capture_scene());
+        }
+        if center.width() > 180.0 {
+            self.pending_scene = self
+                .scene_browser
+                .toolbar(
+                    &mut workspace_ui::navigation_region(ui, center, "scene-toolbar", &self.theme),
+                    &self.scenes,
+                )
+                .or(self.pending_scene.take());
         }
         let mut nav = workspace_ui::navigation_region(ui, right, "navbar", &self.theme);
         nav.horizontal_centered(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add_enabled_ui(signals_open || self.tiles.is_some(), |ui| {
-                    let toggle = icons::sized_button(
-                        ui,
-                        Icon::Inspector,
-                        self.sidebar_open && (signals_open || self.tiles.is_some()),
-                        workspace_ui::NAV_CONTROL_HEIGHT,
-                        if self.sidebar_open {
-                            if signals_open {
-                                "Hide signal inspector · N"
+                ui.add_enabled_ui(
+                    signals_open || self.tiles.is_some() || self.inspecting_macro.is_some(),
+                    |ui| {
+                        let toggle = icons::sidebar_toggle(
+                            ui,
+                            self.sidebar_open
+                                && (signals_open
+                                    || self.tiles.is_some()
+                                    || self.inspecting_macro.is_some()),
+                            workspace_ui::NAV_CONTROL_HEIGHT,
+                            if self.sidebar_open {
+                                if self.inspecting_macro.is_some() {
+                                    "Hide macro inspector · N"
+                                } else if self.inspecting_signal {
+                                    "Hide signal inspector · N"
+                                } else {
+                                    "Hide component inspector · N"
+                                }
                             } else {
-                                "Hide component inspector · N"
-                            }
-                        } else {
-                            if signals_open {
-                                "Show signal inspector · N"
-                            } else {
-                                "Show component inspector · N"
-                            }
-                        },
-                    );
-                    toggle.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            signals_open || self.tiles.is_some(),
-                            "Toggle inspector",
-                        )
-                    });
-                    if toggle.clicked() {
-                        self.sidebar_open = !self.sidebar_open;
-                    }
-                });
-                let source = self.source_selector(ui);
-                let options = icons::sized_button(
-                    ui,
-                    Icon::Gear,
-                    false,
-                    source.rect.height(),
-                    "Open Settings · Cmd/Ctrl+,",
+                                if self.inspecting_macro.is_some() {
+                                    "Show macro inspector · N"
+                                } else if self.inspecting_signal {
+                                    "Show signal inspector · N"
+                                } else {
+                                    "Show component inspector · N"
+                                }
+                            },
+                        );
+                        toggle.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                signals_open
+                                    || self.tiles.is_some()
+                                    || self.inspecting_macro.is_some(),
+                                "Toggle inspector",
+                            )
+                        });
+                        if toggle.clicked() {
+                            self.sidebar_open = !self.sidebar_open;
+                        }
+                    },
                 );
-                if options.clicked() {
-                    self.settings_window.open = true;
-                }
             });
         });
-        if signals_open {
-            let area = Rect::from_min_max(egui::pos2(rect.left(), navigation.bottom()), rect.max);
-            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-            panel.inspector_width = self.sidebar_width;
-            panel.show(ui, area, snapshot, self.sidebar_open, &self.theme);
-            if std::mem::take(&mut panel.close_inspector) {
-                self.sidebar_open = false;
-            }
-            return;
-        }
         let content_bounds = Rect::from_min_max(
             Pos2::new(
                 rect.left()
@@ -1251,7 +1573,11 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let footer = Rect::from_min_max(
             Pos2::new(content_bounds.left(), rect.bottom() - 42.0),
             Pos2::new(
-                if self.sidebar_open && self.tiles.is_some() {
+                if self.sidebar_open
+                    && (self.tiles.is_some()
+                        || self.inspecting_signal
+                        || self.inspecting_macro.is_some())
+                {
                     rect.right() - settings_width(content_bounds, self.sidebar_width) - 10.0
                 } else {
                     rect.right() - 12.0
@@ -1260,20 +1586,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             ),
         );
         let mut footer_ui = ui.new_child(egui::UiBuilder::new().id_salt("footer").max_rect(footer));
-        let mut settings = self
-            .engine
-            .analysis()
-            .settings
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let settings_were_open = self.settings_window.open;
-        let reset = self.global_bar.show(
+        let signals_were_open = signals_open;
+        let mut signals_open = signals_open;
+        let mut macros_open = !signals_open && self.scene_macros.open;
+        let macros_were_open = macros_open;
+        self.global_bar.show(
             &mut footer_ui,
-            &mut settings,
             &mut self.help_open,
-            &mut self.settings_window.open,
-            &mut self.panes[self.selected_pane].macros.open,
+            &mut signals_open,
+            &mut macros_open,
             BarInfo {
                 frame: snapshot,
                 status: &self.status,
@@ -1281,17 +1602,22 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 fps: self.display_fps,
             },
         );
-        *self
-            .engine
-            .analysis()
-            .settings
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = settings;
-        if self.settings_window.open && !settings_were_open {
-            self.settings_window.category = settings::Category::Analysis;
+        self.scene_macros.open = macros_open;
+        if signals_open && !signals_were_open {
+            self.inspecting_signal = true;
+            self.inspecting_macro = None;
         }
-        if reset {
-            self.reset_modules();
+        {
+            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+            panel.show_signals = signals_open;
+            if std::mem::take(&mut panel.inspect_requested) {
+                self.inspecting_signal = true;
+                self.inspecting_macro = None;
+                self.sidebar_open = true;
+            }
+        }
+        if !signals_open || (macros_open && !macros_were_open) {
+            self.inspecting_signal = false;
         }
         let mut content = content_bounds;
         if self.manager.library_open {
@@ -1311,29 +1637,67 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         resize_settings(
             ui,
             content,
-            self.sidebar_open && self.tiles.is_some(),
+            self.sidebar_open
+                && (self.tiles.is_some()
+                    || self.inspecting_signal
+                    || self.inspecting_macro.is_some()),
             self.help_open,
             &mut self.sidebar_width,
         );
         let mut layout = workspace_layout(
             content,
-            self.sidebar_open && self.tiles.is_some(),
+            self.sidebar_open
+                && (self.tiles.is_some()
+                    || self.inspecting_signal
+                    || self.inspecting_macro.is_some()),
             self.help_open,
             self.sidebar_width,
         );
-        if self.tiles.is_some()
-            && let Some(height) =
-                self.panes[self.selected_pane].performance_height(layout.dashboard.width())
-        {
-            let performance_rect = dock_performance(&mut layout, height);
-            if self.panes[self.selected_pane].performance_bar(
-                ui,
-                performance_rect,
-                &self.theme,
-                self.selected_pane,
-            ) {
+        if signals_open {
+            let dock_bottom = layout
+                .help
+                .map_or(layout.dashboard.bottom(), |r| r.bottom());
+            let max_height = (dock_bottom - layout.dashboard.top() - 106.0).max(100.0);
+            let min_height = crate::signals::ui::MIN_DOCK_HEIGHT.min(max_height);
+            let height = self
+                .signals_height
+                .clamp(min_height, 1000.0)
+                .min(max_height);
+            let top = dock_bottom - height;
+            let grip = Rect::from_min_max(
+                Pos2::new(layout.dashboard.left(), top - 5.0),
+                Pos2::new(layout.dashboard.right(), top + 3.0),
+            );
+            let response = ui
+                .interact(grip, ui.id().with("signals-resize"), Sense::drag())
+                .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+                .help_text("Drag to resize Signals · double-click to reset");
+            if response.double_clicked() {
+                self.signals_height = workspace::default_signals_height();
+            } else if response.dragged()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                self.signals_height =
+                    (dock_bottom - pos.y).clamp(min_height, max_height.clamp(min_height, 1000.0));
+            }
+            if response.hovered() || response.dragged() {
+                ui.painter().hline(
+                    grip.x_range(),
+                    top - 1.0,
+                    Stroke::new(1.0, self.theme.muted.gamma_multiply(0.8)),
+                );
+            }
+            let dock = dock_performance(&mut layout, height);
+            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+            panel.show(ui, dock, snapshot, false, &self.theme);
+            if std::mem::take(&mut panel.inspect_requested) {
+                self.inspecting_signal = true;
+                self.inspecting_macro = None;
                 self.sidebar_open = true;
             }
+        } else if let Some(height) = self.scene_macros.height() {
+            let performance_rect = dock_performance(&mut layout, height);
+            self.scene_macro_bar(ui, performance_rect);
         }
         if let Some(sidebar_rect) = layout.sidebar {
             ui.painter()
@@ -1349,7 +1713,38 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     .max_rect(sidebar_rect),
             );
             sidebar.set_clip_rect(sidebar_rect.intersect(ui.clip_rect()));
-            self.sidebar(&mut sidebar, snapshot);
+            if let Some(index) = self.inspecting_macro {
+                let action = self.scene_macros.inspector(
+                    &mut sidebar,
+                    index,
+                    &self.theme,
+                    &mut self.panes,
+                    &self.signal_ui,
+                );
+                match action {
+                    crate::macros::scene::InspectAction::Close => self.sidebar_open = false,
+                    crate::macros::scene::InspectAction::Signal(id) => {
+                        let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+                        panel.selected = Some(id);
+                        panel.show_signals = true;
+                        self.scene_macros.open = false;
+                        self.inspecting_macro = None;
+                        self.inspecting_signal = true;
+                    }
+                    crate::macros::scene::InspectAction::None => {}
+                }
+                for pane in &mut self.panes {
+                    pane.set_scene_macros(&self.scene_macros);
+                }
+            } else if self.inspecting_signal {
+                let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+                panel.show_inspector(&mut sidebar, sidebar_rect, snapshot, &self.theme);
+                if std::mem::take(&mut panel.close_inspector) {
+                    self.sidebar_open = false;
+                }
+            } else {
+                self.sidebar(&mut sidebar, snapshot);
+            }
         }
         self.dashboard(ui, layout.dashboard, snapshot);
         if self.show_inspector {
@@ -1382,10 +1777,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             crate::issues::show(ui.ctx(), &mut self.show_issues, &details);
         }
         crate::shortcuts::show(ui.ctx(), &mut self.show_shortcuts);
-        let actions =
-            self.manager
-                .dialogs(ui.ctx(), &self.storage, self.panes[self.selected_pane].kind);
-        self.manager_actions(actions);
         if let Some(notice) = self.storage.notice.clone() {
             egui::Window::new("Workspace notice").show(ui.ctx(), |ui| {
                 ui.label(notice);
@@ -1418,6 +1809,8 @@ impl eframe::App for SymphosApp {
                     egui::Key::S,
                 ) {
                     Some(crate::project_menu::Action::SaveAs)
+                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::N) {
+                    Some(crate::project_menu::Action::New)
                 } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
                     Some(crate::project_menu::Action::Open)
                 } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
@@ -1461,20 +1854,21 @@ impl eframe::App for SymphosApp {
             for pane in &mut self.panes {
                 pane.reconcile_signals(&panel.bank);
             }
+            self.scene_macros.reconcile(&self.panes, &panel.bank);
             panel.consumers.clear();
-            for (i, pane) in self.panes.iter().enumerate() {
-                for (kind, bank) in ModuleKind::ALL.iter().zip(&pane.macros.banks) {
-                    for slot in bank {
-                        if let (Some(id), Some(parameter)) = (slot.signal, &slot.parameter) {
-                            panel.consumers.entry(id).or_default().push(format!(
-                                "{} {} · {}",
-                                kind.label(),
-                                i + 1,
-                                parameter.label
-                            ));
-                        }
-                    }
+            for (index, slot) in self.scene_macros.slots.iter().enumerate() {
+                if let (Some(id), Some(parameter), Some(target)) =
+                    (slot.signal, &slot.parameter, &slot.target)
+                {
+                    panel.consumers.entry(id).or_default().push(format!(
+                        "Macro {} · {} · {}",
+                        index + 1,
+                        target.kind.label(),
+                        parameter.label
+                    ));
                 }
+            }
+            for (i, pane) in self.panes.iter().enumerate() {
                 let mut settings = pane.copy_settings();
                 if let Some(m) = settings.modulation_mut() {
                     for r in &m.routes {
@@ -1532,6 +1926,17 @@ impl eframe::App for SymphosApp {
         self.workspace_view(ui, rect, &snapshot, now);
         self.show_settings(ui.ctx(), &snapshot);
         self.project_controls(ui.ctx());
+        let actions =
+            self.manager
+                .dialogs(ui.ctx(), &self.storage, self.panes[self.selected_pane].kind);
+        self.manager_actions(actions);
+        if let Some(action) = self.scene_browser.dialogs(ui.ctx(), &self.scenes) {
+            self.pending_scene = Some(action);
+        }
+        if let Some(action) = self.pending_scene.take() {
+            self.scene_action(action);
+        }
+
         if self.storage.save_due() || ui.ctx().input(|input| input.viewport().close_requested()) {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
@@ -1574,7 +1979,12 @@ mod workspace_interaction_tests {
         SymphosApp {
             signal_runtime: None,
             signal_ui: Default::default(),
+            scene_macros: Default::default(),
             project_dialog: Default::default(),
+            scenes: Default::default(),
+            saved_project: None,
+            scene_browser: Default::default(),
+            pending_scene: None,
             engine: AudioEngine::development_mode(true),
             development: None,
             sources: Vec::new(),
@@ -1615,10 +2025,106 @@ mod workspace_interaction_tests {
             selected_pane: 0,
             sidebar_open: false,
             sidebar_width: 236.0,
+            signals_height: workspace::default_signals_height(),
+            inspecting_signal: false,
+            inspecting_macro: None,
             help_open: false,
             global_bar: GlobalBar::default(),
         }
     }
+    #[test]
+    fn scenes_recall_both_tabs_keep_edits_and_do_not_restart_audio() {
+        let mut app = app();
+        let source = app.engine.analysis().snapshot.clone();
+        app.scene_action(crate::scenes::Action::Rename(1, "Intro".into()));
+        app.signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add(crate::signals::Method::Lfo)
+            .unwrap();
+        app.signal_ui.lock().unwrap().show_signals = true;
+        app.scene_action(crate::scenes::Action::Duplicate);
+        let duplicate = app.scenes.active_scene;
+        app.signal_ui.lock().unwrap().bank.channels[0].name = "Drop pulse".into();
+        app.panes[0].kind = ModuleKind::Rings;
+        app.scene_action(crate::scenes::Action::Switch(1));
+        assert_eq!(app.panes[0].kind, ModuleKind::Waterfall);
+        assert_ne!(
+            app.signal_ui.lock().unwrap().bank.channels[0].name,
+            "Drop pulse"
+        );
+        assert!(app.signal_ui.lock().unwrap().show_signals);
+        app.scene_action(crate::scenes::Action::Switch(duplicate));
+        assert_eq!(app.panes[0].kind, ModuleKind::Rings);
+        assert_eq!(
+            app.signal_ui.lock().unwrap().bank.channels[0].name,
+            "Drop pulse"
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &source,
+            &app.engine.analysis().snapshot
+        ));
+        app.scene_action(crate::scenes::Action::New);
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        assert!(app.tiles.is_none());
+        assert!(
+            app.panes[0]
+                .macros
+                .banks
+                .iter()
+                .flatten()
+                .all(|m| m.parameter.is_none() && m.signal.is_none())
+        );
+        let state = app.workspace(&egui::Context::default());
+        let loaded = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(loaded.scenes.as_ref().unwrap().scenes.len(), 3);
+        let project = crate::project::Project::capture(loaded);
+        assert!(project.validate());
+        assert_eq!(
+            project.scenes.scenes[1].state.panes[0].kind,
+            ModuleKind::Rings
+        );
+    }
+
+    #[test]
+    fn saving_project_includes_inactive_edits_and_reopening_preserves_preferences() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.scene_action(crate::scenes::Action::Duplicate);
+        app.panes[0].kind = ModuleKind::Cylinder;
+        app.scene_action(crate::scenes::Action::Switch(1));
+        let path =
+            std::env::temp_dir().join(format!("symphos-scene-app-{}.json", std::process::id()));
+        app.save_project(&ctx, &path);
+        assert!(!app.project_changed(&ctx));
+        let saved = crate::project::Project::open(&path).unwrap();
+        assert_eq!(
+            saved.scenes.scenes[1].state.panes[0].kind,
+            ModuleKind::Cylinder
+        );
+        app.signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add(crate::signals::Method::Band)
+            .unwrap();
+        assert!(app.project_changed(&ctx));
+        let appearance = serde_json::to_value(&app.appearance).unwrap();
+        app.selected_node = Some("test-device".into());
+        app.open_project(&path);
+        assert_eq!(serde_json::to_value(&app.appearance).unwrap(), appearance);
+        assert_eq!(app.selected_node.as_deref(), Some("test-device"));
+        assert_eq!(app.scenes.scenes.len(), 2);
+        assert!(!app.project_changed(&ctx));
+        app.new_project(&ctx);
+        assert_eq!(app.scenes.scenes.len(), 1);
+        assert!(app.project_dialog.current_path.is_none());
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        assert!(!app.project_changed(&ctx));
+        let _ = std::fs::remove_file(path);
+    }
+
     fn dashboard_rect() -> Rect {
         Rect::from_min_max(Pos2::new(300.0, 20.0), Pos2::new(1180.0, 760.0))
     }
@@ -1733,6 +2239,86 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn clicking_scene_macros_opens_details_and_source_inspector() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let label = |out: &egui::FullOutput, name: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == name => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+        let click = |app: &mut SymphosApp, pos| {
+            workspace_frame(
+                app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos), button(pos, true)],
+            );
+            workspace_frame(app, &ctx, now, vec![button(pos, false)]);
+        };
+        click(&mut app, label(&out, "Macro 1"));
+        assert_eq!(app.inspecting_macro, Some(0));
+        assert!(app.sidebar_open && !app.inspecting_signal);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        label(&out, "Macro inspector");
+        click(&mut app, label(&out, "Macro 2"));
+        assert_eq!(app.inspecting_macro, Some(1));
+        let source = app
+            .signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add(crate::signals::Method::Band)
+            .unwrap();
+        app.scene_macros.slots[1].signal = Some(source);
+        app.scene_macros.slots[1].target = Some(crate::macros::ParameterContext {
+            pane: app.panes[0].instance_id().into(),
+            kind: ModuleKind::Waterfall,
+        });
+        app.scene_macros.slots[1].parameter = Some(crate::macros::ParameterSpec {
+            field: "height".into(),
+            label: "Height".into(),
+            min: 0.0,
+            max: 10.0,
+            safe_min: 0.0,
+            safe_max: 10.0,
+            default: 1.0,
+            integer: false,
+            logarithmic: false,
+            scale: 1.0,
+        });
+        let mut settings = app.panes[0].copy_settings();
+        crate::macros::set(&mut settings, "height", 3.0);
+        app.panes[0].apply_macro_settings(&settings);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        label(&out, "Live value");
+        click(&mut app, label(&out, "Reset value"));
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(1.0)
+        );
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, label(&out, "Inspect source"));
+        assert!(app.inspecting_signal);
+        assert!(app.inspecting_macro.is_none());
+        assert_eq!(app.signal_ui.lock().unwrap().selected, Some(source));
+        app.scene_macros.open = true;
+        app.signal_ui.lock().unwrap().show_signals = false;
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, label(&out, "Macro 1"));
+        app.inspect_panel(0);
+        assert!(app.inspecting_macro.is_none());
+    }
+
+    #[test]
     fn signal_inspector_navbar_toggle_hides_drawer_and_expands_mixer_without_visualizer_panes() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -1759,6 +2345,229 @@ mod workspace_interaction_tests {
         let restored = workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
         assert!(app.sidebar_open);
         assert!(visible(&restored));
+    }
+
+    #[test]
+    fn bottom_docks_switch_resize_and_route_inspection_without_creating_sources() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let source = app
+            .signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add(crate::signals::Method::Intensity)
+            .unwrap();
+        let label = |out: &egui::FullOutput, name: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == name => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+        let click = |app: &mut SymphosApp, pos| {
+            workspace_frame(
+                app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos), button(pos, true)],
+            );
+            workspace_frame(app, &ctx, now, vec![button(pos, false)]);
+        };
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, label(&out, "Signals"));
+        assert!(app.signal_ui.lock().unwrap().show_signals);
+        assert!(!app.scene_macros.open);
+        assert_eq!(app.open_panes().len(), 4);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let channel = label(&out, "1 Overall intensity");
+        click(&mut app, channel);
+        assert!(app.inspecting_signal && app.sidebar_open);
+        assert_eq!(app.signal_ui.lock().unwrap().selected, Some(source));
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let channel = label(&out, "1 Overall intensity");
+        let grip = Pos2::new(500.0, channel.y - 24.0);
+        let old_height = app.signals_height;
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(grip), button(grip, true)],
+        );
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(grip - Vec2::new(0.0, 60.0))],
+        );
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![button(grip - Vec2::new(0.0, 60.0), false)],
+        );
+        assert!(app.signals_height > old_height + 40.0);
+        let state = app.workspace(&ctx);
+        assert_eq!(
+            Session::decode(&serde_json::to_vec(&state).unwrap())
+                .unwrap()
+                .signals_height,
+            app.signals_height
+        );
+        click(&mut app, Pos2::new(100.0, 110.0));
+        assert!(!app.inspecting_signal);
+        assert!(app.signal_ui.lock().unwrap().show_signals);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, label(&out, "Macros"));
+        assert!(!app.signal_ui.lock().unwrap().show_signals);
+        assert!(app.scene_macros.open);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, label(&out, "Add New"));
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, label(&out, "3D Rings"));
+        assert_eq!(app.open_panes().len(), 5);
+        assert_eq!(app.panes[app.selected_pane].kind, ModuleKind::Rings);
+        assert_eq!(app.signal_ui.lock().unwrap().bank.channels.len(), 1);
+    }
+
+    #[test]
+    fn scene_macros_bind_across_components_and_survive_selection_and_scene_recall() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.sidebar_open = true;
+        app.selected_pane = 0;
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let source = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Height" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Waterfall height in inspector");
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(source), button(source, true)],
+        );
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(source - Vec2::new(16.0, 0.0))],
+        );
+        assert!(egui::DragAndDrop::has_payload_of_type::<
+            crate::macros::ParameterDrag,
+        >(&ctx));
+        let drop = Pos2::new(60.0, 650.0);
+        workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(drop)]);
+        workspace_frame(&mut app, &ctx, now, vec![button(drop, false)]);
+        let first = app.scene_macros.slots[0].clone();
+        assert_eq!(first.parameter.as_ref().unwrap().field, "height");
+        assert_eq!(
+            first.target.as_ref().unwrap().pane,
+            app.panes[0].instance_id()
+        );
+        app.selected_pane = 1;
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert_eq!(app.scene_macros.slots[0], first);
+        let knob = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Circle(c) if (c.radius - 18.0).abs() < 0.01 && c.center.y > 500.0 => {
+                    Some(c.center)
+                }
+                _ => None,
+            })
+            .expect("scene macro knob");
+        let target_base = crate::macros::get(&app.panes[0].copy_settings(), "height").unwrap();
+        let other_settings = app.panes[1].copy_settings();
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(knob), button(knob, true)],
+        );
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(knob - Vec2::new(0.0, 20.0))],
+        );
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![button(knob - Vec2::new(0.0, 20.0), false)],
+        );
+        assert!(crate::macros::get(&app.panes[0].copy_settings(), "height").unwrap() > target_base);
+        assert_eq!(app.panes[1].copy_settings(), other_settings);
+        let spec = crate::macros::ParameterSpec {
+            field: "height".into(),
+            label: "Height".into(),
+            min: 0.0,
+            max: 10.0,
+            safe_min: 0.0,
+            safe_max: 10.0,
+            default: 1.0,
+            integer: false,
+            logarithmic: false,
+            scale: 1.0,
+        };
+        app.panes[1].kind = ModuleKind::Waterfall;
+        app.scene_macros.slots[1].parameter = Some(spec);
+        app.scene_macros.slots[1].target = Some(crate::macros::ParameterContext {
+            pane: app.panes[1].instance_id().to_owned(),
+            kind: ModuleKind::Waterfall,
+        });
+        app.scene_macros.slots[1].name = Some("Second panel lift".into());
+        let bank = app.scene_macros.clone();
+        app.scenes.store(app.capture_scene());
+        app.scene_action(crate::scenes::Action::New);
+        assert!(app.scene_macros.slots.iter().all(|s| s.parameter.is_none()));
+        app.scene_action(crate::scenes::Action::Switch(1));
+        assert_eq!(app.scene_macros, bank);
+        let captured = app.workspace(&ctx);
+        let project = crate::project::Project::capture(captured);
+        let project =
+            crate::project::Project::decode(&serde_json::to_vec(&project).unwrap()).unwrap();
+        assert_eq!(
+            project
+                .scenes
+                .current()
+                .unwrap()
+                .state
+                .macros
+                .as_ref()
+                .unwrap(),
+            &bank
+        );
+        let view = app.preset_content(Scope::View).unwrap();
+        let PresetContent::View { macros, panes, .. } = &view else {
+            panic!("view")
+        };
+        assert!(macros.as_ref().unwrap().valid(panes));
+        let target = app.scene_macros.slots[0].target.clone().unwrap();
+        app.close_pane(0);
+        assert!(app.scene_macros.slots[0].parameter.is_none());
+        assert!(app.scene_macros.slots[1].parameter.is_some());
+        assert_ne!(
+            app.scene_macros.slots[1].target.as_ref().unwrap().pane,
+            target.pane
+        );
     }
 
     #[test]
@@ -2265,14 +3074,20 @@ fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect
     let bottom = layout
         .help
         .map_or(layout.dashboard.bottom(), |r| r.bottom());
-    let height = requested_height.min((layout.dashboard.height() - 100.0).max(30.0));
-    let rect = Rect::from_min_max(
+    let height = requested_height.min((bottom - layout.dashboard.top() - 100.0).max(30.0));
+    let mut rect = Rect::from_min_max(
         Pos2::new(layout.dashboard.left(), bottom - height),
         Pos2::new(layout.dashboard.right(), bottom),
     );
-    layout.dashboard.max.y -= height + 6.0;
+    layout.dashboard.max.y = rect.top() - 6.0;
     if let Some(help) = &mut layout.help {
-        *help = help.translate(Vec2::new(0.0, -height - 6.0));
+        // Both docks inset their visible frame by eight points vertically.
+        // Info View shares that baseline and grows with the selected dock.
+        *help = Rect::from_min_max(
+            Pos2::new(rect.left(), rect.top() + 8.0),
+            Pos2::new(rect.left() + help.width(), rect.bottom() - 8.0),
+        );
+        rect.min.x = help.right() + 10.0;
     }
     rect
 }
@@ -2524,15 +3339,6 @@ mod layout_tests {
                             let (response, result) = audio_source_picker(ui, &sources, selected);
                             picker_rect = response.rect;
                             choice = result;
-                            let gear = icons::sized_button(
-                                ui,
-                                Icon::Gear,
-                                false,
-                                response.rect.height(),
-                                "View settings",
-                            );
-                            assert!((gear.rect.height() - response.rect.height()).abs() < 0.01);
-                            assert!((gear.rect.center().y - response.rect.center().y).abs() < 0.01);
                         });
                     });
                 },
@@ -2801,22 +3607,23 @@ mod layout_tests {
     fn performance_dock_reserves_plot_space_and_keeps_help_and_inspector_separate() {
         for width in [1024.0, 1440.0, 1800.0] {
             for help in [false, true] {
-                let content = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 658.0));
-                let mut layout = workspace_layout(content, true, help, 236.0);
-                let height = if layout.dashboard.width() >= 900.0 {
-                    156.0
-                } else {
-                    258.0
-                };
-                let bar = dock_performance(&mut layout, height);
-                assert!(layout.dashboard.height() >= 90.0);
-                assert!(!bar.intersects(layout.dashboard));
-                assert!(!bar.intersects(layout.sidebar.unwrap()));
-                if let Some(help) = layout.help {
-                    assert!(!help.intersects(bar));
-                    assert!(!help.intersects(layout.dashboard));
+                for height in [236.0, 320.0, 390.0, 600.0] {
+                    let content = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 658.0));
+                    let mut layout = workspace_layout(content, true, help, 236.0);
+                    let bar = dock_performance(&mut layout, height);
+                    assert!(layout.dashboard.height() >= 90.0);
+                    assert!(!bar.intersects(layout.dashboard));
+                    assert!(!bar.intersects(layout.sidebar.unwrap()));
+                    if let Some(help) = layout.help {
+                        assert!(!help.intersects(bar));
+                        assert!(!help.intersects(layout.dashboard));
+                        assert_eq!(help.top(), bar.top() + 8.0);
+                        assert_eq!(help.bottom(), bar.bottom() - 8.0);
+                        assert_eq!(help.left(), content.left());
+                        assert_eq!(bar.left(), help.right() + 10.0);
+                    }
+                    assert!(content.contains_rect(bar));
                 }
-                assert!(content.contains_rect(bar));
             }
         }
     }

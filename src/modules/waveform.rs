@@ -7,7 +7,7 @@ use crate::help::HoverHelp;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum WaveformChannel {
+pub(super) enum WaveformChannel {
     Left,
     Right,
     Mid,
@@ -15,9 +15,9 @@ enum WaveformChannel {
 }
 
 impl WaveformChannel {
-    const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Mid, Self::Side];
+    pub(super) const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Mid, Self::Side];
 
-    const fn label(self) -> &'static str {
+    pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Left => "Left",
             Self::Right => "Right",
@@ -53,6 +53,46 @@ impl WaveformColorMode {
             Self::ColorMap => "Color map",
         }
     }
+}
+
+impl WaveformChannel {
+    pub(super) fn sample(self, frame: &AnalysisFrame, index: usize) -> f32 {
+        let left = frame.waveform_left[index];
+        let right = frame.waveform_right[index];
+        match self {
+            Self::Left => left,
+            Self::Right => right,
+            Self::Mid => (left + right) * 0.5,
+            Self::Side => (left - right) * 0.5,
+        }
+    }
+}
+pub(super) fn capture_window(
+    frame: &AnalysisFrame,
+    speed_ms: f32,
+    channel: WaveformChannel,
+    trigger: bool,
+    rising: bool,
+    level: f32,
+) -> (std::ops::Range<usize>, bool) {
+    let len = frame.waveform_left.len().min(frame.waveform_right.len());
+    let count = ((speed_ms * frame.sample_rate.max(1) as f32 / 1000.0).ceil() as usize)
+        .max(2)
+        .min(len);
+    let latest = len.saturating_sub(count);
+    if trigger {
+        for start in (1..=latest).rev() {
+            if crossing(
+                channel.sample(frame, start - 1),
+                channel.sample(frame, start),
+                level,
+                rising,
+            ) {
+                return (start..start + count, true);
+            }
+        }
+    }
+    (latest..len, false)
 }
 
 pub struct Waveform {
@@ -279,32 +319,17 @@ impl Waveform {
     }
 
     fn sample(&self, frame: &AnalysisFrame, index: usize, lane: usize) -> f32 {
-        let left = frame.waveform_left[index];
-        let right = frame.waveform_right[index];
-        match self.channels[lane] {
-            WaveformChannel::Left => left,
-            WaveformChannel::Right => right,
-            WaveformChannel::Mid => (left + right) * 0.5,
-            WaveformChannel::Side => (left - right) * 0.5,
-        }
+        self.channels[lane].sample(frame, index)
     }
-
     fn window(&self, frame: &AnalysisFrame) -> (std::ops::Range<usize>, bool) {
-        let len = frame.waveform_left.len().min(frame.waveform_right.len());
-        let count = ((self.speed_ms * frame.sample_rate.max(1) as f32 / 1000.0).ceil() as usize)
-            .max(2)
-            .min(len);
-        let latest = len.saturating_sub(count);
-        if self.trigger && !self.looped {
-            for start in (1..=latest).rev() {
-                let a = self.sample(frame, start - 1, 0);
-                let b = self.sample(frame, start, 0);
-                if crossing(a, b, self.trigger_level, self.rising) {
-                    return (start..start + count, true);
-                }
-            }
-        }
-        (latest..len, false)
+        capture_window(
+            frame,
+            self.speed_ms,
+            self.channels[0],
+            self.trigger && !self.looped,
+            self.rising,
+            self.trigger_level,
+        )
     }
 
     fn display_gain(&self, frame: &AnalysisFrame, window: std::ops::Range<usize>) -> f32 {

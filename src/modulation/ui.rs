@@ -1,5 +1,6 @@
 //! Native frequency selection and envelope editing for visualizer mappings.
 use super::*;
+use crate::help::HoverHelp;
 use crate::parameter::Parameter;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
@@ -27,9 +28,7 @@ impl Modulator {
                 .any(|r| r.signal.is_none() && r.target.layered())
         {
             ui.checkbox(&mut settings.adaptive, "Adaptive sensitivity")
-                .on_hover_text(
-                    "Track each band's recent peak. The noise floor still rejects silence.",
-                );
+                .help_text("Track each band's recent peak. The noise floor still rejects silence.");
         }
         ui.add_space(8.0);
         if !settings.routes.iter().any(|r| Some(r.id) == self.selected) {
@@ -61,11 +60,7 @@ impl Modulator {
                         {
                             self.selected = Some(r.id);
                         }
-                        if ui
-                            .small_button("×")
-                            .on_hover_text("Remove mapping")
-                            .clicked()
-                        {
+                        if ui.small_button("×").help_text("Remove mapping").clicked() {
                             remove = Some(r.id);
                         }
                     });
@@ -251,7 +246,10 @@ pub(crate) fn combo<T: Copy + PartialEq>(
                 }
             })
             .response
-            .on_hover_text(label);
+            .help_text(format!(
+                "{label}\n{}",
+                crate::help::control_description(label)
+            ));
     });
 }
 pub(crate) fn spectrum_editor(
@@ -261,7 +259,9 @@ pub(crate) fn spectrum_editor(
     layers: usize,
 ) -> Rect {
     ui.add_space(6.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 100.0), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 100.0), Sense::hover());
+    response.help_text("Frequency selection\nDrag the left and right handles to isolate the frequency band used for detection. The horizontal scale is logarithmic: bass is left, treble is right. A band can emphasize a kick or melody, but cannot separate instruments that overlap in frequency.");
     let plot = rect.shrink2(Vec2::new(6.0, 16.0));
     let x = |hz: f32| plot.left() + (hz / 20.0).log10() / 3.0 * plot.width();
     let hz = |x: f32| 20.0 * 1000.0_f32.powf(((x - plot.left()) / plot.width()).clamp(0.0, 1.0));
@@ -325,7 +325,8 @@ pub(crate) fn spectrum_editor(
                 ui.id().with(("band-handle", r.id, index)),
                 Sense::drag(),
             )
-            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            .help_text("Frequency boundary\nDrag horizontally to set the lower or upper frequency limit. Use the Hz fields below for exact values.");
         if response.dragged()
             && let Some(pos) = response.interact_pointer_pos()
         {
@@ -374,7 +375,9 @@ pub(crate) fn envelope_editor(
     level: f32,
 ) -> Rect {
     ui.add_space(6.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 108.0), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 108.0), Sense::hover());
+    response.help_text("Response envelope\nAttack sets rise time; decay falls toward sustain; sustain holds a level; release returns to zero. Drag A, D and R horizontally and S vertically. Follow mode uses attack and release to follow incoming level instead of triggering a full ADSR shape.");
     let plot = rect.shrink2(Vec2::new(12.0, 20.0));
     let follow = mode == Response::Follow;
     let decay = if follow { 0.0 } else { e.decay };

@@ -37,7 +37,7 @@ const BINDINGS: &[Binding] = &[
         key: Key::B,
         modifiers: Modifiers::COMMAND,
         label: "Ctrl + B",
-        description: "Show / hide component macros",
+        description: "Show / hide scene macros",
     },
     Binding {
         action: Action::CopySettings,
@@ -72,7 +72,7 @@ const BINDINGS: &[Binding] = &[
         key: Key::N,
         modifiers: Modifiers::NONE,
         label: "N",
-        description: "Show / hide module settings",
+        description: "Show / hide inspector",
     },
     Binding {
         action: Action::Inspect,

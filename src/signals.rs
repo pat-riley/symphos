@@ -234,6 +234,8 @@ pub struct Definition {
     pub input: Input,
     pub method: Method,
     pub enabled: bool,
+    #[serde(default)]
+    pub solo: bool,
     pub influence: f32,
     pub adaptive: bool,
     #[serde(default)]
@@ -277,6 +279,7 @@ impl Definition {
             },
             method,
             enabled: true,
+            solo: false,
             influence: 1.0,
             adaptive: false,
             normalization: Normalization::default(),
@@ -591,6 +594,7 @@ impl Processor {
         };
         self.states
             .retain(|id, _| bank.channels.iter().any(|d| d.id == *id));
+        let any_solo = bank.channels.iter().any(|d| d.solo);
         for d in &bank.channels {
             let s = self.states.entry(d.id).or_default();
             let sig = (
@@ -607,7 +611,7 @@ impl Processor {
                     ..Default::default()
                 };
             }
-            let status = if !d.enabled {
+            let status = if !d.enabled || (any_solo && !d.solo) {
                 Status::Muted
             } else if d.input == Input::Lfo {
                 Status::Live
@@ -1369,6 +1373,60 @@ mod lfo_tests {
         let next = processor.step(&bank, &frame, 0.30, false).values[&id].value;
         assert!((next - 0.809017).abs() < 0.001);
     }
+    #[test]
+    fn solo_is_shared_by_all_mappings_allows_multiple_channels_and_preserves_mute() {
+        let mut bank = Bank::default();
+        let first = bank.add(Method::Lfo).unwrap();
+        let second = bank.add(Method::Lfo).unwrap();
+        let third = bank.add(Method::Lfo).unwrap();
+        for d in &mut bank.channels {
+            d.lfo.bipolar = false;
+        }
+        let frame = AnalysisFrame::default();
+        let mut processor = Processor::default();
+        processor.step(&bank, &frame, 0.0, false);
+        bank.channels[0].solo = true;
+        for i in 1..=200 {
+            processor.step(&bank, &frame, i as f64 * 0.01, false);
+        }
+        let solo = processor.step(&bank, &frame, 2.01, false);
+        assert_eq!(solo.values[&first].status, Status::Live);
+        for id in [second, third] {
+            let sample = &solo.values[&id];
+            assert_eq!(sample.status, Status::Muted);
+            assert_eq!(sample.value, 0.0);
+            assert_eq!(sample.availability, 0.0);
+            assert_eq!(
+                sample.mapped(&Route {
+                    output_min: 0.4,
+                    ..Default::default()
+                }),
+                0.0
+            );
+        }
+        bank.channels[1].solo = true;
+        let pair = processor.step(&bank, &frame, 2.02, false);
+        assert_eq!(pair.values[&first].status, Status::Live);
+        assert_eq!(pair.values[&second].status, Status::Live);
+        assert_eq!(pair.values[&third].status, Status::Muted);
+        bank.channels[0].enabled = false;
+        let muted = processor.step(&bank, &frame, 2.03, false);
+        assert_eq!(muted.values[&first].status, Status::Muted);
+        for d in &mut bank.channels {
+            d.solo = false;
+        }
+        let restored = processor.step(&bank, &frame, 2.04, false);
+        assert_eq!(restored.values[&first].status, Status::Muted);
+        assert_eq!(restored.values[&second].status, Status::Live);
+        assert_eq!(restored.values[&third].status, Status::Live);
+        bank.channels[1].solo = true;
+        let loaded: Bank = serde_json::from_slice(&serde_json::to_vec(&bank).unwrap()).unwrap();
+        assert_eq!(loaded, bank);
+        let mut legacy = serde_json::to_value(Definition::recipe(1, Method::Band)).unwrap();
+        legacy.as_object_mut().unwrap().remove("solo");
+        assert!(!serde_json::from_value::<Definition>(legacy).unwrap().solo);
+    }
+
     #[test]
     fn lfo_waveforms_have_declared_polarity_and_mute_fades_all_influence() {
         for waveform in Waveform::ALL {

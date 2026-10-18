@@ -1,9 +1,11 @@
-//! Native macOS File menu. Other desktops expose the same commands in the app menu.
+//! Native macOS application and File menus. Other desktops expose the same commands in the app menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    New,
     Open,
     Save,
     SaveAs,
+    Settings,
 }
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
@@ -29,6 +31,8 @@ pub fn take() -> Option<Action> {
         1 => Some(Action::Open),
         2 => Some(Action::Save),
         3 => Some(Action::SaveAs),
+        4 => Some(Action::New),
+        5 => Some(Action::Settings),
         _ => None,
     }
     #[cfg(not(target_os = "macos"))]

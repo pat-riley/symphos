@@ -1,5 +1,7 @@
 //! Flux's normalized performance controls and transient runtime; ready for a future MIDI adapter.
 use super::*;
+#[cfg(test)]
+use crate::help::HoverHelp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Macro {
@@ -278,6 +280,7 @@ pub(crate) fn bar_height(_width: f32, open: bool) -> f32 {
     super::super::performance::height(open)
 }
 impl Flux {
+    #[cfg(test)]
     pub(crate) fn trigger_burst(&mut self) {
         self.performance.manual_burst = true;
     }
@@ -421,7 +424,7 @@ fn macro_control(
         theme.accent,
         (0.0, 1.0),
     )
-    .on_hover_text(m.help())
+    .help_text(m.help())
 }
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::help::HoverHelp;
 use crate::{
     icons::{self, Icon},
     modulation::{
@@ -14,12 +15,14 @@ use egui::{self, Rect};
 use std::sync::Mutex;
 
 pub type Shared = Arc<Mutex<Panel>>;
+pub const MIN_DOCK_HEIGHT: f32 = 320.0;
 pub const CONTEXT_KEY: &str = "shared-musical-signals";
 pub struct Panel {
     pub bank: Bank,
     pub snapshot: Arc<Snapshot>,
     pub selected: Option<u64>,
     pub show_signals: bool,
+    pub inspect_requested: bool,
     pub consumers: BTreeMap<u64, Vec<String>>,
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
@@ -84,6 +87,7 @@ impl Default for Panel {
             snapshot: Arc::new(Snapshot::default()),
             selected: None,
             show_signals: false,
+            inspect_requested: false,
             consumers: BTreeMap::new(),
             span: None,
             deleted: None,
@@ -126,14 +130,13 @@ impl Panel {
         theme: &AppTheme,
     ) {
         self.close_inspector = false;
-        let inspector_style = ui.style().clone();
         let mut page = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("signals-page")
                 .max_rect(rect),
         );
         page.set_clip_rect(rect.intersect(ui.clip_rect()));
-        signal_style(&mut page);
+        workspace_ui::dock_style(&mut page);
         let ui = &mut page;
         self.bank.sync_slots();
         self.sections
@@ -176,7 +179,8 @@ impl Panel {
                 egui::Stroke::new(1.0, theme.foreground.gamma_multiply(0.12)),
             );
         }
-        let mixer = mixer.shrink(8.0);
+        // Keep the dock edges aligned with the visual panes above it.
+        let mixer = mixer.shrink2(egui::vec2(0.0, 8.0));
         ui.painter()
             .rect_filled(mixer, 7.0, ui.visuals().extreme_bg_color);
         let content = mixer.shrink(1.0);
@@ -188,13 +192,14 @@ impl Panel {
         );
         board.set_clip_rect(content.intersect(ui.clip_rect()));
         let mut action = None;
-        let height = (board.available_height() - 12.0).max(460.0);
         board.spacing_mut().item_spacing.x = 0.0;
         let slots = self.bank.slots.clone();
-        egui::ScrollArea::both()
+        let mixer_output = egui::ScrollArea::horizontal()
             .id_salt("signal-strips")
             .auto_shrink([false, false])
             .show(&mut board, |ui| {
+                let height = ui.available_height();
+                let viewport_right = ui.max_rect().right();
                 let mut insertion_line = None;
                 ui.horizontal_top(|ui| {
                     for (slot, id) in slots.iter().copied().enumerate() {
@@ -216,11 +221,16 @@ impl Panel {
                                     d,
                                     &sample,
                                     self.selected == Some(id),
-                                    self.consumers.get(&id).map_or(0, Vec::len),
                                     history,
                                 ) {
                                     action = Some(a);
                                 }
+                            }
+                            if ui.rect_contains_pointer(strip)
+                                && ui.input(|i| i.pointer.primary_pressed())
+                            {
+                                self.selected = id;
+                                self.inspect_requested = true;
                             }
                             let menu_response = ui.interact(
                                 strip,
@@ -231,6 +241,7 @@ impl Panel {
                                 && ui.input(|i| i.pointer.secondary_clicked());
                             if open_menu && let Some(id) = id {
                                 self.selected = Some(id);
+                                self.inspect_requested = true;
                             }
                             let definition =
                                 id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
@@ -264,10 +275,9 @@ impl Panel {
                             }
                         });
                     }
-                    // A single unstructured workspace follows the last track. It
-                    // remains reachable by scrolling even when tracks fill the view.
-                    let free_width =
-                        (ui.clip_rect().right() - ui.next_widget_position().x).max(120.0);
+                    // Fill only the remaining viewport; adding an offscreen blank
+                    // track's worth of space would force an unnecessary scrollbar.
+                    let free_width = (viewport_right - ui.next_widget_position().x - 1.0).max(0.0);
                     let (space, response) = ui
                         .allocate_exact_size(egui::vec2(free_width, height), egui::Sense::hover());
                     if slots.is_empty() {
@@ -314,9 +324,14 @@ impl Panel {
                     }
                 }
             });
+        debug_assert!(mixer_output.content_size.y <= mixer_output.inner_rect.height() + 1.0);
+        debug_assert!(
+            slots.len() as f32 * 156.0 > mixer_output.inner_rect.width()
+                || mixer_output.content_size.x <= mixer_output.inner_rect.width()
+        );
         // egui's scissor is rectangular. Mask the track and scrollbar corners after
         // drawing, then paint the shared border above them for a continuous edge.
-        rounded_content_corners(ui, content, 6.0, ui.visuals().extreme_bg_color);
+        workspace_ui::rounded_content_corners(ui, content, 6.0, ui.visuals().extreme_bg_color);
         ui.painter().rect_stroke(
             mixer,
             7.0,
@@ -327,9 +342,19 @@ impl Panel {
             self.act(action);
         }
         self.rename_dialog(ui.ctx());
-        if !inspector_open {
-            return;
+        if inspector_open {
+            self.show_inspector(ui, inspector, frame, theme);
         }
+    }
+
+    pub fn show_inspector(
+        &mut self,
+        ui: &mut egui::Ui,
+        inspector: Rect,
+        frame: &AnalysisFrame,
+        theme: &AppTheme,
+    ) {
+        self.close_inspector = false;
         let mut editor = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("signal-inspector")
@@ -338,7 +363,6 @@ impl Panel {
         );
         editor.set_clip_rect(inspector);
         // Restore the app skin before applying the common compact inspector.
-        editor.set_style(inspector_style);
         workspace_ui::sidebar_style(&mut editor, theme);
         let definition = self
             .selected
@@ -418,7 +442,7 @@ impl Panel {
                         28.0,
                         tab.title(lfo),
                     )
-                    .on_hover_text(tab.title(lfo))
+                    .help_text(tab.title(lfo))
                     .clicked()
                     {
                         section = tab;
@@ -465,7 +489,10 @@ impl Panel {
     }
     fn act(&mut self, action: StripAction) {
         match action {
-            StripAction::Select(id) => self.selected = Some(id),
+            StripAction::Select(id) => {
+                self.selected = Some(id);
+                self.inspect_requested = true;
+            }
             StripAction::Delete(id) => {
                 if self.rename.as_ref().is_some_and(|(v, _, _)| *v == id) {
                     self.rename = None;
@@ -723,7 +750,7 @@ impl Panel {
                         );
                         property_row(ui, "Adaptive", |ui| {
                             ui.checkbox(&mut d.adaptive, "")
-                                .on_hover_text("Adaptive sensitivity");
+                                .help_text(crate::help::control_description("Adaptive"));
                         });
                     });
                 }
@@ -830,7 +857,7 @@ fn normalization_editor(
 ) {
     settings_group(ui, "Normalization", |ui| {
         ui.checkbox(&mut d.normalization.enabled,"Normalize output")
-        .on_hover_text("Stretch a narrow detector/envelope range to 0–1 before the influence fader. Values outside the input limits are clamped.");
+        .help_text("Stretch a narrow detector/envelope range to 0–1 before the influence knob. Values outside the input limits are clamped.");
         ui.small(format!(
             "Raw {:.3} · output {:.3}",
             sample.raw, sample.value
@@ -932,7 +959,7 @@ fn normalization_editor(
     settings_group(ui, "Smoothing", |ui| {
         ui.add(Parameter::new(&mut d.smoothing_ms,0.0..=1000.0,0.0)
         .bounds(0.0..=5000.0).text("Smoothing ms"))
-        .on_hover_text("Soften sudden changes in this channel's final output. 0 ms is off. Higher values give smoother, slower motion. Applies after normalization and influence to every mapping; hit detection stays immediate.");
+        .help_text("Soften sudden changes in this channel's final output. 0 ms is off. Higher values give smoother, slower motion. Applies after normalization and influence to every mapping; hit detection stays immediate.");
         ui.horizontal_wrapped(|ui| {
             for (label, amount) in [
                 ("Off", 0.0),
@@ -1120,41 +1147,49 @@ fn channel_menu(
     if let Some(d) = d {
         ui.separator();
         ui.small("Channel color");
-        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-        ui.spacing_mut().interact_size.y = 16.0;
-        for row in CHANNEL_SWATCHES {
-            ui.horizontal(|ui| {
-                for [r, g, b] in row {
-                    let color = egui::Color32::from_rgb(r, g, b);
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-                    ui.painter().rect_filled(rect, 0.0, color);
-                    if color == channel_color(d) {
-                        ui.painter().rect_stroke(
-                            rect.expand(1.0),
-                            1.0,
-                            egui::Stroke::new(1.0, ui.visuals().text_color()),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
-                    if response
-                        .on_hover_text(format!(
-                            "#{:02X}{:02X}{:02X}",
-                            color.r(),
-                            color.g(),
-                            color.b()
-                        ))
-                        .clicked()
-                    {
-                        action = Some(StripAction::Color(d.id, [color.r(), color.g(), color.b()]));
-                        ui.close();
-                    }
-                }
-            });
+        if let Some(color) = color_palette(ui, channel_color(d)) {
+            action = Some(StripAction::Color(d.id, color));
         }
     }
     action
 }
+pub(crate) fn color_palette(ui: &mut egui::Ui, selected: egui::Color32) -> Option<[u8; 3]> {
+    let mut choice = None;
+    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+    ui.spacing_mut().interact_size.y = 16.0;
+    for row in CHANNEL_SWATCHES {
+        ui.horizontal(|ui| {
+            for [r, g, b] in row {
+                let color = egui::Color32::from_rgb(r, g, b);
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+                ui.painter().rect_filled(rect, 0.0, color);
+                if color == selected {
+                    ui.painter().rect_stroke(
+                        rect.expand(1.0),
+                        1.0,
+                        egui::Stroke::new(1.0, ui.visuals().text_color()),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if response
+                    .help_text(format!(
+                        "#{:02X}{:02X}{:02X}",
+                        color.r(),
+                        color.g(),
+                        color.b()
+                    ))
+                    .clicked()
+                {
+                    choice = Some([color.r(), color.g(), color.b()]);
+                    ui.close();
+                }
+            }
+        });
+    }
+    choice
+}
+
 fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     egui::Color32::from_rgb(
         (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
@@ -1162,84 +1197,7 @@ fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
         (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
     )
 }
-fn signal_style(ui: &mut egui::Ui) {
-    let panel = ui.visuals().panel_fill;
-    let text = ui.visuals().text_color();
-    let field = blend(panel, egui::Color32::BLACK, 0.32);
-    let visuals = ui.visuals_mut();
-    visuals.override_text_color = Some(blend(text, egui::Color32::WHITE, 0.65));
-    visuals.weak_text_color = Some(blend(text, egui::Color32::WHITE, 0.15));
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, text.gamma_multiply(0.30));
-    visuals.extreme_bg_color = field;
-    visuals.widgets.inactive.bg_fill = field;
-    visuals.widgets.inactive.weak_bg_fill = field;
-    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, text.gamma_multiply(0.30));
-    for widget in [
-        &mut visuals.widgets.inactive,
-        &mut visuals.widgets.hovered,
-        &mut visuals.widgets.active,
-        &mut visuals.widgets.open,
-    ] {
-        widget.corner_radius = egui::CornerRadius::same(4);
-    }
-}
-fn rounded_content_corners(ui: &egui::Ui, rect: Rect, radius: f32, color: egui::Color32) {
-    let radius = radius
-        .min(rect.width() * 0.5)
-        .min(rect.height() * 0.5)
-        .max(0.0);
-    let mut mesh = egui::Mesh::default();
-    for (corner, direction) in [
-        (rect.left_top(), egui::vec2(1.0, 1.0)),
-        (rect.right_top(), egui::vec2(-1.0, 1.0)),
-        (rect.left_bottom(), egui::vec2(1.0, -1.0)),
-        (rect.right_bottom(), egui::vec2(-1.0, -1.0)),
-    ] {
-        let start = mesh.vertices.len() as u32;
-        mesh.colored_vertex(corner, color);
-        for i in 0..=12 {
-            let angle = std::f32::consts::PI + i as f32 / 12.0 * std::f32::consts::FRAC_PI_2;
-            let offset = egui::vec2(radius + radius * angle.cos(), radius + radius * angle.sin());
-            mesh.colored_vertex(corner + offset * direction, color);
-        }
-        for i in 0..12 {
-            mesh.add_triangle(start, start + i + 1, start + i + 2);
-        }
-    }
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
 
-fn surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: bool) {
-    let body = blend(
-        ui.visuals().panel_fill,
-        ui.visuals().text_color(),
-        if selected { 0.16 } else { 0.075 },
-    );
-    ui.painter().rect_filled(rect, 0.0, body);
-    let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 28.0));
-    ui.painter().rect_filled(header, 0.0, color);
-    let divider = egui::Stroke::new(
-        1.0,
-        blend(ui.visuals().panel_fill, egui::Color32::BLACK, 0.5),
-    );
-    ui.painter()
-        .vline(rect.right() - 0.5, rect.y_range(), divider);
-    ui.painter().hline(rect.x_range(), header.bottom(), divider);
-}
-fn track_title(ui: &egui::Ui, rect: Rect, text: String, color: egui::Color32) {
-    let galley = egui::WidgetText::from(egui::RichText::new(text).size(13.0).strong().color(color))
-        .into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            rect.width(),
-            egui::FontId::proportional(13.0),
-        );
-    let origin = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
-    let painter = ui.painter_at(rect);
-    // The bundled proportional face is light; a subtle second pass adds portable header weight.
-    painter.galley(origin, galley.clone(), color);
-    painter.galley(origin + egui::vec2(0.35, 0.0), galley, color);
-}
 #[allow(clippy::too_many_arguments)]
 fn channel_strip(
     ui: &mut egui::Ui,
@@ -1248,11 +1206,10 @@ fn channel_strip(
     d: &mut Definition,
     sample: &Sample,
     selected: bool,
-    links: usize,
     history: Option<&std::collections::VecDeque<f32>>,
 ) -> Option<StripAction> {
     let color = channel_color(d);
-    surface(ui, rect, color, selected);
+    workspace_ui::strip_surface(ui, rect, color, selected);
     let mut action = ui
         .interact(
             rect,
@@ -1270,7 +1227,7 @@ fn channel_strip(
     } else {
         egui::Color32::from_rgb(12, 18, 26)
     };
-    track_title(
+    workspace_ui::strip_title(
         ui,
         Rect::from_min_max(
             egui::pos2(title.left() + 8.0, title.top()),
@@ -1285,7 +1242,7 @@ fn channel_strip(
             ui.id().with("channel-title"),
             egui::Sense::click_and_drag(),
         )
-        .on_hover_text("Select channel · drag to reorder");
+        .help_text("Select channel · drag to reorder");
     if response.clicked() {
         action = Some(StripAction::Select(d.id));
     }
@@ -1299,7 +1256,7 @@ fn channel_strip(
     crate::icons::paint(ui, close.shrink(5.0), crate::icons::Icon::Close, dark);
     if ui
         .interact(close, ui.id().with("delete-channel"), egui::Sense::click())
-        .on_hover_text("Delete channel · undo is available in the signal inspector")
+        .help_text("Delete channel · undo is available in the signal inspector")
         .clicked()
     {
         action = Some(StripAction::Delete(d.id));
@@ -1335,7 +1292,9 @@ fn channel_strip(
             for input in Input::ALL.into_iter().skip(2) {
                 ui.add_enabled(false, egui::Button::new(input.label()));
             }
-        });
+        })
+        .response
+        .help_text(crate::help::control_description("Input"));
     controls.small("Detector");
     egui::ComboBox::from_id_salt("strip-method")
         .width(142.0)
@@ -1344,6 +1303,7 @@ fn channel_strip(
             for method in Method::ALL {
                 if ui
                     .selectable_value(&mut d.method, method, method.label())
+                    .help_text(method.description())
                     .changed()
                 {
                     d.input = if method == Method::Lfo {
@@ -1353,36 +1313,20 @@ fn channel_strip(
                     };
                 }
             }
-        });
-    if controls
-        .add_sized(
-            [142.0, 22.0],
-            egui::Button::new(if matches!(d.method, Method::Band | Method::BassHits) {
-                format!("{:.0} – {:.0} Hz", d.response.low, d.response.high)
-            } else if d.input == Input::Lfo {
-                format!("{:.2} Hz · {}", d.lfo.rate, d.lfo.waveform.label())
-            } else {
-                "Full mix".into()
-            }),
-        )
-        .on_hover_text("Edit signal frequency and response")
-        .clicked()
-    {
-        action = Some(StripAction::Select(d.id));
-    }
-    controls.small(sample.status.label());
-    if controls
-        .small_button(format!("{links} mappings · Inspect"))
-        .clicked()
-    {
-        action = Some(StripAction::Select(d.id));
-    }
+        })
+        .response
+        .help_text(d.method.description());
     d.sanitize();
-    let bottom = rect.bottom() - 234.0;
+    ui.interact(rect, ui.id().with("signal-strip-help"), egui::Sense::hover())
+        .help_fallback(|| format!("{}\n{}\nClick to inspect this channel. Drag its header to reorder; right-click to duplicate, rename, delete or choose a color. The influence knob scales visual modulation, not audio volume. M mutes this source; S solos it alongside any other soloed sources.", d.name, d.method.description()));
+    let bottom = rect.bottom() - 144.0;
+    let graph_top = controls.min_rect().bottom() + 8.0;
     let graph = Rect::from_min_max(
-        egui::pos2(rect.left() + 8.0, rect.top() + 212.0),
-        egui::pos2(rect.right() - 8.0, (bottom - 12.0).max(rect.top() + 230.0)),
+        egui::pos2(rect.left() + 8.0, graph_top),
+        egui::pos2(rect.right() - 8.0, (bottom - 8.0).max(graph_top + 16.0)),
     );
+    ui.interact(graph, ui.id().with("signal-history-help"), egui::Sense::hover())
+        .help_text("Signal history\nRecent final control output, after response, normalization, influence and smoothing. A flat line means the signal is steady or unavailable; use the channel inspector’s Output tab to expand a narrow range or smooth jitter.");
     ui.painter().rect_filled(
         graph,
         4.0,
@@ -1439,51 +1383,43 @@ fn channel_strip(
         egui::FontId::proportional(11.0),
         ui.visuals().text_color(),
     );
-    let fader = Rect::from_min_max(
-        egui::pos2(rect.left() + 8.0, bottom + 35.0),
-        egui::pos2(rect.left() + 65.0, rect.bottom() - 30.0),
+    let knob = Rect::from_center_size(
+        egui::pos2(rect.left() + 40.0, bottom + 58.0),
+        egui::vec2(54.0, 54.0),
     );
-    let mut fader_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(fader)
-            .layout(egui::Layout::top_down(egui::Align::Center)),
-    );
-    fader_ui.spacing_mut().slider_width = 136.0;
-    fader_ui.visuals_mut().selection.bg_fill = color;
-    fader_ui.visuals_mut().widgets.active.bg_fill = color;
-    fader_ui.visuals_mut().widgets.hovered.bg_fill = blend(color, egui::Color32::WHITE, 0.20);
-    fader_ui.visuals_mut().widgets.inactive.fg_stroke =
-        egui::Stroke::new(1.0, egui::Color32::from_gray(235));
-    fader_ui.set_clip_rect(fader.intersect(ui.clip_rect()));
-    fader_ui.add(
-        egui::Slider::new(&mut d.influence, 0.0..=2.0)
-            .vertical()
-            .show_value(false),
-    );
+    influence_knob(ui, knob, &mut d.influence, color);
     let value_rect = Rect::from_min_size(
-        egui::pos2(rect.left() + 8.0, rect.bottom() - 56.0),
-        egui::vec2(56.0, 24.0),
+        egui::pos2(rect.left() + 12.0, bottom + 88.0),
+        egui::vec2(56.0, 22.0),
     );
     let mut value_ui = ui.new_child(
         egui::UiBuilder::new()
             .id_salt("channel-influence-value")
-            .max_rect(value_rect)
-            .layout(egui::Layout::top_down(egui::Align::Center)),
+            .max_rect(value_rect),
     );
     value_ui.set_clip_rect(value_rect.intersect(ui.clip_rect()));
     value_ui.spacing_mut().interact_size.y = 22.0;
     value_ui.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    value_ui.add_sized(
-        [52.0, 22.0],
-        egui::DragValue::new(&mut d.influence)
-            .range(0.0..=2.0)
-            .speed(0.01)
-            .fixed_decimals(2),
-    );
+    let mut percent = d.influence * 100.0;
+    if value_ui
+        .add_sized(
+            value_rect.size(),
+            egui::DragValue::new(&mut percent)
+                .range(0.0..=200.0)
+                .speed(0.5)
+                .fixed_decimals(0)
+                .suffix("%"),
+        )
+        .help_text("Visual influence · 100% is unity · drag or type a value")
+        .changed()
+    {
+        d.influence = percent / 100.0;
+    }
+    let meter_height = 65.0;
     for (i, value, label) in [(0, sample.level, "In"), (1, sample.value.abs(), "Out")] {
         let meter = Rect::from_min_size(
-            egui::pos2(rect.left() + 80.0 + i as f32 * 23.0, bottom + 40.0),
-            egui::vec2(9.0, 136.0),
+            egui::pos2(rect.left() + 98.0 + i as f32 * 23.0, bottom + 35.0),
+            egui::vec2(9.0, meter_height),
         );
         let bg = ui.visuals().panel_fill;
         let track = egui::Color32::from_rgb(
@@ -1538,27 +1474,112 @@ fn channel_strip(
     footer.spacing_mut().button_padding = egui::vec2(4.0, 1.0);
     footer.spacing_mut().item_spacing.x = 4.0;
     footer.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    footer.label(
-        egui::RichText::new(format!("{}", slot + 1))
-            .color(color)
-            .strong(),
-    );
-    if footer
-        .add(egui::Button::selectable(
-            d.enabled,
-            egui::RichText::new(if d.enabled { "On" } else { "Muted" }).color(if d.enabled {
-                dark
+    for (label, active, hint) in [
+        (
+            "M",
+            !d.enabled,
+            "Mute this channel's visual modulation output",
+        ),
+        (
+            "S",
+            d.solo,
+            "Solo this channel's visual modulation output · multiple solos are allowed",
+        ),
+    ] {
+        if footer
+            .add_sized(
+                [32.0, 22.0],
+                egui::Button::new(egui::RichText::new(label).strong().color(if active {
+                    dark
+                } else {
+                    footer.visuals().text_color()
+                }))
+                .fill(if active {
+                    color
+                } else {
+                    footer.visuals().extreme_bg_color
+                })
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    footer.visuals().text_color().gamma_multiply(0.25),
+                )),
+            )
+            .help_text(hint)
+            .clicked()
+        {
+            if label == "M" {
+                d.enabled = !d.enabled;
             } else {
-                footer.visuals().text_color()
-            }),
-        ))
-        .on_hover_text("Enable / mute visual influence")
-        .clicked()
-    {
-        d.enabled = !d.enabled;
+                d.solo = !d.solo;
+            }
+        }
     }
-    footer.label(format!("{:+.2}", sample.value));
     action
+}
+
+fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::Color32) {
+    let response = ui
+        .interact(
+            rect,
+            ui.id().with("influence-knob"),
+            egui::Sense::click_and_drag(),
+        )
+        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        .help_text("Visual influence · drag vertically · Shift: fine · double-click: 100%");
+    let speed = if ui.input(|i| i.modifiers.shift) {
+        0.002
+    } else {
+        0.013333
+    };
+    if response.dragged() {
+        let delta = if response.drag_started() {
+            response.drag_delta().y
+        } else {
+            ui.input(|i| i.pointer.delta().y)
+        };
+        *value = (*value - delta * speed).clamp(0.0, 2.0);
+    }
+    if response.double_clicked() {
+        *value = 1.0;
+    }
+    if response.clicked() {
+        response.request_focus();
+    }
+    if response.has_focus() {
+        let delta = ui.input(|i| {
+            i.key_pressed(egui::Key::ArrowUp) as i32 - i.key_pressed(egui::Key::ArrowDown) as i32
+        });
+        *value = (*value + delta as f32 * speed * 3.0).clamp(0.0, 2.0);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Visual influence")
+    });
+    let center = rect.center();
+    let painter = ui.painter_at(rect);
+    let arc = |end: f32| {
+        (0..=40)
+            .map(|i| center + egui::Vec2::angled(2.35 + 4.72 * end * i as f32 / 40.0) * 23.0)
+            .collect()
+    };
+    painter.add(egui::Shape::line(
+        arc(1.0),
+        egui::Stroke::new(2.5, ui.visuals().text_color().gamma_multiply(0.15)),
+    ));
+    painter.add(egui::Shape::line(
+        arc(*value / 2.0),
+        egui::Stroke::new(2.5, color),
+    ));
+    painter.circle_filled(center, 18.0, ui.visuals().extreme_bg_color);
+    painter.circle_stroke(
+        center,
+        18.0,
+        egui::Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.4)),
+    );
+    let direction = egui::Vec2::angled(2.35 + 4.72 * *value / 2.0);
+    painter.line_segment(
+        [center + direction * 7.0, center + direction * 15.0],
+        egui::Stroke::new(2.0, ui.visuals().text_color()),
+    );
 }
 
 pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -> bool {
@@ -1622,6 +1643,7 @@ pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -
             if ui.button("Edit signal").clicked() {
                 panel.selected = Some(id);
                 panel.show_signals = true;
+                panel.inspect_requested = true;
             }
         });
         ui.small(format!(
@@ -1673,8 +1695,8 @@ pub(crate) fn lfo_editor(ui: &mut egui::Ui, lfo: &mut Lfo) {
     );
     ui.add(Parameter::new(&mut lfo.rate, 0.01..=20.0, 0.25).text("Rate Hz"));
     ui.add(Parameter::new(&mut lfo.phase, 0.0..=1.0, 0.0).text("Phase"));
-    ui.add(Parameter::new(&mut lfo.depth, 0.0..=1.0, 1.0).text("Depth"));
-    ui.checkbox(&mut lfo.bipolar, "Bipolar · −1 to +1");
+    ui.add(Parameter::new(&mut lfo.depth, 0.0..=1.0, 1.0).text("Depth")).help_text("LFO depth\nScale the oscillator amplitude before the channel’s output processing. Zero produces no oscillation; one uses the full waveform range.");
+    ui.checkbox(&mut lfo.bipolar, "Bipolar · −1 to +1").help_text("Bipolar LFO\nOn: oscillate from −1 to +1 around zero. Off: oscillate from 0 to 1. Depth and channel influence scale this range.");
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 64.0), egui::Sense::hover());
     let points = (0..=100)
@@ -2040,6 +2062,76 @@ mod tests {
     }
 
     #[test]
+    fn strip_knob_mute_and_solo_work_and_controls_fit_at_minimum_height() {
+        let ctx = egui::Context::default();
+        let mut definition = Definition::recipe(42, Method::Band);
+        let bounds = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(156.0, 300.0));
+        let render = |d: &mut Definition, events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    channel_strip(ui, bounds, 0, d, &Sample::default(), false, None);
+                },
+            );
+            out.textures_delta.clear();
+            out
+        };
+        render(&mut definition, vec![]);
+        let out = render(&mut definition, vec![]);
+        let text = |label: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == label => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        for label in ["Source", "Detector", "Visual influence", "M", "S"] {
+            assert!(bounds.contains(text(label)));
+        }
+        assert!(!out.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text == "Full mix" || t.galley.job.text.contains("mappings · Inspect"))));
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for label in ["M", "S"] {
+            let pos = text(label);
+            render(
+                &mut definition,
+                vec![egui::Event::PointerMoved(pos), button(pos, true)],
+            );
+            render(&mut definition, vec![button(pos, false)]);
+        }
+        assert!(!definition.enabled && definition.solo);
+        let knob = egui::pos2(bounds.left() + 40.0, bounds.bottom() - 86.0);
+        render(
+            &mut definition,
+            vec![egui::Event::PointerMoved(knob), button(knob, true)],
+        );
+        render(
+            &mut definition,
+            vec![egui::Event::PointerMoved(knob - egui::vec2(0.0, 30.0))],
+        );
+        render(
+            &mut definition,
+            vec![button(knob - egui::vec2(0.0, 30.0), false)],
+        );
+        assert!(definition.influence > 1.2 && definition.influence <= 2.0);
+    }
+
+    #[test]
     fn dragged_header_supplies_a_real_channel_payload() {
         let ctx = egui::Context::default();
         let mut definition = Definition::recipe(42, Method::Band);
@@ -2061,7 +2153,6 @@ mod tests {
                         &mut definition,
                         &Sample::default(),
                         true,
-                        0,
                         None,
                     );
                 },

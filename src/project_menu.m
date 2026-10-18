@@ -14,15 +14,25 @@ static _Atomic int requestedAction = 0;
 static SymphosFileActions *handler;
 void symphos_file_menu_install(void) {
     NSMenu *menu = NSApp.mainMenu;
-    if (!menu || [menu itemWithTitle:@"File"]) return;
-    handler = [SymphosFileActions new];
+    if (!menu) return;
+    if (!handler) handler = [SymphosFileActions new];
+    NSMenu *application = menu.itemArray.firstObject.submenu;
+    if (application && ![application itemWithTag:5]) {
+        NSMenuItem *settings = [[NSMenuItem alloc] initWithTitle:@"Settings…" action:@selector(projectAction:) keyEquivalent:@","];
+        settings.target = handler; settings.tag = 5;
+        settings.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+        NSInteger index = MIN((NSInteger)2, application.numberOfItems);
+        [application insertItem:settings atIndex:index];
+        [application insertItem:[NSMenuItem separatorItem] atIndex:index + 1];
+    }
+    if ([menu itemWithTitle:@"File"]) return;
     NSMenu *file = [[NSMenu alloc] initWithTitle:@"File"];
-    NSArray *titles = @[@"Open Project…", @"Save Project", @"Save Project As…"];
-    NSArray *keys = @[@"o", @"s", @"s"];
+    NSArray *titles = @[@"New Project", @"Open Project…", @"Save Project", @"Save Project As…"];
+    NSArray *keys = @[@"n", @"o", @"s", @"s"];
     for (NSUInteger i = 0; i < titles.count; ++i) {
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:titles[i] action:@selector(projectAction:) keyEquivalent:keys[i]];
-        item.target = handler; item.tag = (NSInteger)i + 1;
-        item.keyEquivalentModifierMask = NSEventModifierFlagCommand | (i == 2 ? NSEventModifierFlagShift : 0);
+        item.target = handler; item.tag = i == 0 ? 4 : (NSInteger)i;
+        item.keyEquivalentModifierMask = NSEventModifierFlagCommand | (i == 3 ? NSEventModifierFlagShift : 0);
         [file addItem:item];
     }
     NSMenuItem *root = [[NSMenuItem alloc] initWithTitle:@"File" action:nil keyEquivalent:@""];

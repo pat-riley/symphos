@@ -8,6 +8,8 @@ pub enum Icon {
     Waveform,
     Waterfall,
     Sphere,
+    Cylinder,
+    Rings,
     Spectrogram,
     Oscilloscope,
     Veroni,
@@ -20,9 +22,7 @@ pub enum Icon {
     Restore,
     Close,
     Stereo,
-    Mix,
     Settings,
-    Gear,
     Surface,
     Lines,
     YLines,
@@ -34,10 +34,6 @@ pub enum Icon {
     Camera,
     Clock,
     AudioMappings,
-}
-
-pub fn button(ui: &mut egui::Ui, icon: Icon, selected: bool, description: &str) -> Response {
-    sized_button(ui, icon, selected, 30.0, description)
 }
 
 pub fn sized_button(
@@ -55,6 +51,25 @@ pub fn sized_button(
     let color = ui.style().interact(&response).fg_stroke.color;
     paint(ui, response.rect, icon, color);
     response.help_text(description)
+}
+
+/// A monochrome, borderless toolbar control matching a native sidebar toggle.
+pub fn sidebar_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click());
+    if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter()
+            .rect_filled(rect, 5.0, ui.visuals().text_color().gamma_multiply(0.08));
+    }
+    let color = ui
+        .style()
+        .interact(&response)
+        .fg_stroke
+        .color
+        .gamma_multiply(if open { 1.0 } else { 0.65 });
+    paint(ui, rect, Icon::Inspector, color);
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .help_text(description)
 }
 
 pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
@@ -109,9 +124,33 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
                 egui::StrokeKind::Inside,
             );
             line(&[(12.0, 3.0), (12.0, 17.0)]);
-            for y in [7.0, 10.0, 13.0] {
-                line(&[(14.0, y), (17.0, y)]);
+        }
+        Icon::Rings => {
+            for angle in [-0.8_f32, 0.0, 0.8] {
+                let (sa, ca) = angle.sin_cos();
+                let points = (0..=40)
+                    .map(|i| {
+                        let t = i as f32 * std::f32::consts::TAU / 40.0;
+                        let x = t.cos() * 9.0;
+                        let y = t.sin() * 3.5;
+                        p(10.0 + x * ca - y * sa, 10.0 + x * sa + y * ca)
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(points, stroke));
             }
+        }
+        Icon::Cylinder => {
+            for y in [4.0, 16.0] {
+                let points = (0..=32)
+                    .map(|i| {
+                        let t = i as f32 * std::f32::consts::TAU / 32.0;
+                        p(10.0 + t.cos() * 7.5, y + t.sin() * 3.0)
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(points, stroke));
+            }
+            line(&[(2.5, 4.0), (2.5, 16.0)]);
+            line(&[(17.5, 4.0), (17.5, 16.0)]);
         }
         Icon::Sphere => {
             painter.circle_stroke(p(10.0, 10.0), 8.5, stroke);
@@ -330,21 +369,6 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_stroke(p(6.0, 10.0), 5.0, stroke);
             painter.circle_stroke(p(14.0, 10.0), 5.0, stroke);
         }
-        Icon::Mix => {
-            painter.circle_stroke(p(10.0, 10.0), 6.0, stroke);
-        }
-        Icon::Gear => {
-            let mut teeth: Vec<_> = (0..32)
-                .map(|step| {
-                    let angle = step as f32 * std::f32::consts::TAU / 32.0;
-                    let radius = if matches!(step % 4, 1 | 2) { 8.0 } else { 6.0 };
-                    p(10.0, 10.0) + Vec2::angled(angle) * radius
-                })
-                .collect();
-            teeth.push(teeth[0]);
-            painter.add(egui::Shape::line(teeth, stroke));
-            painter.circle_stroke(p(10.0, 10.0), 2.8, stroke);
-        }
         Icon::Settings => {
             for (y, knob) in [(4.0, 6.0), (10.0, 14.0), (16.0, 8.0)] {
                 line(&[(2.0, y), (18.0, y)]);
@@ -428,81 +452,6 @@ mod tests {
                     assert!(clicked);
                 }
             }
-        }
-    }
-
-    #[test]
-    fn settings_icon_matches_picker_height_and_opens_its_menu() {
-        for picker_height in [26.0, 32.0] {
-            let context = egui::Context::default();
-            let mut button_rect = Rect::NOTHING;
-            let mut render = |events| {
-                let mut output = context.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        ui.spacing_mut().interact_size.y = picker_height;
-                        ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
-                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
-                        ui.horizontal_centered(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let picker = egui::ComboBox::from_id_salt("source")
-                                        .width(260.0)
-                                        .selected_text("System output speakers")
-                                        .show_ui(ui, |_| {})
-                                        .response;
-                                    let options = sized_button(
-                                        ui,
-                                        Icon::Gear,
-                                        false,
-                                        picker.rect.height(),
-                                        "View settings",
-                                    );
-                                    button_rect = options.rect;
-                                    assert!(
-                                        (options.rect.height() - picker.rect.height()).abs() < 0.01
-                                    );
-                                    assert!(
-                                        (options.rect.width() - picker.rect.height()).abs() < 0.01
-                                    );
-                                    assert!(
-                                        (options.rect.center().y - picker.rect.center().y).abs()
-                                            < 0.01,
-                                        "picker {:?}, icon {:?}",
-                                        picker.rect,
-                                        options.rect
-                                    );
-                                    egui::Popup::menu(&options).show(|ui| {
-                                        ui.label("Reset pane sizes");
-                                    });
-                                },
-                            );
-                        });
-                    },
-                );
-                output.textures_delta.clear();
-                (output, button_rect)
-            };
-            render(vec![]);
-            let (_, rect) = render(vec![]);
-            let position = rect.center();
-            for pressed in [true, false] {
-                render(vec![
-                    egui::Event::PointerMoved(position),
-                    egui::Event::PointerButton {
-                        pos: position,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]);
-            }
-            let (output, _) = render(vec![]);
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Reset pane sizes")));
         }
     }
 }

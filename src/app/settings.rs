@@ -217,7 +217,9 @@ fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
             Layout::left_to_right(Align::Center),
             control,
         );
-    });
+    })
+    .response
+    .help_fallback(|| format!("{label}\n{}", help::control_description(label)));
 }
 impl SymphosApp {
     pub(super) fn show_settings(&mut self, ctx: &egui::Context, frame: &AnalysisFrame) {
@@ -384,7 +386,7 @@ impl SymphosApp {
                 {
                     equalize_splits(tree);
                 }
-                ui.small("Layout and component presets are managed in the top preset browser.");
+                ui.small("Use the top scene menu to recall complete setups or open the visual preset library. File → Save Project saves all scenes.");
             }
             Category::Audio => {
                 section(ui, "Audio source");
