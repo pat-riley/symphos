@@ -224,6 +224,7 @@ impl Sphere {
         self.pan = Vec2::ZERO;
         self.auto_orbit = false;
     }
+    #[cfg(test)]
     fn view_vector(&self, point: [f32; 3]) -> [f32; 3] {
         let (pos, depth) = camera_gizmo::project_direction(self.yaw, self.elevation, point);
         let (sin, cos) = self.roll.sin_cos();
@@ -727,6 +728,7 @@ impl Sphere {
         let phase = (longitude * self.repeats.clamp(1, 4) as f32).rem_euclid(1.0);
         1.0 - (phase * 2.0 - 1.0).abs()
     }
+    #[cfg(test)]
     fn point(&self, longitude: f32, latitude: f32, level: f32) -> [f32; 3] {
         let phi = latitude * PI;
         let theta =
@@ -802,7 +804,9 @@ impl Sphere {
         let damping = (-latitude * self.ripple_damping.clamp(0.0, 4.0)).exp();
         ((audio_wave + manual_wave).clamp(-1.0, 1.0) * damping, tone)
     }
-    fn build_mesh(&self, rect: Rect, now: Instant, theme: &AppTheme) -> egui::Mesh {
+    // Frozen pre-optimization renderer for numerical and timing comparisons.
+    #[cfg(test)]
+    fn build_mesh_reference(&self, rect: Rect, now: Instant, theme: &AppTheme) -> egui::Mesh {
         let rows = self.latitudes.clamp(12, 128);
         let cols = self.longitudes.clamp(24, 256);
         // Fixed framing prevents audio peaks from changing the camera scale.
@@ -903,6 +907,203 @@ impl Sphere {
         });
         let mut mesh = egui::Mesh::default();
         for (row, col) in cells {
+            let a = vertices[row * stride + col];
+            let b = vertices[row * stride + col + 1];
+            let c = vertices[(row + 1) * stride + col];
+            let d = vertices[(row + 1) * stride + col + 1];
+            let line = |mesh: &mut egui::Mesh, a: Vertex, b: Vertex, width: f32| {
+                mesh_segment(mesh, a.pos, b.pos, a.color, b.color, width)
+            };
+            match self.style {
+                Style::Points
+                    if row.is_multiple_of(self.dot_spacing.clamp(1, 8))
+                        && col.is_multiple_of(self.dot_spacing.clamp(1, 8)) =>
+                {
+                    mesh_dot(
+                        &mut mesh,
+                        a.pos,
+                        a.color,
+                        self.dot_size.clamp(0.5, 8.0) * 0.5,
+                    )
+                }
+                Style::Spikes
+                    if row.is_multiple_of(self.stem_spacing.clamp(1, 8))
+                        && col.is_multiple_of(self.stem_spacing.clamp(1, 8)) =>
+                {
+                    mesh_segment(
+                        &mut mesh,
+                        a.base,
+                        a.pos,
+                        a.color.gamma_multiply(0.3),
+                        a.color,
+                        self.stem_width.clamp(0.5, 4.0),
+                    )
+                }
+                Style::Surface => {
+                    let start = mesh.vertices.len() as u32;
+                    for v in [a, b, c, d] {
+                        mesh.colored_vertex(v.pos, v.color.gamma_multiply(0.7));
+                    }
+                    mesh.add_triangle(start, start + 1, start + 2);
+                    mesh.add_triangle(start + 1, start + 3, start + 2);
+                }
+                _ => {}
+            }
+            let grid = self.style == Style::Wireframe
+                || (self.style == Style::Surface && self.surface_mesh);
+            if (grid || self.style == Style::Rings)
+                && row.is_multiple_of(self.ring_spacing.clamp(1, 8))
+            {
+                line(&mut mesh, a, b, self.line_width.clamp(0.3, 3.0));
+            }
+            if (grid || self.style == Style::Meridians)
+                && col.is_multiple_of(self.meridian_spacing.clamp(1, 8))
+            {
+                line(&mut mesh, a, c, self.line_width.clamp(0.3, 3.0));
+            }
+        }
+        mesh
+    }
+    fn build_mesh(&self, rect: Rect, now: Instant, theme: &AppTheme) -> egui::Mesh {
+        let rows = self.latitudes.clamp(12, 128);
+        let cols = self.longitudes.clamp(24, 256);
+        // Fixed framing prevents audio peaks from changing the camera scale.
+        let scale = rect.width().min(rect.height()).max(0.0) * 0.27 * self.zoom.clamp(0.25, 8.0);
+        let center = rect.center() + self.pan * rect.size();
+        // Trigonometry is fixed across this mesh. Keep the same projection
+        // arithmetic, but compute its six coefficients only once per frame.
+        let (sy, cy) = self.yaw.sin_cos();
+        let (se, ce) = self.elevation.sin_cos();
+        let (sr, cr) = self.roll.sin_cos();
+        let project = |[x, y, z]: [f32; 3]| {
+            let horizontal = cy * x + sy * z;
+            let forward = -sy * x + cy * z;
+            let vertical = se * forward - ce * y;
+            (
+                center
+                    + Vec2::new(
+                        horizontal * cr - vertical * sr,
+                        horizontal * sr + vertical * cr,
+                    ) * scale,
+                se * y + ce * forward,
+            )
+        };
+        let radius = self.radius.clamp(0.05, 4.0);
+        let displacement = self.displacement.clamp(0.0, 4.0);
+        let stretch = [self.stretch_x, self.stretch_y, self.stretch_z].map(|v| v.clamp(0.1, 4.0));
+        let columns: Vec<_> = (0..=cols)
+            .map(|col| {
+                let u = if col == cols {
+                    0.0
+                } else {
+                    col as f32 / cols as f32
+                };
+                let f = self.frequency_fraction(u);
+                let band = f * (BANDS - 1) as f32;
+                let lo = (band as usize).min(BANDS - 1);
+                (u, f, lo, (lo + 1).min(BANDS - 1), band.fract())
+            })
+            .collect();
+        let mut vertices = Vec::with_capacity((rows + 1) * (cols + 1));
+        for row in 0..=rows {
+            let v = row as f32 / rows as f32;
+            let age = if self.reverse_flow { 1.0 - v } else { v };
+            let levels = self.levels_at(now, age * self.seconds.clamp(0.1, 30.0));
+            let ripple = (self.motion == Motion::PoleRipples).then(|| self.ripple_at(now, age));
+            let (sin_phi, cos_phi) = (v * PI).sin_cos();
+            let taper = sin_phi.max(0.0).powf(self.pole_taper.clamp(0.1, 4.0));
+            for &(u, f, lo, hi, fraction) in &columns {
+                let level = ripple.map_or_else(
+                    || {
+                        levels.map_or(0.0, |a| {
+                            self.history
+                                .data
+                                .settings
+                                .intensity(a[lo] + (a[hi] - a[lo]) * fraction)
+                        })
+                    },
+                    |(level, _)| level,
+                );
+                let theta =
+                    u * TAU + self.offset.to_radians() + self.twist.to_radians() * (v - 0.5);
+                let (sin_theta, cos_theta) = theta.sin_cos();
+                let position = |r: f32| {
+                    [
+                        r * sin_phi * cos_theta * stretch[0],
+                        r * cos_phi * stretch[1],
+                        r * sin_phi * sin_theta * stretch[2],
+                    ]
+                };
+                let r = (radius
+                    + level.clamp(
+                        if self.motion == Motion::PoleRipples {
+                            -1.0
+                        } else {
+                            0.0
+                        },
+                        1.0,
+                    ) * displacement
+                        * taper)
+                    .max(0.05);
+                let (pos, depth) = project(position(r));
+                let (base, facing) = project(position(radius));
+                let color_t = match self.color_by {
+                    ColorBy::Level => level.abs(),
+                    ColorBy::Frequency => ripple.map_or(f, |(_, tone)| tone),
+                    ColorBy::History => age,
+                };
+                let activity = if self.motion == Motion::PoleRipples {
+                    level.abs().sqrt()
+                } else {
+                    level.abs()
+                };
+                let light = (self.idle_brightness + activity * (1.0 - self.idle_brightness))
+                    .clamp(0.0, 1.0)
+                    * self.brightness.clamp(0.0, 2.0);
+                let color = self
+                    .palette
+                    .color_with_contrast(color_t, self.contrast, theme);
+                let alpha = self.opacity.clamp(0.0, 1.0)
+                    * if facing < 0.0 {
+                        self.rear_opacity.clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                let c = |v: u8| (v as f32 * light).clamp(0.0, 255.0) as u8;
+                vertices.push(Vertex {
+                    pos,
+                    depth,
+                    base,
+                    color: Color32::from_rgba_unmultiplied(
+                        c(color.r()),
+                        c(color.g()),
+                        c(color.b()),
+                        (alpha * 255.0) as u8,
+                    ),
+                });
+            }
+        }
+        let stride = cols + 1;
+        // Compute each depth once rather than four vertex reads on every
+        // comparison during sorting. Painter order remains identical.
+        let mut cells: Vec<_> = (0..rows)
+            .flat_map(|r| (0..cols).map(move |c| (r, c)))
+            .map(|(r, c)| {
+                let depth = [
+                    r * stride + c,
+                    r * stride + c + 1,
+                    (r + 1) * stride + c,
+                    (r + 1) * stride + c + 1,
+                ]
+                .iter()
+                .map(|&i| vertices[i].depth)
+                .sum::<f32>();
+                (r, c, depth)
+            })
+            .collect();
+        cells.sort_unstable_by(|a, b| a.2.total_cmp(&b.2));
+        let mut mesh = egui::Mesh::default();
+        for (row, col, _) in cells {
             let a = vertices[row * stride + col];
             let b = vertices[row * stride + col + 1];
             let c = vertices[(row + 1) * stride + col];
@@ -1143,6 +1344,83 @@ mod tests {
             });
         }
         sphere
+    }
+    #[test]
+    #[ignore = "manual sphere CPU mesh timing, not a frame-rate test"]
+    fn benchmark_sphere_mesh() {
+        let now = Instant::now();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0));
+        let theme = AppTheme::default();
+        for (rows, cols) in [(64, 128), (128, 256)] {
+            let mut sphere = populated(now);
+            sphere.latitudes = rows;
+            sphere.longitudes = cols;
+            for motion in [Motion::WrappedSpectrum, Motion::PoleRipples] {
+                sphere.motion = motion;
+                for optimized in [false, true] {
+                    let mesh = || {
+                        if optimized {
+                            sphere.build_mesh(rect, now, &theme)
+                        } else {
+                            sphere.build_mesh_reference(rect, now, &theme)
+                        }
+                    };
+                    std::hint::black_box(mesh());
+                    let start = Instant::now();
+                    for _ in 0..100 {
+                        std::hint::black_box(mesh());
+                    }
+                    eprintln!(
+                        "Sphere {rows}x{cols} {motion:?} {}: {:.3} ms/mesh",
+                        if optimized { "optimized" } else { "reference" },
+                        start.elapsed().as_secs_f64() * 10.0
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn optimized_mesh_preserves_geometry_colors_and_painter_order() {
+        let now = Instant::now();
+        let rect = Rect::from_min_size(Pos2::new(40.0, 20.0), Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let mut sphere = populated(now);
+        sphere.twist = 137.0;
+        sphere.offset = 19.0;
+        sphere.pan = Vec2::new(0.2, -0.1);
+        sphere.roll = 0.8;
+        sphere.stretch_x = 1.3;
+        sphere.stretch_z = 0.7;
+        for motion in [Motion::WrappedSpectrum, Motion::PoleRipples] {
+            sphere.motion = motion;
+            for style in [
+                Style::Wireframe,
+                Style::Surface,
+                Style::Rings,
+                Style::Meridians,
+                Style::Points,
+                Style::Spikes,
+            ] {
+                sphere.style = style;
+                for elevation in [-PI * 0.5, 0.35, PI * 0.5] {
+                    sphere.elevation = elevation;
+                    let reference = sphere.build_mesh_reference(rect, now, &theme);
+                    let actual = sphere.build_mesh(rect, now, &theme);
+                    assert_eq!(actual.indices, reference.indices);
+                    assert_eq!(actual.vertices.len(), reference.vertices.len());
+                    for (a, b) in actual.vertices.iter().zip(&reference.vertices) {
+                        assert!(
+                            (a.pos - b.pos).length() < 0.001,
+                            "{motion:?} {style:?}: {:?} != {:?}",
+                            a.pos,
+                            b.pos
+                        );
+                        assert_eq!(a.color, b.color);
+                        assert_eq!(a.uv, b.uv);
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn trackball_composes_free_rotation_at_poles_and_rolls_and_reverses_cleanly() {

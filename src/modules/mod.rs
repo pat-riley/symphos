@@ -871,17 +871,21 @@ impl ModulePane {
         let frame = frozen_frame.as_ref().unwrap_or(frame);
         let frozen = self.frozen.is_some();
         let live = live || self.frozen.is_some();
-        let base_settings = self.copy_settings();
-        let changes = self
+        let restore = if self
             .macros
-            .effective(self.kind, &base_settings, frame.signals.as_deref());
-        if !changes.is_empty() {
-            let mut settings = base_settings.clone();
-            for (field, value) in &changes {
-                crate::macros::set(&mut settings, field, *value);
+            .has_modulation(self.kind, frame.signals.as_deref())
+        {
+            let mut settings = self.copy_settings();
+            let restore = self
+                .macros
+                .apply(self.kind, &mut settings, frame.signals.as_deref());
+            if !restore.is_empty() {
+                self.apply_live_settings(&settings);
             }
-            self.apply_live_settings(&settings);
-        }
+            restore
+        } else {
+            Vec::new()
+        };
         let render_state = ModuleRenderState { live, frozen };
         ui.painter().rect_filled(rect, 4.0, theme.background);
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
@@ -910,13 +914,9 @@ impl ModulePane {
             ModuleKind::Strata => self.strata.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Flux => self.flux.draw(ui, rect, frame, theme, now, live),
         }
-        if !changes.is_empty() {
+        if !restore.is_empty() {
             let mut settings = self.copy_settings();
-            for (field, _) in &changes {
-                if let Some(base) = crate::macros::get(&base_settings, field) {
-                    crate::macros::set(&mut settings, field, base);
-                }
-            }
+            crate::macros::set_many(&mut settings, &restore);
             self.apply_live_settings(&settings);
         }
         if self.frozen.is_some() {

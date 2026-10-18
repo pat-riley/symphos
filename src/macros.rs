@@ -170,13 +170,66 @@ impl State {
             }
         }
     }
+    pub fn has_modulation(&self, kind: ModuleKind, snapshot: Option<&signals::Snapshot>) -> bool {
+        snapshot.is_some_and(|snapshot| {
+            self.banks[kind as usize].iter().any(|slot| {
+                slot.enabled
+                    && slot.parameter.is_some()
+                    && slot
+                        .signal
+                        .is_some_and(|id| snapshot.values.contains_key(&id))
+            })
+        })
+    }
     pub fn effective(
         &self,
         kind: ModuleKind,
         settings: &ModuleSettings,
         snapshot: Option<&signals::Snapshot>,
     ) -> Vec<(String, f64)> {
+        if !self.has_modulation(kind, snapshot) {
+            return Vec::new();
+        }
         let document = serde_json::to_value(settings).ok().unwrap_or_default();
+        self.effective_document(kind, &document, snapshot)
+    }
+    // Apply all live values in one settings round-trip and return only the
+    // affected manual fields. Restoring those fields preserves camera gestures.
+    pub fn apply(
+        &self,
+        kind: ModuleKind,
+        settings: &mut ModuleSettings,
+        snapshot: Option<&signals::Snapshot>,
+    ) -> Vec<(String, f64)> {
+        if !self.has_modulation(kind, snapshot) {
+            return Vec::new();
+        }
+        let Ok(mut document) = serde_json::to_value(&*settings) else {
+            return Vec::new();
+        };
+        let changes = self.effective_document(kind, &document, snapshot);
+        let mut restore = Vec::with_capacity(changes.len());
+        for (path, value) in changes {
+            if let Some(base) = field(&document, &path).and_then(serde_json::Value::as_f64)
+                && edit_field(&mut document, &path, value)
+            {
+                restore.push((path, base));
+            }
+        }
+        if !restore.is_empty() {
+            let Ok(updated) = serde_json::from_value(document) else {
+                return Vec::new();
+            };
+            *settings = updated;
+        }
+        restore
+    }
+    fn effective_document(
+        &self,
+        kind: ModuleKind,
+        document: &serde_json::Value,
+        snapshot: Option<&signals::Snapshot>,
+    ) -> Vec<(String, f64)> {
         self.banks[kind as usize]
             .iter()
             .filter_map(|slot| {
@@ -185,7 +238,7 @@ impl State {
                     return None;
                 }
                 let sample = snapshot?.values.get(&slot.signal?)?;
-                let base = field(&document, &p.field)?.as_f64()? / p.scale;
+                let base = field(document, &p.field)?.as_f64()? / p.scale;
                 let input = if slot.invert {
                     -sample.value
                 } else {
@@ -243,6 +296,7 @@ pub fn inspector_indicators(
         .as_ref()
         .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()));
     let effective = state.effective(kind, settings, panel.as_ref().map(|s| s.snapshot.as_ref()));
+    let document = serde_json::to_value(settings).ok().unwrap_or_default();
     let values = state.banks[kind as usize]
         .iter()
         .enumerate()
@@ -252,7 +306,7 @@ pub fn inspector_indicators(
             let source = panel
                 .as_ref()
                 .and_then(|s| s.bank.channels.iter().find(|d| d.id == id));
-            let base = get(settings, &p.field)?;
+            let base = field(&document, &p.field)?.as_f64()?;
             Some((
                 p.field.clone(),
                 InspectorIndicator {
@@ -288,12 +342,32 @@ pub fn get(settings: &ModuleSettings, path: &str) -> Option<f64> {
     field(&serde_json::to_value(settings).ok()?, path)?.as_f64()
 }
 pub fn set(settings: &mut ModuleSettings, path: &str, value: f64) -> bool {
-    if !value.is_finite() {
+    set_many(settings, &[(path.to_owned(), value)])
+}
+pub fn set_many(settings: &mut ModuleSettings, changes: &[(String, f64)]) -> bool {
+    if changes.is_empty() {
         return false;
     }
     let Ok(mut document) = serde_json::to_value(&*settings) else {
         return false;
     };
+    let mut changed = false;
+    for (path, value) in changes {
+        changed |= edit_field(&mut document, path, *value);
+    }
+    if !changed {
+        return false;
+    }
+    let Ok(updated) = serde_json::from_value(document) else {
+        return false;
+    };
+    *settings = updated;
+    true
+}
+fn edit_field(document: &mut serde_json::Value, path: &str, value: f64) -> bool {
+    if !value.is_finite() {
+        return false;
+    }
     let Some(mut node) = document.as_object_mut().and_then(|m| m.values_mut().next()) else {
         return false;
     };
@@ -320,10 +394,6 @@ pub fn set(settings: &mut ModuleSettings, path: &str, value: f64) -> bool {
         return false;
     }
     *node = new;
-    let Ok(updated) = serde_json::from_value(document) else {
-        return false;
-    };
-    *settings = updated;
     true
 }
 
@@ -379,6 +449,10 @@ pub fn bar(
         .as_ref()
         .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).snapshot.clone());
     let effective = state.effective(kind, settings, snapshot.as_deref());
+    let document = state.banks[kind as usize]
+        .iter()
+        .any(|s| s.parameter.is_some())
+        .then(|| serde_json::to_value(&*settings).ok().unwrap_or_default());
     let width = ((child.available_width() - 66.0) / 12.0).max(96.0);
     egui::ScrollArea::horizontal()
         .id_salt("assignable-macro-row")
@@ -393,7 +467,11 @@ pub fn bar(
                         let column = ui.vertical(|ui| {
                             ui.set_width(width);
                             if let Some(p) = slot.parameter.clone() {
-                                let base = get(settings, &p.field).unwrap_or(p.default * p.scale)
+                                let base = document
+                                    .as_ref()
+                                    .and_then(|d| field(d, &p.field))
+                                    .and_then(serde_json::Value::as_f64)
+                                    .unwrap_or(p.default * p.scale)
                                     / p.scale;
                                 let normalized = p.normalized(base);
                                 let current = effective
@@ -682,6 +760,136 @@ mod tests {
             integer: false,
             logarithmic: false,
             scale: 1.0,
+        }
+    }
+    fn twelve_bindings() -> (State, ModuleSettings, signals::Snapshot) {
+        let mut state = State::default();
+        let settings = ModulePane::new(ModuleKind::Sphere).copy_settings();
+        for (i, field) in [
+            "radius",
+            "displacement",
+            "stretch_x",
+            "stretch_y",
+            "stretch_z",
+            "seconds",
+            "brightness",
+            "contrast",
+            "opacity",
+            "rear_opacity",
+            "idle_brightness",
+            "line_width",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            state.assign(ModuleKind::Sphere, i, spec(field, field));
+            state.banks[ModuleKind::Sphere as usize][i].signal = Some(1);
+            state.banks[ModuleKind::Sphere as usize][i].depth = 0.05;
+        }
+        let snapshot = signals::Snapshot {
+            values: [(
+                1,
+                signals::Sample {
+                    value: 0.7,
+                    availability: 1.0,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        (state, settings, snapshot)
+    }
+    #[test]
+    fn batched_modulation_matches_individual_updates_and_restores_only_bound_fields() {
+        let (state, base, snapshot) = twelve_bindings();
+        let mut expected = base.clone();
+        for (path, value) in state.effective(ModuleKind::Sphere, &base, Some(&snapshot)) {
+            set(&mut expected, &path, value);
+        }
+        let mut settings = base.clone();
+        let restore = state.apply(ModuleKind::Sphere, &mut settings, Some(&snapshot));
+        assert_eq!(settings, expected);
+        assert_eq!(restore.len(), 12);
+        assert!(set(&mut settings, "yaw", 0.75));
+        assert!(set_many(&mut settings, &restore));
+        let mut expected = base.clone();
+        set(&mut expected, "yaw", 0.75);
+        assert_eq!(settings, expected);
+        assert!(
+            state
+                .apply(ModuleKind::Sphere, &mut settings, None)
+                .is_empty()
+        );
+        assert_eq!(settings, expected);
+        let missing = signals::Snapshot::default();
+        assert!(!state.has_modulation(ModuleKind::Sphere, Some(&missing)));
+        assert!(
+            state
+                .apply(ModuleKind::Sphere, &mut settings, Some(&missing))
+                .is_empty()
+        );
+        let mut bypassed = state.clone();
+        for slot in &mut bypassed.banks[ModuleKind::Sphere as usize] {
+            slot.enabled = false;
+        }
+        assert!(!bypassed.has_modulation(ModuleKind::Sphere, Some(&snapshot)));
+    }
+    #[test]
+    fn batched_numeric_edits_preserve_nested_integer_and_invalid_field_behavior() {
+        let mut settings = ModulePane::new(ModuleKind::Sphere).copy_settings();
+        let before = settings.clone();
+        assert!(!set_many(
+            &mut settings,
+            &[
+                ("radius".into(), f64::NAN),
+                ("missing".into(), 1.0),
+                ("surface_mesh".into(), 1.0),
+                ("latitudes".into(), -1.0)
+            ]
+        ));
+        assert_eq!(settings, before);
+        let changes: [(String, f64); 4] = [
+            ("latitudes".into(), 30.8),
+            ("frequency.gain".into(), 5.0),
+            ("missing".into(), 1.0),
+            ("radius".into(), 2.0),
+        ];
+        let mut expected = before;
+        for (path, value) in &changes {
+            set(&mut expected, path, *value);
+        }
+        assert!(set_many(&mut settings, &changes));
+        assert_eq!(settings, expected);
+        assert_eq!(get(&settings, "latitudes"), Some(31.0));
+    }
+    #[test]
+    #[ignore = "manual macro CPU timing, not a frame-rate test"]
+    fn benchmark_macro_updates() {
+        let (state, base, snapshot) = twelve_bindings();
+        for batched in [false, true] {
+            let start = std::time::Instant::now();
+            for _ in 0..5000 {
+                let mut settings = base.clone();
+                if batched {
+                    let restore = state.apply(ModuleKind::Sphere, &mut settings, Some(&snapshot));
+                    set_many(&mut settings, &restore);
+                } else {
+                    let changes = state.effective(ModuleKind::Sphere, &base, Some(&snapshot));
+                    for (path, value) in &changes {
+                        set(&mut settings, path, *value);
+                    }
+                    for (path, _) in &changes {
+                        set(&mut settings, path, get(&base, path).unwrap());
+                    }
+                }
+                std::hint::black_box(settings);
+            }
+            eprintln!(
+                "12 macros apply/restore {}: {:.3} ms/frame",
+                if batched { "batched" } else { "individual" },
+                start.elapsed().as_secs_f64() * 1000.0 / 5000.0
+            );
         }
     }
     #[test]
