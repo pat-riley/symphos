@@ -7,6 +7,7 @@ pub enum Icon {
     Play,
     Waveform,
     Waterfall,
+    Sphere,
     Spectrogram,
     Oscilloscope,
     Veroni,
@@ -110,6 +111,21 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             line(&[(12.0, 3.0), (12.0, 17.0)]);
             for y in [7.0, 10.0, 13.0] {
                 line(&[(14.0, y), (17.0, y)]);
+            }
+        }
+        Icon::Sphere => {
+            painter.circle_stroke(p(10.0, 10.0), 8.5, stroke);
+            for vertical in [true, false] {
+                let points = (0..=32)
+                    .map(|i| {
+                        let t = i as f32 * std::f32::consts::TAU / 32.0;
+                        p(
+                            10.0 + t.cos() * if vertical { 4.0 } else { 8.5 },
+                            10.0 + t.sin() * if vertical { 8.5 } else { 3.5 },
+                        )
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(points, stroke));
             }
         }
         Icon::Waterfall => {

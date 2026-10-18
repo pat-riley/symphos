@@ -66,6 +66,7 @@ impl GlobalBar {
         settings: &mut AnalysisSettings,
         help_open: &mut bool,
         settings_open: &mut bool,
+        macros_open: &mut bool,
         info: BarInfo<'_>,
     ) -> bool {
         self.update_meter_hold(&info);
@@ -77,6 +78,8 @@ impl GlobalBar {
         let compact = ui.available_width() < 900.0;
         ui.horizontal_centered(|ui| {
             help::toggle(ui, help_open);
+            if ui.add(egui::Button::selectable(*macros_open,"Macros")).help_text(crate::shortcuts::platform_label("Show / hide macros · Ctrl + B").as_ref()).clicked() {*macros_open = !*macros_open;}
+
             ui.separator();
             ui.label("FFT");
             egui::ComboBox::from_id_salt("global-fft").width(72.0)
@@ -275,6 +278,7 @@ mod tests {
                         &mut settings,
                         &mut help,
                         &mut inspector,
+                        &mut true,
                         BarInfo {
                             frame: &AnalysisFrame::default(),
                             status: &AudioStatus::Idle,
@@ -334,6 +338,7 @@ mod tests {
                         &mut settings,
                         &mut help,
                         &mut inspector,
+                        &mut true,
                         BarInfo {
                             frame: &AnalysisFrame::default(),
                             status: &AudioStatus::Streaming,

@@ -11,6 +11,8 @@ pub struct Parameter<'a, T: Numeric + Display> {
     default: T,
     text: Cow<'a, str>,
     logarithmic: bool,
+    key: Option<String>,
+    scale: f64,
 }
 impl<'a, T: Numeric + Display> Parameter<'a, T> {
     pub fn new(value: &'a mut T, range: RangeInclusive<T>, default: T) -> Self {
@@ -22,7 +24,17 @@ impl<'a, T: Numeric + Display> Parameter<'a, T> {
             default,
             text: Cow::Borrowed(""),
             logarithmic: false,
+            key: None,
+            scale: 1.0,
         }
+    }
+    pub fn key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+    pub fn raw_scale(mut self, scale: f64) -> Self {
+        self.scale = scale;
+        self
     }
     pub fn text(mut self, text: impl Into<Cow<'a, str>>) -> Self {
         self.text = text.into();
@@ -69,6 +81,19 @@ impl<T: Numeric + Display> Parameter<'_, T> {
         let high = self.range.end().to_f64();
         let mut value = before;
         let inspector = crate::modules::inspector_bounds(ui).is_some();
+        let modulation = self.key.as_ref().and_then(|key| {
+            ui.data(|d| {
+                let context = d.get_temp::<crate::macros::ParameterContext>(egui::Id::new(
+                    crate::macros::CONTEXT,
+                ))?;
+                let indicators = d.get_temp::<crate::macros::InspectorIndicators>(
+                    egui::Id::new(crate::macros::INDICATORS),
+                )?;
+                (indicators.pane == context.pane && indicators.kind == context.kind)
+                    .then(|| indicators.values.get(key).cloned())
+                    .flatten()
+            })
+        });
         let layout = egui::Layout::left_to_right(egui::Align::Center);
         let mut row_rect = ui.available_rect_before_wrap();
         row_rect.max.y = row_rect.top() + ui.spacing().interact_size.y.max(22.0);
@@ -85,7 +110,35 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                 .max_rect(label_rect)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)));
             label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
+            if let Some(m) = &modulation {
+                let (badge, response) = label_ui.allocate_exact_size(egui::vec2(10.0,height),egui::Sense::hover());
+                let color = if m.enabled { m.color } else { ui.visuals().weak_text_color() };
+                label_ui.painter().circle_stroke(badge.center(),3.5,egui::Stroke::new(1.0,color));
+                if m.enabled { label_ui.painter().circle_filled(badge.center(),2.0,color); }
+                response.on_hover_text(format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}",
+                    m.macro_index,m.source,if m.enabled {"Modulating"} else {"Bypassed"},m.depth*100.0,before,m.current));
+            }
             label_ui.add(egui::Label::new(self.text.as_ref()).truncate());
+            if let Some(key)=&self.key
+                && let Some(context)=ui.data(|d|d.get_temp::<crate::macros::ParameterContext>(egui::Id::new(crate::macros::CONTEXT))) {
+                let drag=label_ui.interact(label_rect,label_ui.id().with("macro-parameter-drag"),egui::Sense::drag())
+                    .on_hover_cursor(egui::CursorIcon::Grab)
+                    .on_hover_text(modulation.as_ref().map_or_else(|| "Drag this parameter label onto a macro slot".into(), |m| {
+                        format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}\nDrag this label onto a macro slot to reassign it.",
+                            m.macro_index,m.source,if m.enabled {"Modulating"} else {"Bypassed"},m.depth*100.0,before,m.current)
+                    }));
+                if drag.drag_started() {
+                    drag.dnd_set_drag_payload(crate::macros::ParameterDrag {
+                        context,
+                        spec: crate::macros::ParameterSpec {
+                            field:key.clone(),label:self.text.to_string(),min:low,max:high,
+                            safe_min:*self.safe.start(),safe_max:*self.safe.end(),default:self.default.to_f64(),
+                            integer:T::INTEGRAL,logarithmic:self.logarithmic,scale:self.scale,
+                        }
+                    });
+                }
+            }
+
             let field_width = (width - label_width - ui.spacing().item_spacing.x).min(ui.available_width()).max(32.0);
             let (rect, mut response) = ui.allocate_exact_size(
                 egui::vec2(field_width, height), egui::Sense::click_and_drag(),
@@ -201,6 +254,16 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                     if fraction > 0.0 {
                         let fill = egui::Rect::from_min_max(track.min, egui::pos2(track.left() + track.width() * fraction, track.bottom()));
                         painter.rect_filled(fill, 1.0, ui.visuals().selection.bg_fill.gamma_multiply(if response.dragged() { 1.0 } else { 0.8 }));
+                    }
+                    if let Some(m) = &modulation {
+                        let current = if self.logarithmic && low > 0.0 {
+                            (m.current.max(low) / low).ln() / (high / low).ln()
+                        } else { (m.current-low)/(high-low) };
+                        let current = if current.is_finite() { current.clamp(0.0,1.0) as f32 } else { 0.0 };
+                        let color = if m.enabled { m.color } else { ui.visuals().weak_text_color() };
+                        painter.line_segment([egui::pos2(track.left()+track.width()*fraction,track.center().y),
+                            egui::pos2(track.left()+track.width()*current,track.center().y)],egui::Stroke::new(2.0,color.gamma_multiply(0.6)));
+                        painter.circle_filled(egui::pos2(track.left()+track.width()*current,track.center().y),2.5,color);
                     }
                     painter.rect_stroke(rect, radius, ui.visuals().widgets.inactive.bg_stroke, egui::StrokeKind::Inside);
                     if response.hovered() || response.has_focus() {

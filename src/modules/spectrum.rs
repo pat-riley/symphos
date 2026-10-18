@@ -214,9 +214,9 @@ impl Spectrum {
                 ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
                     .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
                 ui.add_enabled_ui(!self.infinite_hold, |ui| {
-                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).bounds(0.0..=60.0).text("Hold s"))
+                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).key("hold_seconds").bounds(0.0..=60.0).text("Hold s"))
                         .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
-                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).bounds(0.0..=240.0).text("Fall dB/s"))
+                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).key("peak_falloff").bounds(0.0..=240.0).text("Fall dB/s"))
                         .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
                 });
                 if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
@@ -231,6 +231,7 @@ impl Spectrum {
                 if self.style == TraceStyle::Bars {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.bar_gap, 0.0..=90.0, 15.0)
+                            .key("bar_gap")
                             .text("Gap %"),
                     )
                     .help_text(
@@ -239,6 +240,7 @@ impl Spectrum {
                 } else {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.5)
+                            .key("thickness")
                             .bounds(0.1..=20.0)
                             .text("Line px"),
                     )
@@ -247,6 +249,7 @@ impl Spectrum {
                 if self.style == TraceStyle::Filled {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                            .key("fill_opacity")
                             .bounds(0.0..=1.0)
                             .text("Fill opacity"),
                     )

@@ -341,6 +341,9 @@ pub fn valid_settings(value: &impl Serialize) -> bool {
 }
 
 fn valid_pane(pane: &PaneState) -> bool {
+    if pane.instance_id.is_empty() || pane.instance_id.len() > 120 {
+        return false;
+    }
     pane.settings.len() == ModuleKind::ALL.len()
         && ModuleKind::ALL.into_iter().all(|kind| {
             pane.settings
@@ -349,11 +352,14 @@ fn valid_pane(pane: &PaneState) -> bool {
                 .count()
                 == 1
         })
+        && pane.macros.as_ref().is_none_or(|m| m.valid(&pane.settings))
         && valid_settings(pane)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(default)]
+    pub signals: crate::signals::Bank,
     #[serde(default)]
     pub appearance: crate::theme::AppearancePreferences,
     pub version: u32,
@@ -384,11 +390,16 @@ fn default_preset() -> String {
 impl Session {
     pub fn validate(&self) -> bool {
         let ids = self.layout.as_ref().map_or_else(Vec::new, Tile::ids);
-        self.appearance.valid()
+        self.signals.valid()
+            && self.appearance.valid()
             && self.version == 2
             && !self.panes.is_empty()
             && self.panes.len() <= MAX_PANES
             && self.panes.iter().all(valid_pane)
+            && {
+                let mut ids = std::collections::HashSet::new();
+                self.panes.iter().all(|p| ids.insert(&p.instance_id))
+            }
             && self
                 .layout
                 .as_ref()
@@ -451,7 +462,7 @@ impl Session {
 pub enum PresetContent {
     Layout(Tile),
     View { layout: Tile, panes: Vec<PaneState> },
-    Component(ModuleSettings),
+    Component(Box<ModuleSettings>),
 }
 impl PresetContent {
     pub fn label(&self) -> &'static str {
@@ -486,6 +497,8 @@ impl PresetContent {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Preset {
+    #[serde(default)]
+    pub signals: Vec<crate::signals::Definition>,
     pub id: String,
     pub name: String,
     pub content: PresetContent,
@@ -499,6 +512,7 @@ impl Preset {
 pub fn factory_presets() -> Vec<Preset> {
     use Axis::{Horizontal as H, Vertical as V};
     let view = |id: &str, name: &str, layout: Tile, kinds: &[ModuleKind]| Preset {
+        signals: Vec::new(),
         id: format!("factory:{id}"),
         name: name.into(),
         content: PresetContent::View {
@@ -538,6 +552,12 @@ pub fn factory_presets() -> Vec<Preset> {
             "Strata chamber",
             Tile::Pane(0),
             &[ModuleKind::Strata],
+        ),
+        view(
+            "sphere",
+            "Spherical spectrum",
+            Tile::Pane(0),
+            &[ModuleKind::Sphere],
         ),
         view("flux", "Flux currents", Tile::Pane(0), &[ModuleKind::Flux]),
         view(
@@ -581,6 +601,7 @@ pub fn factory_presets() -> Vec<Preset> {
         ("default-layout", "Waterfall layout", Tile::default_view()),
     ] {
         presets.push(Preset {
+            signals: Vec::new(),
             id: format!("factory:{id}"),
             name: name.into(),
             content: PresetContent::Layout(layout),
@@ -649,6 +670,18 @@ impl Storage {
                                 && p.id.len() <= 120
                                 && valid_name(&p.name)
                                 && p.content.valid()
+                                && crate::signals::Bank {
+                                    slots: Vec::new(),
+                                    channels: p.signals.clone(),
+                                    next_id: p
+                                        .signals
+                                        .iter()
+                                        .map(|d| d.id)
+                                        .max()
+                                        .unwrap_or(0)
+                                        .saturating_add(1),
+                                }
+                                .valid()
                         })
                         && {
                             let mut ids = std::collections::HashSet::new();
@@ -679,9 +712,12 @@ impl Storage {
         self.last_save.elapsed() >= Duration::from_millis(750)
     }
     pub fn checkpoint(&mut self, session: &Session) {
+        if !session.validate() {
+            return;
+        }
         self.last_save = Instant::now();
         if let Some(preset) = self.presets.iter().find(|p| p.id == self.active) {
-            self.modified = !session.matches(&preset.content);
+            self.modified = !crate::project::matches(session, preset);
         }
         if let Ok(bytes) = serde_json::to_vec_pretty(session)
             && bytes != self.last_session
@@ -731,17 +767,20 @@ impl Session {
                 .is_some_and(|current| current.canonical() == *tree),
             PresetContent::View { layout, panes } => self.layout.as_ref().is_some_and(|current| {
                 current.canonical() == *layout
-                    && current
-                        .ids()
-                        .iter()
-                        .map(|id| self.panes[*id].clone())
-                        .collect::<Vec<_>>()
-                        == *panes
+                    && current.ids().iter().zip(panes).all(|(id, saved)| {
+                        let current = &self.panes[*id];
+                        current.kind == saved.kind
+                            && current.sections == saved.sections
+                            && current.settings == saved.settings
+                    })
             }),
             PresetContent::Component(settings) => {
                 self.panes.get(self.selected_pane).is_some_and(|pane| {
                     pane.kind == settings.kind()
-                        && pane.settings.iter().any(|current| current == settings)
+                        && pane
+                            .settings
+                            .iter()
+                            .any(|current| current == settings.as_ref())
                 })
             }
         }
@@ -865,6 +904,7 @@ mod tests {
                 entry.get("Veroni").is_none()
                     && entry.get("Strata").is_none()
                     && entry.get("Flux").is_none()
+                    && entry.get("Sphere").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -892,10 +932,11 @@ mod tests {
         let mut legacy = serde_json::to_value(&original).unwrap();
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(7);
-            pane["settings"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|entry| entry.get("Strata").is_none() && entry.get("Flux").is_none());
+            pane["settings"].as_array_mut().unwrap().retain(|entry| {
+                entry.get("Strata").is_none()
+                    && entry.get("Flux").is_none()
+                    && entry.get("Sphere").is_none()
+            });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         assert_eq!(decoded.panes, original.panes);
@@ -920,7 +961,7 @@ mod tests {
             pane["settings"]
                 .as_array_mut()
                 .unwrap()
-                .retain(|entry| entry.get("Flux").is_none());
+                .retain(|entry| entry.get("Flux").is_none() && entry.get("Sphere").is_none());
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         assert_eq!(decoded.panes, original.panes);
@@ -928,6 +969,34 @@ mod tests {
             serde_json::json!({"View": {"layout": legacy["layout"], "panes": legacy["panes"]}});
         let restored: PresetContent = serde_json::from_value(preset).unwrap();
         assert!(restored.valid() && decoded.matches(&restored));
+    }
+
+    #[test]
+    fn nine_component_projects_keep_macro_banks_when_adding_sphere() {
+        let original = session();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(9);
+            pane["settings"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|s| s.get("Sphere").is_none());
+            pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
+            pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        for pane in &decoded.panes {
+            assert_eq!(pane.settings.len(), 10);
+            let macros = pane.macros.as_ref().unwrap();
+            assert_eq!(macros.banks[8][0].depth, -0.75);
+            assert!(
+                macros.banks[9]
+                    .iter()
+                    .all(|slot| slot.parameter.is_none() && slot.signal.is_none())
+            );
+        }
+        legacy["panes"][0]["settings"][1] = legacy["panes"][0]["settings"][0].clone();
+        assert!(Session::decode(&serde_json::to_vec(&legacy).unwrap()).is_none());
     }
 
     #[test]
@@ -946,6 +1015,7 @@ mod tests {
 
     fn session() -> Session {
         Session {
+            signals: crate::signals::Bank::default(),
             appearance: crate::theme::AppearancePreferences::default(),
             version: 2,
             demo: true,
@@ -1063,6 +1133,7 @@ mod tests {
         ));
         let mut storage = Storage::new(dir.clone());
         storage.presets.push(Preset {
+            signals: Vec::new(),
             id: "user:test".into(),
             name: "My layout".into(),
             content: PresetContent::Layout(Tile::Pane(0)),

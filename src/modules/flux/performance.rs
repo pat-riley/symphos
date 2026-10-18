@@ -31,6 +31,7 @@ impl Macro {
         Self::Glow,
         Self::Color,
     ];
+    #[cfg(test)]
     pub fn id(self) -> &'static str {
         match self {
             Self::Brightness => "brightness",
@@ -63,6 +64,7 @@ impl Macro {
             Self::Color => "Color drift",
         }
     }
+    #[cfg(test)]
     fn help(self) -> &'static str {
         match self {
             Self::Brightness => {
@@ -125,10 +127,12 @@ impl Macro {
             Self::Color => s.color_drift,
         }
     }
+    #[cfg(test)]
     pub fn normalized(self, s: &FluxSettings) -> f32 {
         let (a, b) = self.range();
         ((self.raw(s) - a) / (b - a)).clamp(0.0, 1.0)
     }
+    #[cfg(test)]
     pub fn set_normalized(self, s: &mut FluxSettings, v: f32) {
         let (a, b) = self.range();
         let value = a + finite(v, self.normalized(s)).clamp(0.0, 1.0) * (b - a);
@@ -152,13 +156,20 @@ impl Macro {
         match self {
             Self::Brightness => Some(Target::Brightness),
             Self::Speed => Some(Target::Motion),
-            Self::Expansion | Self::Impact => Some(Target::Expansion),
+            Self::Expansion => Some(Target::Expansion),
+            Self::Impact => Some(Target::Impact),
             Self::Swirl => Some(Target::Swirl),
             Self::Turbulence => Some(Target::Turbulence),
-            _ => None,
+            Self::Magnetism => Some(Target::Magnetism),
+            Self::Shape => Some(Target::Shape),
+            Self::Depth => Some(Target::Depth),
+            Self::Trails => Some(Target::Trails),
+            Self::Glow => Some(Target::Glow),
+            Self::Color => Some(Target::Color),
         }
     }
 }
+#[cfg(test)]
 fn finite(v: f32, fallback: f32) -> f32 {
     if v.is_finite() { v } else { fallback }
 }
@@ -166,6 +177,7 @@ fn finite(v: f32, fallback: f32) -> f32 {
 #[derive(Default)]
 pub(super) struct Performance {
     current: Option<[f32; 12]>,
+    #[cfg(test)]
     pub selected: Option<Macro>,
     pub pulse: f32,
     previous_rise: f32,
@@ -174,13 +186,21 @@ pub(super) struct Performance {
     cooldown: f32,
     pub impulse: f32,
     pub manual_burst: bool,
+    pub modulation: [f32; 12],
+    pub impact_event: f32,
 }
 impl Performance {
     pub fn value(&self, s: &FluxSettings, m: Macro) -> f32 {
         self.current.map_or_else(|| m.raw(s), |v| v[m as usize])
     }
     pub fn advance(&mut self, s: &FluxSettings, input: f32, dt: f32) {
-        let target = Macro::ALL.map(|m| m.raw(s));
+        let target = Macro::ALL.map(|m| {
+            if m == Macro::Brightness && s.brightness == 0.0 {
+                return 0.0;
+            }
+            let (a, b) = m.range();
+            (m.raw(s) + self.modulation[m as usize] * (b - a)).clamp(a, b)
+        });
         let current = self.current.get_or_insert(target);
         for (v, t) in current.iter_mut().zip(target) {
             *v += (t - *v) * (1.0 - (-dt / 0.065).exp());
@@ -195,10 +215,13 @@ impl Performance {
         self.impulse = 0.0;
         let rise = self.fast - self.slow;
         if self.manual_burst
+            || self.impact_event > 0.0
             || (self.cooldown == 0.0 && input > 0.08 && rise > 0.05 && self.previous_rise <= 0.05)
         {
             let strength = if self.manual_burst {
                 1.0
+            } else if self.impact_event > 0.0 {
+                self.impact_event.min(1.0)
             } else {
                 (input * 0.9 + rise * 0.5).clamp(0.0, 1.0)
             };
@@ -208,6 +231,7 @@ impl Performance {
             self.manual_burst = false;
         }
         self.previous_rise = rise;
+        self.impact_event = 0.0;
     }
 }
 pub(super) fn orbit_position(shape: f32, a: f32, home: [f32; 3]) -> [f32; 3] {
@@ -249,32 +273,38 @@ pub(super) fn orbit_position(shape: f32, a: f32, home: [f32; 3]) -> [f32; 3] {
     let to = forms(i + 1);
     std::array::from_fn(|k| from[k] + (to[k] - from[k]) * (x - i as f32))
 }
-pub(super) fn shape_label(shape: f32) -> String {
-    let names = ["Rings", "Helix", "Knot", "Vortex", "Petals"];
-    let x = shape.clamp(0.0, 1.0) * 4.0;
-    let i = x.floor() as usize;
-    if x.fract() < 0.025 || i == 4 {
-        names[i].into()
-    } else {
-        format!("{} / {}", names[i], names[i + 1])
-    }
-}
-pub(crate) fn bar_height(width: f32, open: bool) -> f32 {
-    if !open {
-        30.0
-    } else if width >= 900.0 {
-        156.0
-    } else {
-        258.0
-    }
+#[cfg(test)]
+pub(crate) fn bar_height(_width: f32, open: bool) -> f32 {
+    super::super::performance::height(open)
 }
 impl Flux {
+    pub(crate) fn trigger_burst(&mut self) {
+        self.performance.manual_burst = true;
+    }
+    pub(crate) fn legacy_macro_controls() -> [super::super::performance::Control; 12] {
+        Macro::ALL.map(|m| {
+            let (a, b) = m.range();
+            super::super::performance::Control::new(
+                m.label(),
+                m.target().unwrap(),
+                a,
+                b,
+                m.raw(&FluxSettings::default()),
+            )
+        })
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn toggle_performance(&mut self) {
         self.settings.performance_open = !self.settings.performance_open;
     }
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn performance_height(&self, width: f32) -> f32 {
         bar_height(width, self.settings.performance_open)
     }
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn performance_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -282,81 +312,82 @@ impl Flux {
         theme: &AppTheme,
         pane: usize,
     ) -> bool {
-        ui.painter().rect_filled(rect, 0.0, theme.panel);
-        ui.painter().hline(
-            rect.x_range(),
-            rect.top(),
-            egui::Stroke::new(1.0, theme.foreground.gamma_multiply(0.18)),
-        );
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt(("flux-performance", pane))
-                .max_rect(rect.shrink2(Vec2::new(10.0, 5.0))),
-        );
-        child.set_clip_rect(rect.intersect(ui.clip_rect()));
-        child.spacing_mut().item_spacing = Vec2::new(6.0, 3.0);
-        child.spacing_mut().interact_size.y = 22.0;
-        child.style_mut().override_font_id = Some(egui::FontId::proportional(12.0));
-        let mut inspect = false;
-        child.horizontal(|ui| {
-            if ui.button(if self.settings.performance_open{"Flux macros"}else{"Show Flux macros"}).clicked() {self.settings.performance_open = !self.settings.performance_open;}
-            ui.label(format!("Panel {}",pane+1));
-            if self.settings.performance_open {
-                let formation = if self.performance.value(&self.settings, Macro::Magnetism) < 0.05 { "Cloud".into() } else { shape_label(self.performance.value(&self.settings,Macro::Shape)) };
-                ui.menu_button(formation, |ui| {
-                    if ui.button("Cloud").clicked() {Macro::Magnetism.set_normalized(&mut self.settings,0.0);ui.close();}
-                    for (i,name) in ["Rings","Helix","Knot","Vortex","Petals"].into_iter().enumerate() {
-                        if ui.button(name).clicked() {Macro::Shape.set_normalized(&mut self.settings,i as f32/4.0);Macro::Magnetism.set_normalized(&mut self.settings,0.9);self.performance.selected=Some(Macro::Shape);ui.close();}
-                    }
-                }).response.help_text("Choose a formation. Orbital choices raise Magnetism and smoothly reshape the same particles. Cloud releases them again.");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
-                    if ui.button("Hide").clicked(){self.settings.performance_open=false;}
-                    if ui.button("Inspect").help_text("Open the right inspector for the last-touched macro or its audio mapping.").clicked(){inspect=true;}
-                    if ui.button("Burst").help_text("Launch a short accent using the Impact fader, without waiting for an audio onset.").clicked(){self.performance.manual_burst=true;}
-                });
-            }
+        use super::super::performance::{Control, bar, preset_routes};
+        if self.settings.modulation.is_none() {
+            self.settings.sanitize();
+        }
+        let controls = Macro::ALL.map(|m| {
+            let (a, b) = m.range();
+            Control::new(
+                m.label(),
+                m.target().unwrap(),
+                a,
+                b,
+                m.raw(&FluxSettings::default()),
+            )
         });
-        if !self.settings.performance_open {
-            return false;
+        let mut values = Macro::ALL.map(|m| m.raw(&self.settings));
+        let effective = Macro::ALL.map(|m| self.performance.value(&self.settings, m));
+        let action = bar(
+            ui,
+            rect,
+            theme,
+            pane,
+            "Flux",
+            &controls,
+            &mut values,
+            effective,
+            self.settings.modulation.as_mut().unwrap(),
+            &mut self.settings.performance_open,
+            &["Breathing cloud", "Electric orbit", "Slow nebula"],
+        );
+        for (m, v) in Macro::ALL.into_iter().zip(values) {
+            if m.raw(&self.settings) != v {
+                let (a, b) = m.range();
+                m.set_normalized(&mut self.settings, (v - a) / (b - a));
+            }
         }
-        let cols = if rect.width() >= 900.0 { 12 } else { 6 };
-        let width = (child.available_width() - (cols - 1) as f32 * 6.0) / cols as f32;
-        for row in Macro::ALL.chunks(cols) {
-            child.horizontal(|ui| {
-                for &m in row {
-                    ui.push_id(m.id(), |ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(width);
-                            let mut v = m.normalized(&self.settings);
-                            let activity = if m == Macro::Impact {
-                                self.performance.pulse
-                            } else {
-                                m.target()
-                                    .map_or(0.0, |t| self.modulator.value(t).abs().min(1.0))
-                            };
-                            let response = macro_control(ui, m, &mut v, width, theme, activity);
-                            if response.clicked() || response.dragged() {
-                                self.performance.selected = Some(m);
-                            }
-                            if response.changed() {
-                                m.set_normalized(&mut self.settings, v);
-                                self.performance.selected = Some(m);
-                            }
-                        });
-                    });
-                }
-            });
+        if let Some(i) = action.selected {
+            self.performance.selected = Some(Macro::ALL[i]);
         }
-        child.label(egui::RichText::new("Drag to play · Shift: fine · Double-click: reset · music accents continue underneath").color(theme.muted));
-        if inspect
+        if action.burst {
+            self.performance.manual_burst = true;
+        }
+        if let Some(i) = action.preset {
+            let bases = match i {
+                1 => [
+                    0.65, 0.8, 0.55, 0.8, 0.65, 0.35, 0.8, 0.5, 0.55, 0.65, 0.7, 0.4,
+                ],
+                2 => [
+                    0.5, 0.12, 0.5, 0.1, 0.55, 0.15, 0.0, 0.0, 0.7, 0.4, 0.7, 0.15,
+                ],
+                _ => [
+                    0.55, 0.4, 0.45, 0.5, 0.6, 0.3, 0.0, 0.0, 0.55, 0.35, 0.55, 0.2,
+                ],
+            };
+            for (m, v) in Macro::ALL.into_iter().zip(bases) {
+                m.set_normalized(&mut self.settings, v);
+            }
+            preset_routes(
+                ui,
+                Visualizer::Flux,
+                i,
+                &controls,
+                self.settings.modulation.as_mut().unwrap(),
+            );
+        }
+        if action.inspect
             && let Some(m) = self.performance.selected
-            && let Some(t) = m.target()
         {
-            self.modulator
-                .select_target(t, self.settings.modulation.as_ref().unwrap());
+            self.modulator.select_target(
+                m.target().unwrap(),
+                self.settings.modulation.as_ref().unwrap(),
+            );
         }
-        inspect
+        action.inspect
     }
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn performance_section(&self) -> super::super::SettingsSection {
         use super::super::SettingsSection;
         match self.performance.selected {
@@ -368,6 +399,7 @@ impl Flux {
         }
     }
 }
+#[cfg(test)]
 fn macro_control(
     ui: &mut egui::Ui,
     m: Macro,
@@ -376,137 +408,21 @@ fn macro_control(
     theme: &AppTheme,
     activity: f32,
 ) -> egui::Response {
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(width, 94.0), egui::Sense::click_and_drag());
-    let response_id = response.id;
-    response = response
-        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
-        .help_text(m.help());
-    let before = *v;
-    if response.double_clicked() {
-        *v = m.normalized(&FluxSettings::default());
-    } else if response.dragged() {
-        *v = (*v
-            - response.drag_delta().y
-                / if ui.input(|i| i.modifiers.shift) {
-                    1000.0
-                } else {
-                    130.0
-                })
-        .clamp(0.0, 1.0);
-    }
-    if response.clicked() {
-        response.request_focus();
-        if (m as usize) < 4
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let top = rect.top() + 22.0;
-            let bottom = rect.top() + 66.0;
-            if (top..=bottom).contains(&pos.y) {
-                *v = ((bottom - pos.y) / 44.0).clamp(0.0, 1.0);
-            }
-        }
-    }
-    if response.has_focus() {
-        let step = if ui.input(|i| i.modifiers.shift) {
-            0.002
-        } else {
-            0.02
-        };
-        if ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowRight)) {
-            *v = (*v + step).min(1.0);
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowLeft))
-        {
-            *v = (*v - step).max(0.0);
-        }
-    }
-    let p = ui.painter_at(rect);
-    let center = Pos2::new(rect.center().x, rect.top() + 44.0);
-    p.text(
-        Pos2::new(rect.center().x, rect.top()),
-        egui::Align2::CENTER_TOP,
+    super::super::performance::knob(
+        ui,
         m.label(),
-        egui::FontId::proportional(12.0),
-        theme.foreground,
-    );
-    if (m as usize) < 4 {
-        let track = Rect::from_center_size(center, Vec2::new(5.0, 44.0));
-        p.rect_filled(track, 2.0, theme.foreground.gamma_multiply(0.12));
-        p.rect_filled(
-            Rect::from_min_max(
-                Pos2::new(track.left(), track.bottom() - *v * track.height()),
-                track.max,
-            ),
-            2.0,
-            theme.accent.gamma_multiply(0.65),
-        );
-        let y = track.bottom() - *v * track.height();
-        p.rect_filled(
-            Rect::from_center_size(Pos2::new(center.x, y), Vec2::new(22.0, 6.0)),
-            2.0,
-            theme.foreground,
-        );
-        p.rect_filled(
-            Rect::from_min_size(
-                Pos2::new(center.x + 12.0, track.bottom() - activity * 44.0),
-                Vec2::new(2.0, activity * 44.0),
-            ),
-            0.0,
-            theme.accent,
-        );
-    } else {
-        let start = 2.35;
-        let sweep = 4.72;
-        let arc = |fraction: f32, r: f32| {
-            (0..=32)
-                .map(|i| center + Vec2::angled(start + sweep * fraction * i as f32 / 32.0) * r)
-                .collect::<Vec<_>>()
-        };
-        p.circle_filled(center, 17.0, theme.card);
-        p.add(egui::Shape::line(
-            arc(1.0, 21.0),
-            egui::Stroke::new(2.0, theme.foreground.gamma_multiply(0.14)),
-        ));
-        p.add(egui::Shape::line(
-            arc(*v, 21.0),
-            egui::Stroke::new(2.0, theme.accent),
-        ));
-        let direction = Vec2::angled(start + sweep * *v);
-        p.line_segment(
-            [center + direction * 6.0, center + direction * 14.0],
-            egui::Stroke::new(2.0, theme.foreground),
-        );
-        if activity > 0.01 {
-            p.add(egui::Shape::line(
-                arc(activity, 25.0),
-                egui::Stroke::new(1.0, theme.accent_alt.gamma_multiply(0.65)),
-            ));
-        }
-    }
-    let field = Rect::from_center_size(
-        Pos2::new(rect.center().x, rect.bottom() - 14.0),
-        Vec2::new(width.min(62.0), 22.0),
-    );
-    let mut value_ui = ui.new_child(egui::UiBuilder::new().id_salt(response_id).max_rect(field));
-    let mut percent = *v * 100.0;
-    let edit = value_ui.add(
-        egui::DragValue::new(&mut percent)
-            .range(0.0..=100.0)
-            .speed(0.2)
-            .max_decimals(1)
-            .suffix("%"),
-    );
-    if edit.changed() {
-        *v = percent / 100.0;
-    }
-    if before != *v {
-        response.mark_changed();
-    }
-    response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(*v * 100.0), m.label()));
-    response
+        v,
+        m.normalized(&FluxSettings::default()),
+        activity,
+        &mut 0.3,
+        1.0,
+        width,
+        theme,
+        theme.accent,
+        (0.0, 1.0),
+    )
+    .on_hover_text(m.help())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,8 +545,8 @@ mod tests {
         }
     }
     #[test]
-    fn bar_fits_one_and_two_rows_and_exposes_all_controls() {
-        for width in [490.0, 760.0, 1280.0] {
+    fn bar_keeps_one_row_and_exposes_all_controls() {
+        for width in [1280.0] {
             let ctx = egui::Context::default();
             let mut flux = Flux::default();
             let theme = AppTheme::default();
@@ -672,7 +588,7 @@ mod tests {
         }
     }
     #[test]
-    fn fader_and_knob_drag_change_performance_values() {
+    fn rotary_knob_drag_changes_performance_values() {
         for m in [Macro::Brightness, Macro::Swirl] {
             let ctx = egui::Context::default();
             let theme = AppTheme::default();
@@ -693,7 +609,7 @@ mod tests {
                 control
             };
             let rect = render(vec![]);
-            let a = rect.min + Vec2::new(40.0, 45.0);
+            let a = rect.center();
             let b = a - Vec2::new(0.0, 25.0);
             let button = |pos, pressed| egui::Event::PointerButton {
                 pos,

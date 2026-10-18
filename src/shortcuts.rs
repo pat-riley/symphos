@@ -34,10 +34,10 @@ const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::Performance,
-        key: Key::P,
-        modifiers: Modifiers::NONE,
-        label: "P",
-        description: "Show / hide Flux performance macros",
+        key: Key::B,
+        modifiers: Modifiers::COMMAND,
+        label: "Ctrl + B",
+        description: "Show / hide component macros",
     },
     Binding {
         action: Action::CopySettings,
@@ -234,6 +234,13 @@ mod tests {
                 false,
                 Some(Action::PauseAll),
             ),
+            (
+                vec![event(Key::B, Modifiers::COMMAND, false)],
+                false,
+                Some(Action::Performance),
+            ),
+            (vec![event(Key::B, Modifiers::NONE, false)], false, None),
+            (vec![event(Key::B, Modifiers::COMMAND, true)], false, None),
             (vec![event(Key::Space, Modifiers::NONE, true)], false, None),
             (vec![event(Key::F11, Modifiers::NONE, false)], true, None),
         ] {
@@ -244,7 +251,15 @@ mod tests {
             {
                 let mut warmup = ctx.run_ui(
                     egui::RawInput {
-                        events: vec![event(Key::Space, Modifiers::NONE, false)],
+                        events: events
+                            .iter()
+                            .map(|e| match e {
+                                egui::Event::Key { key, modifiers, .. } => {
+                                    event(*key, *modifiers, false)
+                                }
+                                _ => e.clone(),
+                            })
+                            .collect(),
                         ..Default::default()
                     },
                     |_| {},

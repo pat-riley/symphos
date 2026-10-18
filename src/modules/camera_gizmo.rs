@@ -172,12 +172,28 @@ fn endpoints(rect: Rect, yaw: f32, elevation: f32) -> [Endpoint; 6] {
 
 /// One interaction region prevents axis clicks from competing with orbit drags.
 pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bool) -> GizmoAction {
+    draw_with_roll(ui, rect, yaw, elevation, 0.0, compact)
+}
+
+pub fn draw_with_roll(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    yaw: f32,
+    elevation: f32,
+    roll: f32,
+    compact: bool,
+) -> GizmoAction {
     let response = ui.interact(
         rect,
         ui.id().with("orientation-gizmo"),
         Sense::click_and_drag(),
     );
-    let points = endpoints(rect, yaw, elevation);
+    let mut points = endpoints(rect, yaw, elevation);
+    let (sin, cos) = roll.sin_cos();
+    for point in &mut points {
+        let p = point.pos - rect.center();
+        point.pos = rect.center() + Vec2::new(p.x * cos - p.y * sin, p.x * sin + p.y * cos);
+    }
     // Keep generous invisible click targets without endpoint discs.
     let radius = if compact { 8.0 } else { 16.0 };
     let hit = response.hover_pos().and_then(|pointer| {
@@ -267,6 +283,41 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, yaw: f32, elevation: f32, compact: bo
 mod tests {
     use super::*;
 
+    #[test]
+    fn rolled_gizmo_axis_hit_targets_match_the_rotated_arms() {
+        let context = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::splat(128.0));
+        let target = rect.center() + Vec2::new(0.0, 128.0 * 0.31);
+        let render = |events| {
+            let mut action = None;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = Some(draw_with_roll(ui, rect, 0.0, 0.0, FRAC_PI_2, false));
+                },
+            );
+            output.textures_delta.clear();
+            action.unwrap()
+        };
+        render(vec![]);
+        render(vec![egui::Event::PointerMoved(target)]);
+        render(vec![egui::Event::PointerButton {
+            pos: target,
+            pressed: true,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let action = render(vec![egui::Event::PointerButton {
+            pos: target,
+            pressed: false,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(action.snap, Some((Axis::X, true)));
+    }
     #[test]
     fn gizmos_keep_colored_arms_without_endpoint_circles() {
         for compact in [false, true] {

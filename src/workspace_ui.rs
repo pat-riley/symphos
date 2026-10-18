@@ -58,6 +58,33 @@ pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
     }
 }
 
+/// Identical inspector tab rail geometry/styles for components and signal channels.
+pub fn inspector_rail(
+    ui: &mut egui::Ui,
+    bounds: Rect,
+    theme: &AppTheme,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    tabs: impl FnOnce(&mut egui::Ui),
+) -> Rect {
+    let rect = Rect::from_min_max(
+        bounds.min,
+        egui::pos2(bounds.left() + 34.0, bounds.bottom()),
+    );
+    ui.painter().rect_filled(rect, 0.0, theme.navigation);
+    let mut rail = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(id)
+            .max_rect(rect.shrink2(Vec2::new(3.0, 4.0))),
+    );
+    rail.set_clip_rect(rect.intersect(ui.clip_rect()));
+    rail.spacing_mut().button_padding = Vec2::splat(2.0);
+    rail.spacing_mut().item_spacing = Vec2::new(0.0, 3.0);
+    rail.spacing_mut().interact_size = Vec2::splat(28.0);
+    rail.style_mut().interaction.tooltip_delay = 0.2;
+    tabs(&mut rail);
+    Rect::from_min_max(egui::pos2(rect.right(), bounds.top()), bounds.max)
+}
+
 pub fn sidebar_header(
     ui: &mut egui::Ui,
     icon: Icon,
@@ -416,7 +443,7 @@ impl Manager {
         }
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for kind in ModuleKind::ALL {
+            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux] {
                 if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
                     egui::Frame::new().inner_margin(12).show(ui, |ui| {
                         ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));

@@ -60,7 +60,11 @@ use crate::colors::Palette;
 #[serde(default)]
 pub(crate) struct StrataSettings {
     #[serde(default)]
-    modulation: Option<ModulationSettings>,
+    pub(crate) modulation: Option<ModulationSettings>,
+    performance_open: bool,
+    brightness: f32,
+    ripple_amount: f32,
+    shimmer_amount: f32,
     layers: u32,
     resolution: u32,
     width: f32,
@@ -105,6 +109,10 @@ impl Default for StrataSettings {
     fn default() -> Self {
         Self {
             modulation: Some(ModulationSettings::for_visualizer(Visualizer::Strata)),
+            performance_open: true,
+            brightness: 1.0,
+            ripple_amount: 0.8,
+            shimmer_amount: 0.25,
             layers: 7,
             resolution: 24,
             width: 1.8,
@@ -159,6 +167,7 @@ impl StrataSettings {
             self.$field = if self.$field.is_finite() { self.$field.clamp($lo, $hi) } else { defaults.$field };
         )*}; }
         bound! {
+            brightness: 0.0, 2.0; ripple_amount: 0.0, 2.0; shimmer_amount: 0.0, 2.0;
             width: 0.5, 3.0; depth: 0.5, 3.0; height: 0.5, 3.5;
             sag: 0.0, 1.0; tension: 0.0, 1.0; speed: 0.0, 2.0;
             ripple_scale: 0.5, 6.0; turbulence: 0.0, 1.0; twist: 0.0, 1.0;
@@ -195,7 +204,7 @@ impl StrataSettings {
 #[derive(Default)]
 pub struct Strata {
     modulator: Modulator,
-    settings: StrataSettings,
+    pub(crate) settings: StrataSettings,
     last_time: Option<Instant>,
     phase: f64,
     orbit: f64,
@@ -203,8 +212,154 @@ pub struct Strata {
     layer_energy: [f32; MAX_LAYERS],
     layer_phase: [f64; MAX_LAYERS],
     mapped_layers: u32,
+    render_settings: Option<StrataSettings>,
 }
 impl Strata {
+    pub(crate) fn macro_controls() -> [super::performance::Control; 12] {
+        use super::performance::Control;
+        [
+            Control::new("Brightness", Target::Brightness, 0.0_f32, 2.0_f32, 1.0_f32),
+            Control::new("Speed", Target::Motion, 0.0_f32, 2.0_f32, 0.7_f32),
+            Control::new("Bend", Target::LayerBend, 0.0_f32, 1.0_f32, 0.6_f32),
+            Control::new("Ripples", Target::LayerRipple, 0.0_f32, 2.0_f32, 0.8_f32),
+            Control::new("Shimmer", Target::LayerShimmer, 0.0_f32, 2.0_f32, 0.25_f32),
+            Control::new("Turbulence", Target::Turbulence, 0.0_f32, 1.0_f32, 0.4_f32),
+            Control::new("Twist", Target::Swirl, 0.0_f32, 1.0_f32, 0.18_f32),
+            Control::new("Spacing", Target::Depth, 0.5_f32, 3.5_f32, 2.2_f32),
+            Control::new("Lift", Target::Steering, -1.0_f32, 1.0_f32, 0.45_f32),
+            Control::new("Spread", Target::Expansion, 0.1_f32, 1.0_f32, 0.85_f32),
+            Control::new("Trails", Target::Trails, 0.0_f32, 1.0_f32, 0.35_f32),
+            Control::new("Glow", Target::Glow, 0.0_f32, 1.0_f32, 0.25_f32),
+        ]
+    }
+    fn macro_values(s: &StrataSettings) -> [f32; 12] {
+        [
+            s.brightness,
+            s.speed,
+            s.sag,
+            s.ripple_amount,
+            s.shimmer_amount,
+            s.turbulence,
+            s.twist,
+            s.height,
+            s.lift,
+            s.spread,
+            s.trails,
+            s.glow,
+        ]
+    }
+    fn set_macro_values(s: &mut StrataSettings, v: [f32; 12]) {
+        s.brightness = v[0];
+        s.speed = v[1];
+        s.sag = v[2];
+        s.ripple_amount = v[3];
+        s.shimmer_amount = v[4];
+        s.turbulence = v[5];
+        s.twist = v[6];
+        s.height = v[7];
+        s.lift = v[8];
+        s.spread = v[9];
+        s.trails = v[10];
+        s.glow = v[11];
+    }
+    fn macro_effective(&self) -> [f32; 12] {
+        let controls = Self::macro_controls();
+        let values = Self::macro_values(&self.settings);
+        std::array::from_fn(|i| {
+            let c = controls[i];
+            let modulation = if c.target.layered() {
+                (0..self.settings.layers as usize)
+                    .map(|l| self.modulator.layer(c.target, l))
+                    .fold(0.0_f32, |a, b| if b.abs() > a.abs() { b } else { a })
+            } else {
+                self.modulator.value(c.target)
+            };
+            if i == 0 && values[i] == 0.0 {
+                0.0
+            } else {
+                c.effective(values[i], modulation)
+            }
+        })
+    }
+    fn effective_settings(&self) -> StrataSettings {
+        let mut s = self.settings.clone();
+        let mut values = self.macro_effective();
+        // Layer banks are evaluated individually in surface_with_response, never collapsed here.
+        values[2] = self.settings.sag;
+        values[3] = self.settings.ripple_amount;
+        values[4] = self.settings.shimmer_amount;
+        Self::set_macro_values(&mut s, values);
+        s
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn toggle_performance(&mut self) {
+        self.settings.performance_open = !self.settings.performance_open;
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn performance_height(&self, _width: f32) -> f32 {
+        super::performance::height(self.settings.performance_open)
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn performance_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        theme: &AppTheme,
+        pane: usize,
+    ) -> bool {
+        self.settings.sanitize();
+        let controls = Self::macro_controls();
+        let mut values = Self::macro_values(&self.settings);
+        let effective = self.macro_effective();
+        let action = super::performance::bar(
+            ui,
+            rect,
+            theme,
+            pane,
+            "Strata",
+            &controls,
+            &mut values,
+            effective,
+            self.settings.modulation.as_mut().unwrap(),
+            &mut self.settings.performance_open,
+            &["Breathing membranes", "Impact strata", "Slow sediment"],
+        );
+        Self::set_macro_values(&mut self.settings, values);
+        if let Some(i) = action.preset {
+            let defaults = Self::macro_values(&StrataSettings::default());
+            let mut values = defaults;
+            values[1] = match i {
+                1 => 1.1,
+                2 => 0.18,
+                _ => 0.6,
+            };
+            values[4] = match i {
+                1 => 0.7,
+                2 => 0.12,
+                _ => defaults[4],
+            };
+            values[11] = if i == 1 { 0.7 } else { 0.4 };
+            Self::set_macro_values(&mut self.settings, values);
+            super::performance::preset_routes(
+                ui,
+                Visualizer::Strata,
+                i,
+                &controls,
+                self.settings.modulation.as_mut().unwrap(),
+            );
+        }
+        if let Some(i) = action.selected {
+            self.modulator.select_target(
+                controls[i].target,
+                self.settings.modulation.as_ref().unwrap(),
+            );
+        }
+        action.inspect
+    }
+
     pub(crate) fn settings_snapshot(&self) -> StrataSettings {
         self.settings.clone()
     }
@@ -212,9 +367,11 @@ impl Strata {
         self.modulator = Modulator::default();
         self.settings = settings.clone();
         self.settings.sanitize();
+        self.render_settings = None;
     }
     pub fn clear(&mut self) {
         self.modulator = Modulator::default();
+        self.render_settings = None;
         self.last_time = None;
         self.phase = 0.0;
         self.orbit = 0.0;
@@ -241,6 +398,7 @@ impl Strata {
             ($ui:ident, $field:ident, $range:expr, $label:expr, $help:expr) => {
                 $ui.add(
                     Parameter::new(&mut s.$field, $range, StrataSettings::default().$field)
+                        .key(stringify!($field))
                         .text($label),
                 )
                 .help_text($help);
@@ -477,6 +635,7 @@ impl Strata {
         });
         self.last_time = Some(now);
         if dt == 0.0 {
+            self.render_settings = Some(self.effective_settings());
             return;
         }
         self.modulator.advance(
@@ -493,20 +652,19 @@ impl Strata {
             let response = self.layer_response(layer as u32);
             self.layer_energy[layer] = response.into_iter().fold(0.0_f32, f32::max);
             self.layer_phase[layer] += f64::from(
-                dt * self.settings.speed
-                    * (ambient * 0.65
-                        + self.layer_energy[layer] * 0.4
-                        + self.modulator.value(Target::Motion))
-                    .clamp(0.0, 3.0),
+                dt * self.macro_effective()[1]
+                    * (ambient * 0.65 + self.layer_energy[layer] * 0.4).clamp(0.0, 3.0),
             );
         }
-        self.phase += f64::from(
-            dt * self.settings.speed
-                * (ambient * 0.65 + self.modulator.value(Target::Motion)).clamp(0.0, 3.0),
-        );
+        self.phase += f64::from(dt * self.macro_effective()[1] * (ambient * 0.65).clamp(0.0, 3.0));
         if self.settings.auto_orbit {
             self.orbit = (self.orbit + f64::from(dt * self.settings.orbit_speed)).rem_euclid(360.0);
         }
+        self.render_settings = Some(self.effective_settings());
+    }
+
+    fn render_settings(&self) -> &StrataSettings {
+        self.render_settings.as_ref().unwrap_or(&self.settings)
     }
 
     fn layer_response(&self, layer: u32) -> [f32; 3] {
@@ -526,7 +684,7 @@ impl Strata {
         v: f32,
         [bass, mid, high]: [f32; 3],
     ) -> ([f32; 3], f32) {
-        let s = &self.settings;
+        let s = self.render_settings();
         let t = self.layer_phase[layer as usize];
         let l = layer as f32 / (s.layers - 1) as f32;
         let spacing = s.height / (s.layers - 1) as f32;
@@ -537,9 +695,10 @@ impl Strata {
         let cross =
             (f64::from(v * s.ripple_scale * 1.4 - u * 2.7 + l * 3.5) + t * 1.2).sin() as f32;
         let shimmer = (f64::from((u + v) * s.ripple_scale * 2.5) - t * 3.1).sin() as f32;
-        let bend = s.sag * (0.3 + bass * 0.25);
-        let ripple =
-            wave * (0.08 + mid * 0.18) + cross * s.turbulence * 0.13 + shimmer * high * 0.12;
+        let bend = (s.sag + bass).clamp(0.0, 1.0) * 0.3;
+        let ripple = wave * (s.ripple_amount + mid * 2.0).clamp(0.0, 2.0) * 0.1
+            + cross * s.turbulence * 0.13
+            + shimmer * (s.shimmer_amount + high * 2.0).clamp(0.0, 2.0) * 0.08;
         // A strict fraction of layer spacing bounds motion even at maximum gain.
         let displacement = (ripple - bend).tanh() * envelope * spacing * 0.44;
         let angle = s.twist * 0.35 * (t * 0.3 + f64::from(l * 3.0)).sin() as f32;
@@ -563,7 +722,7 @@ impl Strata {
         )
     }
     fn particle(&self, index: u32, lag: f64) -> ([f32; 3], f32) {
-        let s = &self.settings;
+        let s = self.render_settings();
         let hash = |salt| random(index.wrapping_add(s.seed.wrapping_mul(8191)), salt);
         let t = self.phase - lag;
         let cycle = (f64::from(hash(1)) + t * f64::from(s.lift) * 0.12).rem_euclid(1.0) as f32;
@@ -614,7 +773,7 @@ impl Strata {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             self.settings.zoom = (self.settings.zoom * (scroll * 0.002).exp()).clamp(0.4, 2.5);
         }
-        let camera = Camera::fit(rect.shrink(24.0), &self.settings, self.orbit as f32);
+        let camera = Camera::fit(rect.shrink(24.0), self.render_settings(), self.orbit as f32);
         let items = self.scene(&camera, theme);
         let mut mesh = egui::Mesh::default();
         for item in items {
@@ -656,7 +815,7 @@ impl Strata {
         }
     }
     fn scene(&self, camera: &Camera, theme: &AppTheme) -> Vec<DrawItem> {
-        let s = &self.settings;
+        let s = self.render_settings();
         let cool = s.palette.strata(0.0, theme);
         let n = s.resolution as usize;
         let mut items = Vec::with_capacity(
@@ -723,10 +882,7 @@ impl Strata {
                             let (b, wb) = points[next];
                             let heat = (wa + wb) * 0.5;
                             let color = s.palette.strata(heat, theme).gamma_multiply(
-                                s.mesh_opacity
-                                    * (0.40 + heat * 0.60)
-                                    * (0.65 + self.modulator.value(Target::Brightness) * 0.35)
-                                        .clamp(0.0, 1.8),
+                                s.mesh_opacity * (0.40 + heat * 0.60) * s.brightness,
                             );
                             add_line(
                                 &mut items,
@@ -743,9 +899,7 @@ impl Strata {
         }
         for i in 0..s.particles {
             let (p, fade) = self.particle(i, 0.0);
-            let brightness =
-                (0.35 + random(i, 8) * 0.4 + self.modulator.value(Target::Brightness) * 0.4)
-                    .clamp(0.0, 1.0);
+            let brightness = (0.35 + random(i, 8) * 0.4) * s.brightness.clamp(0.0, 1.0);
             let color = mix(theme.foreground, cool, 0.35)
                 .gamma_multiply(s.particle_opacity * fade * brightness);
             let (screen, depth) = camera.project(p);
@@ -788,11 +942,9 @@ impl Strata {
                     ]
                 })
                 .collect();
-            let color = theme.foreground.gamma_multiply(
-                s.particle_opacity
-                    * fade
-                    * (0.24 + self.modulator.value(Target::Brightness) * 0.2).clamp(0.0, 0.75),
-            );
+            let color = theme
+                .foreground
+                .gamma_multiply(s.particle_opacity * fade * (0.24 * s.brightness).clamp(0.0, 0.75));
             for &(a, b) in &edges {
                 add_line(&mut items, transformed[a], transformed[b], color, 0.55, 0.0);
             }
@@ -1265,6 +1417,51 @@ mod tests {
                 },
                 start.elapsed().as_secs_f64() * 1000.0 / 120.0
             );
+        }
+    }
+    #[test]
+    fn every_macro_accepts_one_named_source_offline_without_overwriting_saved_bases() {
+        let start = Instant::now();
+        let controls = Strata::macro_controls();
+        let mut targets = std::collections::HashSet::new();
+        for (i, c) in controls.into_iter().enumerate() {
+            assert!(targets.insert(c.target));
+            let mut model = Strata::default();
+            model.settings.modulation.as_mut().unwrap().routes = vec![crate::modulation::Route {
+                signal: Some(7),
+                target: c.target,
+                amount: 0.15,
+                ..Default::default()
+            }];
+            let saved = model.settings.clone();
+            let base = Strata::macro_values(&saved)[i];
+            let mut snapshot = crate::signals::Snapshot::default();
+            snapshot.values.insert(
+                7,
+                crate::signals::Sample {
+                    value: 0.4,
+                    input: 0.4,
+                    availability: 1.0,
+                    status: crate::signals::Status::Live,
+                    ..Default::default()
+                },
+            );
+            let frame = AnalysisFrame {
+                signals: Some(std::sync::Arc::new(snapshot)),
+                ..Default::default()
+            };
+            model.advance(start, &frame, false);
+            model.advance(start + std::time::Duration::from_millis(50), &frame, false);
+            assert!(
+                model.macro_effective()[i] > base,
+                "{} did not receive the source",
+                c.label
+            );
+            assert_eq!(
+                model.settings, saved,
+                "runtime modulation replaced a manual base"
+            );
+            assert!((c.min..=c.max).contains(&model.macro_effective()[i]));
         }
     }
 }

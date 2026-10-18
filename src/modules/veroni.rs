@@ -15,7 +15,9 @@ use crate::colors::Palette;
 #[serde(default)]
 pub(crate) struct VeroniSettings {
     #[serde(default)]
-    modulation: Option<ModulationSettings>,
+    pub(crate) modulation: Option<ModulationSettings>,
+    performance_open: bool,
+    brightness: f32,
     cells: u32,
     seed: u32,
     clustering: f32,
@@ -51,6 +53,8 @@ impl Default for VeroniSettings {
     fn default() -> Self {
         Self {
             modulation: Some(ModulationSettings::for_visualizer(Visualizer::Veroni)),
+            performance_open: true,
+            brightness: 1.0,
             cells: 128,
             seed: 7,
             clustering: 0.65,
@@ -97,6 +101,7 @@ impl VeroniSettings {
             )*};
         }
         bound! {
+            brightness: 0.0, 2.0;
             clustering: 0.0, 1.0; rounding: 0.0, 0.4;
             speed: 0.0, 2.0; drift: 0.0, 1.0; turbulence: 0.0, 1.0;
             swirl: 0.0, 1.0; breathing: 0.0, 1.0;
@@ -134,7 +139,7 @@ impl VeroniSettings {
 #[derive(Default)]
 pub struct Veroni {
     modulator: Modulator,
-    settings: VeroniSettings,
+    pub(crate) settings: VeroniSettings,
     last_time: Option<Instant>,
     phase: f64,
     // Low, mid, high and broadband energy envelopes; never serialized.
@@ -142,6 +147,143 @@ pub struct Veroni {
     balance: f32,
 }
 impl Veroni {
+    pub(crate) fn macro_controls() -> [super::performance::Control; 12] {
+        use super::performance::Control;
+        [
+            Control::new("Brightness", Target::Brightness, 0.0_f32, 2.0_f32, 1.0_f32),
+            Control::new("Speed", Target::Motion, 0.0_f32, 2.0_f32, 0.65_f32),
+            Control::new("Expansion", Target::Expansion, 0.0_f32, 1.0_f32, 0.45_f32),
+            Control::new("Swirl", Target::Swirl, 0.0_f32, 1.0_f32, 0.45_f32),
+            Control::new("Turbulence", Target::Turbulence, 0.0_f32, 1.0_f32, 0.4_f32),
+            Control::new("Drift", Target::Drift, 0.0_f32, 1.0_f32, 0.55_f32),
+            Control::new("Clustering", Target::Magnetism, 0.0_f32, 1.0_f32, 0.65_f32),
+            Control::new("Rounding", Target::Shape, 0.0_f32, 0.4_f32, 0.16_f32),
+            Control::new("Points", Target::Size, 0.5_f32, 6.0_f32, 2.2_f32),
+            Control::new("Edges", Target::Depth, 0.25_f32, 4.0_f32, 1.25_f32),
+            Control::new("Links", Target::Trails, 0.0_f32, 0.6_f32, 0.16_f32),
+            Control::new("Glow", Target::Glow, 0.0_f32, 1.0_f32, 0.55_f32),
+        ]
+    }
+    fn macro_values(s: &VeroniSettings) -> [f32; 12] {
+        [
+            s.brightness,
+            s.speed,
+            s.breathing,
+            s.swirl,
+            s.turbulence,
+            s.drift,
+            s.clustering,
+            s.rounding,
+            s.point_size,
+            s.edge_width,
+            s.link_opacity,
+            s.glow,
+        ]
+    }
+    fn set_macro_values(s: &mut VeroniSettings, v: [f32; 12]) {
+        s.brightness = v[0];
+        s.speed = v[1];
+        s.breathing = v[2];
+        s.swirl = v[3];
+        s.turbulence = v[4];
+        s.drift = v[5];
+        s.clustering = v[6];
+        s.rounding = v[7];
+        s.point_size = v[8];
+        s.edge_width = v[9];
+        s.link_opacity = v[10];
+        s.glow = v[11];
+    }
+    fn macro_effective(&self) -> [f32; 12] {
+        let controls = Self::macro_controls();
+        let values = Self::macro_values(&self.settings);
+        std::array::from_fn(|i| {
+            let c = controls[i];
+            let modulation = self.modulator.value(c.target);
+            if i == 0 && values[i] == 0.0 {
+                0.0
+            } else {
+                c.effective(values[i], modulation)
+            }
+        })
+    }
+    fn effective_settings(&self) -> VeroniSettings {
+        let mut s = self.settings.clone();
+        let values = self.macro_effective();
+        // Layer banks are evaluated individually in surface_with_response, never collapsed here.
+
+        Self::set_macro_values(&mut s, values);
+        s
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn toggle_performance(&mut self) {
+        self.settings.performance_open = !self.settings.performance_open;
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn performance_height(&self, _width: f32) -> f32 {
+        super::performance::height(self.settings.performance_open)
+    }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn performance_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        theme: &AppTheme,
+        pane: usize,
+    ) -> bool {
+        self.settings.sanitize();
+        let controls = Self::macro_controls();
+        let mut values = Self::macro_values(&self.settings);
+        let effective = self.macro_effective();
+        let action = super::performance::bar(
+            ui,
+            rect,
+            theme,
+            pane,
+            "Veroni",
+            &controls,
+            &mut values,
+            effective,
+            self.settings.modulation.as_mut().unwrap(),
+            &mut self.settings.performance_open,
+            &["Breathing cells", "Electric lattice", "Slow drift"],
+        );
+        Self::set_macro_values(&mut self.settings, values);
+        if let Some(i) = action.preset {
+            let defaults = Self::macro_values(&VeroniSettings::default());
+            let mut values = defaults;
+            values[1] = match i {
+                1 => 1.1,
+                2 => 0.18,
+                _ => 0.6,
+            };
+            values[4] = match i {
+                1 => 0.7,
+                2 => 0.12,
+                _ => defaults[4],
+            };
+            values[11] = if i == 1 { 0.7 } else { 0.4 };
+            Self::set_macro_values(&mut self.settings, values);
+            super::performance::preset_routes(
+                ui,
+                Visualizer::Veroni,
+                i,
+                &controls,
+                self.settings.modulation.as_mut().unwrap(),
+            );
+        }
+        if let Some(i) = action.selected {
+            self.modulator.select_target(
+                controls[i].target,
+                self.settings.modulation.as_ref().unwrap(),
+            );
+        }
+        action.inspect
+    }
+
     pub(crate) fn settings_snapshot(&self) -> VeroniSettings {
         self.settings.clone()
     }
@@ -169,6 +311,7 @@ impl Veroni {
             ($ui:ident, $field:ident, $range:expr, $label:expr, $help:expr) => {
                 $ui.add(
                     Parameter::new(&mut s.$field, $range, VeroniSettings::default().$field)
+                        .key(stringify!($field))
                         .text($label),
                 )
                 .help_text($help);
@@ -348,15 +491,14 @@ impl Veroni {
         .map(|t| self.modulator.value(t));
         self.balance = self.modulator.value(Target::Steering);
         self.phase += f64::from(
-            dt * self.settings.speed
-                * (self.settings.modulation.as_ref().unwrap().ambient * 0.28
-                    + self.modulator.value(Target::Motion) * 0.6)
-                    .clamp(0.0, 3.0),
+            dt * self.macro_effective()[1]
+                * self.settings.modulation.as_ref().unwrap().ambient.max(0.05),
         );
     }
 
     fn sites(&self, size: Vec2) -> Vec<Pos2> {
-        let s = &self.settings;
+        let effective = self.effective_settings();
+        let s = &effective;
         let t = self.phase;
         let sin = |speed: f64, phase: f32| (t * speed + f64::from(phase)).sin() as f32;
         let cos = |speed: f64, phase: f32| (t * speed + f64::from(phase)).cos() as f32;
@@ -367,7 +509,7 @@ impl Veroni {
                 let g = group as f32 * 2.399_963;
                 let center = Vec2::new(0.5 + 0.33 * sin(0.37, g), 0.5 + 0.33 * cos(0.29, g + 1.4));
                 let base = Vec2::new(h(1), h(2));
-                let angle = h(3) * TAU + sin(0.43, g) * s.swirl * (1.0 + self.energy[1]);
+                let angle = h(3) * TAU + sin(0.43, g) * s.swirl;
                 let radius = 0.035 + h(4).sqrt() * 0.19;
                 let orbit = Vec2::angled(angle) * radius;
                 // Keep a quarter of the sites spread over the field so clusters
@@ -375,8 +517,8 @@ impl Veroni {
                 let cluster = if i % 4 == 0 { 0.0 } else { s.clustering };
                 let mut p = base + (center + orbit - base) * cluster;
                 let phase = h(5) * TAU;
-                let bass = self.energy[0];
-                let highs = self.energy[2];
+                let bass = 0.1;
+                let highs = 0.2;
                 p += (p - center) * s.breathing * (0.16 * sin(0.65, g) + bass * 0.5);
                 p += Vec2::new(sin(0.51, base.y * 5.0), cos(0.47, base.x * 5.0)) * s.drift * 0.13;
                 p += Vec2::new(
@@ -407,7 +549,8 @@ impl Veroni {
             return;
         }
         let sites = self.sites(bounds.size());
-        let s = &self.settings;
+        let effective = self.effective_settings();
+        let s = &effective;
         let painter = ui.painter_at(rect);
         let average_area = bounds.area() / sites.len() as f32;
         let mut polygon = Vec::with_capacity(24);
@@ -416,7 +559,7 @@ impl Veroni {
             let accent = s
                 .palette
                 .cellular(i as f32 / sites.len().max(1) as f32, theme);
-            let local = self.energy[3];
+            let local = 0.0;
             if s.show_cells || s.cell_fill > 0.0 {
                 voronoi_cell(&sites, i, bounds.size(), &mut polygon, &mut scratch);
                 if polygon.len() < 3 {
@@ -428,7 +571,7 @@ impl Veroni {
                 if s.cell_fill > 0.0 {
                     painter.add(egui::Shape::convex_polygon(
                         points.clone(),
-                        accent.gamma_multiply(s.cell_fill * (0.4 + local)),
+                        accent.gamma_multiply(s.brightness * s.cell_fill * (0.4 + local)),
                         Stroke::NONE,
                     ));
                 }
@@ -445,13 +588,18 @@ impl Veroni {
                             path.clone(),
                             Stroke::new(
                                 width + 3.0,
-                                theme.foreground.gamma_multiply(opacity * s.glow * 0.07),
+                                theme
+                                    .foreground
+                                    .gamma_multiply(s.brightness * opacity * s.glow * 0.07),
                             ),
                         ));
                     }
                     painter.add(egui::Shape::closed_line(
                         path,
-                        Stroke::new(width, theme.foreground.gamma_multiply(opacity)),
+                        Stroke::new(
+                            width,
+                            theme.foreground.gamma_multiply(s.brightness * opacity),
+                        ),
                     ));
                 }
             }
@@ -477,7 +625,7 @@ impl Veroni {
                     let opacity = s.link_opacity * (1.0 - distance / reach) * (0.5 + local);
                     painter.line_segment(
                         [bounds.min + site.to_vec2(), bounds.min + sites[j].to_vec2()],
-                        Stroke::new(0.8, accent.gamma_multiply(opacity)),
+                        Stroke::new(0.8, accent.gamma_multiply(s.brightness * opacity)),
                     );
                 }
             }
@@ -497,7 +645,7 @@ impl Veroni {
                         painter.circle_filled(
                             position,
                             radius * size,
-                            accent.gamma_multiply(alpha * s.glow),
+                            accent.gamma_multiply(s.brightness * alpha * s.glow),
                         );
                     }
                 }
@@ -505,7 +653,8 @@ impl Veroni {
                     position,
                     radius,
                     accent.gamma_multiply(
-                        (0.3 + self.energy[3] * 0.7 + variation * 0.15).clamp(0.0, 1.0),
+                        s.brightness
+                            * (0.3 + self.energy[3] * 0.7 + variation * 0.15).clamp(0.0, 1.0),
                     ),
                 );
             }
@@ -853,6 +1002,51 @@ mod tests {
                 "Veroni {count} cells, UI + tessellation: {:.2} ms/frame",
                 start.elapsed().as_secs_f64() * 1000.0 / 120.0
             );
+        }
+    }
+    #[test]
+    fn every_macro_accepts_one_named_source_offline_without_overwriting_saved_bases() {
+        let start = Instant::now();
+        let controls = Veroni::macro_controls();
+        let mut targets = std::collections::HashSet::new();
+        for (i, c) in controls.into_iter().enumerate() {
+            assert!(targets.insert(c.target));
+            let mut model = Veroni::default();
+            model.settings.modulation.as_mut().unwrap().routes = vec![crate::modulation::Route {
+                signal: Some(7),
+                target: c.target,
+                amount: 0.15,
+                ..Default::default()
+            }];
+            let saved = model.settings.clone();
+            let base = Veroni::macro_values(&saved)[i];
+            let mut snapshot = crate::signals::Snapshot::default();
+            snapshot.values.insert(
+                7,
+                crate::signals::Sample {
+                    value: 0.4,
+                    input: 0.4,
+                    availability: 1.0,
+                    status: crate::signals::Status::Live,
+                    ..Default::default()
+                },
+            );
+            let frame = AnalysisFrame {
+                signals: Some(std::sync::Arc::new(snapshot)),
+                ..Default::default()
+            };
+            model.advance(start, &frame, false);
+            model.advance(start + std::time::Duration::from_millis(50), &frame, false);
+            assert!(
+                model.macro_effective()[i] > base,
+                "{} did not receive the source",
+                c.label
+            );
+            assert_eq!(
+                model.settings, saved,
+                "runtime modulation replaced a manual base"
+            );
+            assert!((c.min..=c.max).contains(&model.macro_effective()[i]));
         }
     }
 }

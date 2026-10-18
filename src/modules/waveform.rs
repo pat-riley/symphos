@@ -177,7 +177,7 @@ impl Waveform {
         });
         settings_panel(ui, "Time Window", |ui| {
             super::settings_group(ui, "Speed & motion", |ui| {
-                ui.add(crate::parameter::Parameter::new(&mut self.speed_ms, 10.0..=500.0, 250.0).logarithmic(true).text("Across ms"))
+                ui.add(crate::parameter::Parameter::new(&mut self.speed_ms, 10.0..=500.0, 250.0).key("speed_ms").logarithmic(true).text("Across ms"))
                 .help_text("Time required for audio to cross the pane. Smaller values move faster. This is independent of the shared FFT size, and long views preserve peaks when reduced to screen pixels.");
                 properties_combo("waveform-motion", 176.0, 2)
                     .selected_text(if self.looped { "Loop" } else { "Scroll" })
@@ -200,7 +200,7 @@ impl Waveform {
                     ui.selectable_value(&mut self.rising, true, "Rising").help_text("Trigger when the signal crosses the threshold upward.");
                     ui.selectable_value(&mut self.rising, false, "Falling").help_text("Trigger when the signal crosses the threshold downward.");
                 });
-                ui.add(crate::parameter::Parameter::new(&mut self.trigger_level, -1.0..=1.0, 0.0).text("Threshold"))
+                ui.add(crate::parameter::Parameter::new(&mut self.trigger_level, -1.0..=1.0, 0.0).key("trigger_level").text("Threshold"))
                     .help_text("Trigger threshold in original sample amplitude, before display scaling; zero is the centerline.");
             });
             });
@@ -212,6 +212,7 @@ impl Waveform {
                 ui.add_enabled_ui(!self.auto_scale, |ui| {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.amplitude, 0.1..=10.0, 1.0)
+                            .key("amplitude")
                             .bounds(0.01..=100.0)
                             .logarithmic(true)
                             .text("Amplitude"),
@@ -227,6 +228,7 @@ impl Waveform {
                 self.style.controls(ui, false);
                 ui.add(
                     crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.2)
+                        .key("thickness")
                         .bounds(0.1..=20.0)
                         .text("Line px"),
                 )
@@ -234,6 +236,7 @@ impl Waveform {
                 if self.style == TraceStyle::Filled {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                            .key("fill_opacity")
                             .bounds(0.0..=1.0)
                             .text("Fill opacity"),
                     )

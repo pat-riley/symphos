@@ -421,7 +421,7 @@ impl SymphosApp {
                 {
                     self.engine.select_source(source);
                     self.status = AudioStatus::Connecting;
-                    self.reset_modules();
+                    self.reset_capture();
                 }
                 #[cfg(target_os = "macos")]
                 {

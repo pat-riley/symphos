@@ -20,6 +20,9 @@ const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
 
 pub struct SymphosApp {
+    signal_runtime: Option<crate::signals::Runtime>,
+    signal_ui: crate::signals::ui::Shared,
+    project_dialog: crate::project::Dialog,
     engine: AudioEngine,
     #[cfg(feature = "development")]
     development: Option<crate::development::Development>,
@@ -65,7 +68,13 @@ impl SymphosApp {
         engine.refresh_sources();
         let dir = workspace::directory();
         let session = Session::load(&dir);
+        let signal_runtime = Some(crate::signals::Runtime::start(
+            engine.analysis().snapshot.clone(),
+        ));
         let mut app = Self {
+            signal_runtime,
+            signal_ui: Default::default(),
+            project_dialog: Default::default(),
             engine,
             #[cfg(feature = "development")]
             development: crate::development::Development::new(),
@@ -108,6 +117,10 @@ impl SymphosApp {
             pending_close: None,
         };
         if let Some(state) = session {
+            app.signal_ui
+                .lock()
+                .unwrap()
+                .replace_bank(state.signals.clone());
             app.panes = state
                 .panes
                 .iter()
@@ -153,6 +166,12 @@ impl SymphosApp {
             )
         });
         Session {
+            signals: self
+                .signal_ui
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bank
+                .clone(),
             version: 2,
             appearance: self.appearance.clone(),
             demo: {
@@ -187,6 +206,161 @@ impl SymphosApp {
         }
     }
 
+    fn project_controls(&mut self, ctx: &egui::Context) {
+        if !self.project_dialog.open {
+            return;
+        }
+        if self.project_dialog.path.is_empty() {
+            self.project_dialog.path =
+                std::fs::read_to_string(self.storage.dir.join("recent-project.txt"))
+                    .unwrap_or_else(|_| {
+                        self.storage
+                            .dir
+                            .join("Projects/Untitled.symphos.json")
+                            .display()
+                            .to_string()
+                    });
+        }
+        let mut save = false;
+        let mut open = false;
+        egui::Window::new("Project").collapsible(false).default_width(560.0).open(&mut self.project_dialog.open).show(ctx,|ui| {
+            ui.label("Save signals, mappings, components, layout, palettes and performance controls together.");
+            ui.small("GUI and device preferences stay on this computer.");
+            ui.label("Project file (.symphos.json)");
+            ui.add(egui::TextEdit::singleline(&mut self.project_dialog.path).desired_width(f32::INFINITY));
+            ui.horizontal(|ui| {
+                if ui.button("Save project").clicked() {
+                    if std::path::Path::new(&self.project_dialog.path).exists(){self.project_dialog.confirm_save=true;}else{save=true;}
+                }
+                if ui.button("Open project…").clicked(){self.project_dialog.confirm_open=true;}
+            });
+            if self.project_dialog.confirm_save {
+                ui.label("Replace the existing file with this creative setup?");
+                ui.horizontal(|ui| {if ui.button("Replace file").clicked(){save=true;self.project_dialog.confirm_save=false;}
+if ui.button("Cancel save").clicked(){self.project_dialog.confirm_save=false;}});
+            }
+            if self.project_dialog.confirm_open {
+                ui.label("Opening replaces the current creative setup. Save it first if you want to keep it.");
+                ui.horizontal(|ui| {if ui.button("Open and replace workspace").clicked(){open=true;self.project_dialog.confirm_open=false;}
+if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}});
+            }
+            if !self.project_dialog.message.is_empty(){ui.label(&self.project_dialog.message);}
+        });
+        let path = std::path::PathBuf::from(&self.project_dialog.path);
+        if save {
+            self.save_project(ctx, &path);
+        }
+        if open {
+            self.open_project(&path);
+        }
+    }
+
+    fn save_project(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        let project = crate::project::Project::capture(self.workspace(ctx));
+        match project.save(path) {
+            Ok(()) => {
+                self.project_dialog.message = "Project saved.".into();
+                self.project_dialog.current_path = Some(path.into());
+                self.remember_project(path);
+            }
+            Err(e) => {
+                self.project_dialog.message = e;
+                self.project_dialog.open = true;
+            }
+        }
+    }
+    fn open_project(&mut self, path: &std::path::Path) {
+        match crate::project::Project::open(path) {
+            Ok(project) => {
+                self.panes = project
+                    .panes
+                    .iter()
+                    .map(|state| {
+                        let mut p = ModulePane::new(state.kind);
+                        p.restore(state);
+                        p
+                    })
+                    .collect();
+                self.tiles = project.layout;
+                self.selected_pane = project.selected_pane;
+                self.signal_ui
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .replace_bank(project.signals);
+                self.signal_runtime = Some(crate::signals::Runtime::start(
+                    self.engine.analysis().snapshot.clone(),
+                ));
+                *self
+                    .engine
+                    .analysis()
+                    .settings
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = project.analysis;
+                self.panel_fullscreen = None;
+                self.storage.active = "custom".into();
+                self.project_dialog.message = "Project opened.".into();
+                self.project_dialog.current_path = Some(path.into());
+                self.remember_project(path);
+            }
+            Err(e) => {
+                self.project_dialog.message = e;
+                self.project_dialog.open = true;
+            }
+        }
+    }
+    fn remember_project(&mut self, path: &std::path::Path) {
+        self.project_dialog.path = path.display().to_string();
+        let _ = workspace::atomic_write(
+            &self.storage.dir.join("recent-project.txt"),
+            self.project_dialog.path.as_bytes(),
+        );
+    }
+    fn project_action(&mut self, ctx: &egui::Context, action: crate::project_menu::Action) {
+        #[cfg(target_os = "macos")]
+        {
+            use crate::project_menu::Action;
+            if action == Action::Save
+                && let Some(path) = self.project_dialog.current_path.clone()
+            {
+                self.save_project(ctx, &path);
+                return;
+            }
+            let save = action != Action::Open;
+            let initial = if self.project_dialog.path.is_empty() {
+                self.storage
+                    .dir
+                    .join("Projects/Untitled.symphos.json")
+                    .display()
+                    .to_string()
+            } else {
+                self.project_dialog.path.clone()
+            };
+            if let Some(path) = crate::project_menu::choose(save, &initial) {
+                if save {
+                    self.save_project(ctx, &path);
+                } else {
+                    self.open_project(&path);
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = ctx;
+            self.project_dialog.open = true;
+            self.project_dialog.message = match action {
+                crate::project_menu::Action::Open => "Choose a project file to open.",
+                _ => "Choose where to save this project.",
+            }
+            .into();
+        }
+    }
+
+    fn reset_capture(&mut self) {
+        self.engine.analysis().clear_history();
+        for pane in &mut self.panes {
+            pane.reset_capture();
+        }
+    }
     fn reset_modules(&mut self) {
         self.engine.analysis().clear_history();
         for pane in &mut self.panes {
@@ -211,7 +385,7 @@ impl SymphosApp {
                         status,
                         AudioStatus::Connecting | AudioStatus::Idle | AudioStatus::Error(_)
                     ) {
-                        self.reset_modules();
+                        self.reset_capture();
                     }
                     self.status = status;
                 }
@@ -229,7 +403,7 @@ impl SymphosApp {
         {
             self.selected_node = Some(source.node_name.clone());
             self.status = AudioStatus::Connecting;
-            self.reset_modules();
+            self.reset_capture();
             self.engine.select_source(source);
         }
     }
@@ -272,7 +446,7 @@ impl SymphosApp {
                 self.selected_node = Some(source.node_name.clone());
                 self.status = AudioStatus::Connecting;
                 self.engine.select_source(source);
-                self.reset_modules();
+                self.reset_capture();
             }
         }
         response
@@ -302,22 +476,15 @@ impl SymphosApp {
             self.sidebar_open = false;
         }
         let bounds = ui.available_rect_before_wrap();
-        let rail_rect =
-            Rect::from_min_max(bounds.min, Pos2::new(bounds.left() + 34.0, bounds.bottom()));
-        ui.painter()
-            .rect_filled(rail_rect, 0.0, self.theme.navigation);
-        let mut rail = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt(("inspector-tabs", self.selected_pane))
-                .max_rect(rail_rect.shrink2(Vec2::new(3.0, 4.0))),
+        let content_rect = workspace_ui::inspector_rail(
+            ui,
+            bounds,
+            &self.theme,
+            ("inspector-tabs", self.selected_pane),
+            |rail| {
+                self.panes[self.selected_pane].inspector_tabs(rail);
+            },
         );
-        rail.spacing_mut().button_padding = Vec2::splat(2.0);
-        rail.spacing_mut().item_spacing = Vec2::new(0.0, 3.0);
-        rail.spacing_mut().interact_size = Vec2::splat(28.0);
-        rail.style_mut().interaction.tooltip_delay = 0.2;
-        self.panes[self.selected_pane].inspector_tabs(&mut rail);
-        let content_rect =
-            Rect::from_min_max(Pos2::new(rail_rect.right(), bounds.top()), bounds.max);
         let mut properties = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("inspector-properties")
@@ -354,7 +521,13 @@ impl SymphosApp {
                 if let Some(settings) = &self.settings_clipboard { ui.weak(format!("Clipboard: {}", settings.kind().label())); }
                 });
             });
-        ui.data_mut(|data| data.remove::<Rect>(egui::Id::new("inspector-bounds")));
+        ui.data_mut(|data| {
+            data.remove::<Rect>(egui::Id::new("inspector-bounds"));
+            data.remove::<crate::macros::InspectorIndicators>(egui::Id::new(
+                crate::macros::INDICATORS,
+            ));
+            data.remove::<crate::macros::ParameterContext>(egui::Id::new(crate::macros::CONTEXT));
+        });
     }
 
     fn toggle_fullscreen(&mut self, context: &egui::Context) {
@@ -430,11 +603,12 @@ impl SymphosApp {
                     }
                 }
             }
-            Some(Action::Performance)
-                if self.panes[self.selected_pane].kind == ModuleKind::Flux =>
-            {
+            Some(Action::Performance) => {
                 if self.panel_fullscreen.is_some() {
                     self.fullscreen_macros = !self.fullscreen_macros;
+                    if self.fullscreen_macros {
+                        self.panes[self.selected_pane].macros.open = true;
+                    }
                     self.fullscreen_hint_started = None;
                 } else {
                     self.panes[self.selected_pane].toggle_performance();
@@ -740,13 +914,13 @@ impl SymphosApp {
                     .collect(),
             },
             Scope::Component => {
-                PresetContent::Component(self.panes[self.selected_pane].copy_settings())
+                PresetContent::Component(Box::new(self.panes[self.selected_pane].copy_settings()))
             }
         })
     }
 
     fn apply_preset(&mut self, id: &str) {
-        let Some(preset) = self
+        let Some(mut preset) = self
             .storage
             .presets
             .iter()
@@ -755,6 +929,15 @@ impl SymphosApp {
         else {
             return;
         };
+        crate::project::bind_preset_sources(
+            &mut preset.content,
+            &preset.signals,
+            &self
+                .signal_ui
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bank,
+        );
         match &preset.content {
             PresetContent::Component(settings) => {
                 if self.panes[self.selected_pane].paste_settings(settings) {
@@ -806,7 +989,16 @@ impl SymphosApp {
                                 .unwrap_or_default()
                                 .as_nanos()
                         );
+                        let signals = crate::project::dependencies(
+                            &content,
+                            &self
+                                .signal_ui
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .bank,
+                        );
                         self.storage.presets.push(workspace::Preset {
+                            signals,
                             id: id.clone(),
                             name,
                             content,
@@ -916,50 +1108,104 @@ impl SymphosApp {
         let header = navigation.shrink(workspace_ui::NAV_PADDING);
         let left = Rect::from_min_max(
             header.min,
-            Pos2::new(header.left() + 160.0, header.bottom()),
+            Pos2::new(header.left() + 240.0, header.bottom()),
         );
-        let right = Rect::from_min_max(Pos2::new(header.right() - 260.0, header.top()), header.max);
+        let right_width = (header.width() - left.width() - 8.0).clamp(100.0, 260.0);
+        let right = Rect::from_min_max(
+            Pos2::new(header.right() - right_width, header.top()),
+            header.max,
+        );
         let half_width = (navigation.center().x - left.right() - 6.0)
             .min(right.left() - navigation.center().x - 6.0);
         let center = Rect::from_center_size(
             Pos2::new(navigation.center().x, header.center().y),
             Vec2::new((2.0 * half_width).min(500.0), header.height()),
         );
-        self.manager
-            .left_toolbar(&mut workspace_ui::navigation_region(
-                ui,
-                left,
-                "new-component",
-                &self.theme,
-            ));
-        let has_panes = self.tiles.is_some();
-        let actions = self.manager.preset_toolbar(
-            &mut workspace_ui::navigation_region(ui, center, "preset-toolbar", &self.theme),
-            &self.storage,
-            self.panes[self.selected_pane].kind,
-            has_panes,
-        );
-        self.manager_actions(actions);
+        #[cfg(target_os = "macos")]
+        let mut file_action: Option<crate::project_menu::Action> = None;
+        #[cfg(not(target_os = "macos"))]
+        let mut file_action: Option<crate::project_menu::Action> = None;
+        let mut tabs = workspace_ui::navigation_region(ui, left, "main-navigation", &self.theme);
+        tabs.horizontal_centered(|ui| {
+            #[cfg(not(target_os = "macos"))]
+            ui.menu_button("File", |ui| {
+                for (label, action) in [
+                    ("Open Project…", crate::project_menu::Action::Open),
+                    ("Save Project", crate::project_menu::Action::Save),
+                    ("Save Project As…", crate::project_menu::Action::SaveAs),
+                ] {
+                    if ui.button(label).clicked() {
+                        file_action = Some(action);
+                        ui.close();
+                    }
+                }
+            });
+            self.manager.left_toolbar(ui);
+            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+            if ui
+                .add_sized(
+                    [65.0, workspace_ui::NAV_CONTROL_HEIGHT],
+                    egui::Button::selectable(panel.show_signals, "Signals"),
+                )
+                .clicked()
+            {
+                panel.show_signals = true;
+            }
+            if ui
+                .add_sized(
+                    [76.0, workspace_ui::NAV_CONTROL_HEIGHT],
+                    egui::Button::selectable(!panel.show_signals, "Visualize"),
+                )
+                .clicked()
+            {
+                panel.show_signals = false;
+            }
+        });
+        if let Some(action) = file_action.take() {
+            self.project_action(ui.ctx(), action);
+        }
+        let signals_open = self
+            .signal_ui
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .show_signals;
+        if !signals_open && center.width() > 180.0 {
+            let actions = self.manager.preset_toolbar(
+                &mut workspace_ui::navigation_region(ui, center, "preset-toolbar", &self.theme),
+                &self.storage,
+                self.panes[self.selected_pane].kind,
+                self.tiles.is_some(),
+            );
+            self.manager_actions(actions);
+        }
         let mut nav = workspace_ui::navigation_region(ui, right, "navbar", &self.theme);
         nav.horizontal_centered(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add_enabled_ui(self.tiles.is_some(), |ui| {
+                ui.add_enabled_ui(signals_open || self.tiles.is_some(), |ui| {
                     let toggle = icons::sized_button(
                         ui,
                         Icon::Inspector,
-                        self.sidebar_open && self.tiles.is_some(),
+                        self.sidebar_open && (signals_open || self.tiles.is_some()),
                         workspace_ui::NAV_CONTROL_HEIGHT,
                         if self.sidebar_open {
-                            "Hide component inspector · N"
+                            if signals_open {
+                                "Hide signal inspector · N"
+                            } else {
+                                "Hide component inspector · N"
+                            }
                         } else {
-                            "Show component inspector · N"
+                            if signals_open {
+                                "Show signal inspector · N"
+                            } else {
+                                "Show component inspector · N"
+                            }
                         },
                     );
                     toggle.widget_info(|| {
                         egui::WidgetInfo::labeled(
                             egui::WidgetType::Button,
-                            self.tiles.is_some(),
-                            "Toggle component inspector",
+                            signals_open || self.tiles.is_some(),
+                            "Toggle inspector",
                         )
                     });
                     if toggle.clicked() {
@@ -979,6 +1225,16 @@ impl SymphosApp {
                 }
             });
         });
+        if signals_open {
+            let area = Rect::from_min_max(egui::pos2(rect.left(), navigation.bottom()), rect.max);
+            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+            panel.inspector_width = self.sidebar_width;
+            panel.show(ui, area, snapshot, self.sidebar_open, &self.theme);
+            if std::mem::take(&mut panel.close_inspector) {
+                self.sidebar_open = false;
+            }
+            return;
+        }
         let content_bounds = Rect::from_min_max(
             Pos2::new(
                 rect.left()
@@ -1017,6 +1273,7 @@ impl SymphosApp {
             &mut settings,
             &mut self.help_open,
             &mut self.settings_window.open,
+            &mut self.panes[self.selected_pane].macros.open,
             BarInfo {
                 frame: snapshot,
                 status: &self.status,
@@ -1149,6 +1406,30 @@ impl eframe::App for SymphosApp {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.context = Some(ui.ctx().clone());
+        crate::project_menu::install();
+        if let Some(action) = crate::project_menu::take() {
+            self.project_action(ui.ctx(), action);
+        }
+        #[cfg(not(target_os = "macos"))]
+        if !ui.ctx().wants_keyboard_input() {
+            let action = ui.ctx().input_mut(|i| {
+                if i.consume_key(
+                    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+                    egui::Key::S,
+                ) {
+                    Some(crate::project_menu::Action::SaveAs)
+                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
+                    Some(crate::project_menu::Action::Open)
+                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
+                    Some(crate::project_menu::Action::Save)
+                } else {
+                    None
+                }
+            });
+            if let Some(action) = action {
+                self.project_action(ui.ctx(), action);
+            }
+        }
         #[cfg(feature = "development")]
         if let Some(dev) = &mut self.development
             && let Some((theme, scale)) = dev.poll(ui.ctx())
@@ -1173,7 +1454,60 @@ impl eframe::App for SymphosApp {
             .max(1.0e-4);
         self.last_frame = now;
         self.display_fps += (elapsed.recip() - self.display_fps) * 0.08;
-        let snapshot = self.engine.analysis().snapshot.load_full();
+        let captured = self.engine.analysis().snapshot.load_full();
+        let mut snapshot = (*captured).clone();
+        {
+            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+            for pane in &mut self.panes {
+                pane.reconcile_signals(&panel.bank);
+            }
+            panel.consumers.clear();
+            for (i, pane) in self.panes.iter().enumerate() {
+                for (kind, bank) in ModuleKind::ALL.iter().zip(&pane.macros.banks) {
+                    for slot in bank {
+                        if let (Some(id), Some(parameter)) = (slot.signal, &slot.parameter) {
+                            panel.consumers.entry(id).or_default().push(format!(
+                                "{} {} · {}",
+                                kind.label(),
+                                i + 1,
+                                parameter.label
+                            ));
+                        }
+                    }
+                }
+                let mut settings = pane.copy_settings();
+                if let Some(m) = settings.modulation_mut() {
+                    for r in &m.routes {
+                        if let Some(id) = r.signal {
+                            panel.consumers.entry(id).or_default().push(format!(
+                                "{} {} · {}",
+                                settings_kind_name(pane.kind),
+                                i + 1,
+                                r.target.label()
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(runtime) = &self.signal_runtime {
+                runtime.bind_audio(self.engine.analysis().snapshot.clone());
+                runtime.publish(&panel.bank);
+                runtime.connected.store(
+                    matches!(self.status, AudioStatus::Streaming)
+                        && self.engine.analysis().is_current(&captured),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                panel.snapshot = runtime.snapshot.load_full();
+                snapshot.signals = Some(panel.snapshot.clone());
+            }
+        }
+        ui.data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new(crate::signals::ui::CONTEXT_KEY),
+                self.signal_ui.clone(),
+            )
+        });
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("performance-analysis"), snapshot.clone()));
         self.handle_shortcut(ui.ctx(), &snapshot, now);
         let rect = ui.available_rect_before_wrap();
         ui.painter().rect_filled(rect, 0.0, self.theme.background);
@@ -1197,6 +1531,7 @@ impl eframe::App for SymphosApp {
         }
         self.workspace_view(ui, rect, &snapshot, now);
         self.show_settings(ui.ctx(), &snapshot);
+        self.project_controls(ui.ctx());
         if self.storage.save_due() || ui.ctx().input(|input| input.viewport().close_requested()) {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
@@ -1227,12 +1562,19 @@ fn equalize_splits(tree: &mut Tile) {
     }
 }
 
+fn settings_kind_name(kind: ModuleKind) -> String {
+    format!("{kind:?}")
+}
+
 #[cfg(all(test, feature = "development"))]
 mod workspace_interaction_tests {
     use super::*;
 
     fn app() -> SymphosApp {
         SymphosApp {
+            signal_runtime: None,
+            signal_ui: Default::default(),
+            project_dialog: Default::default(),
             engine: AudioEngine::development_mode(true),
             development: None,
             sources: Vec::new(),
@@ -1388,6 +1730,35 @@ mod workspace_interaction_tests {
         );
         output.textures_delta.clear();
         output
+    }
+
+    #[test]
+    fn signal_inspector_navbar_toggle_hides_drawer_and_expands_mixer_without_visualizer_panes() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.signal_ui.lock().unwrap().show_signals = true;
+        app.tiles = None;
+        app.sidebar_open = true;
+        let visible = |out: &egui::FullOutput| {
+            out.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="Signal inspector"))
+        };
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(visible(&workspace_frame(&mut app, &ctx, now, vec![])));
+        let toggle = Pos2::new(1179.0, 21.0);
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(toggle), button(toggle, true)],
+        );
+        let hidden = workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
+        assert!(!app.sidebar_open);
+        assert!(!visible(&hidden));
+        workspace_frame(&mut app, &ctx, now, vec![button(toggle, true)]);
+        let restored = workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
+        assert!(app.sidebar_open);
+        assert!(visible(&restored));
     }
 
     #[test]
