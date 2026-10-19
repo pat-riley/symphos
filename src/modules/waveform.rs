@@ -41,16 +41,26 @@ enum WaveformColorMode {
     Static,
     MultiBand,
     ColorMap,
+    TimeGradient,
+    SignedGradient,
 }
 
 impl WaveformColorMode {
-    const ALL: [Self; 3] = [Self::Static, Self::MultiBand, Self::ColorMap];
+    const ALL: [Self; 5] = [
+        Self::Static,
+        Self::MultiBand,
+        Self::ColorMap,
+        Self::TimeGradient,
+        Self::SignedGradient,
+    ];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Static => "Static",
             Self::MultiBand => "Multi-band",
-            Self::ColorMap => "Color map",
+            Self::ColorMap => "Amplitude gradient",
+            Self::TimeGradient => "Time gradient",
+            Self::SignedGradient => "Signed gradient",
         }
     }
 }
@@ -113,6 +123,7 @@ pub struct Waveform {
     color_mode: WaveformColorMode,
     palette: Palette,
     contrast: f32,
+    appearance: super::retro::Appearance,
     peak_history: bool,
     looped: bool,
     loop_cursor: usize,
@@ -138,6 +149,7 @@ channels: [WaveformChannel; 2] => channels,
 color_mode: WaveformColorMode => color_mode,
 palette: Palette => palette,
 contrast: f32 => contrast,
+#[serde(default)] appearance: super::retro::Appearance => appearance,
 peak_history: bool => peak_history,
 looped: bool => looped,
 });
@@ -162,6 +174,7 @@ impl Default for Waveform {
             color_mode: WaveformColorMode::Static,
             palette: Palette::Theme,
             contrast: 1.0,
+            appearance: Default::default(),
             peak_history: false,
             looped: false,
             loop_cursor: 0,
@@ -264,6 +277,14 @@ impl Waveform {
             });
         });
         settings_panel(ui, "Appearance", |ui| {
+            super::settings_group(ui, "Starting look", |ui| {
+                if let Some(look) = super::retro::look_controls(ui) {
+                    self.apply_look(look);
+                }
+            });
+            super::settings_group(ui, "Texture & light", |ui| {
+                self.appearance.controls(ui, true);
+            });
             super::settings_group(ui, "Trace", |ui| {
                 self.style.controls(ui, false);
                 ui.add(
@@ -284,7 +305,7 @@ impl Waveform {
                 }
             });
             super::settings_group(ui, "Color", |ui| {
-                properties_combo("waveform-color-mode", 176.0, 3)
+                properties_combo("waveform-color-mode", 176.0, WaveformColorMode::ALL.len())
                     .selected_text(self.color_mode.label())
                     .show_ui(ui, |ui| {
                         for mode in WaveformColorMode::ALL {
@@ -293,6 +314,8 @@ impl Waveform {
                                     WaveformColorMode::Static => "Use one selected palette color per waveform lane, independently of the GUI skin.",
                                     WaveformColorMode::MultiBand => "Color each part of the trace from its low-, mid-, and high-frequency energy.",
                                     WaveformColorMode::ColorMap => "Map the selected palette to instantaneous waveform level.",
+                                    WaveformColorMode::TimeGradient => "Spread the selected gradient across the visible time window.",
+                                    WaveformColorMode::SignedGradient => "Map negative through positive waveform amplitude across the gradient; zero uses its midpoint.",
                                 });
                         }
                     })
@@ -300,7 +323,12 @@ impl Waveform {
                     .help_text("Choose whether color identifies the lane, frequency balance, or signal level.");
                 if self.color_mode != WaveformColorMode::MultiBand {
                     self.palette.controls(ui);
-                    if self.color_mode == WaveformColorMode::ColorMap {
+                    if matches!(
+                        self.color_mode,
+                        WaveformColorMode::ColorMap
+                            | WaveformColorMode::TimeGradient
+                            | WaveformColorMode::SignedGradient
+                    ) {
                         self.palette.contrast_controls(ui, &mut self.contrast);
                     }
                 }
@@ -356,6 +384,9 @@ impl Waveform {
         live: bool,
     ) {
         let painter = ui.painter_at(rect);
+        if self.appearance.black_background {
+            painter.rect_filled(rect, 0.0, Color32::BLACK);
+        }
         let plot = rect.shrink2(Vec2::new(10.0, if self.labels { 22.0 } else { 10.0 }));
         if !plot.is_positive() {
             return;
@@ -417,7 +448,14 @@ impl Waveform {
                 if self.peak_history {
                     paint_peak_history(&painter, &bands, lane_rect, plot, gain, theme);
                 }
-                let reduced = envelope(&samples, plot.width().ceil() as usize);
+                let columns = if self.appearance.finish == super::retro::Finish::Smooth {
+                    plot.width().ceil() as usize
+                } else {
+                    (plot.width() / self.appearance.cell_size.clamp(1.0, 32.0))
+                        .ceil()
+                        .max(1.0) as usize
+                };
+                let reduced = envelope(&samples, columns);
                 let points: Vec<_> = reduced
                     .iter()
                     .map(|&(i, sample)| {
@@ -427,7 +465,14 @@ impl Waveform {
                                 lane_rect.center().y
                                     - (sample * gain).clamp(-1.0, 1.0) * lane_rect.height() * 0.45,
                             ),
-                            self.trace_color(sample, bands[i], gain, lane, theme),
+                            self.trace_color(
+                                sample,
+                                bands[i],
+                                gain,
+                                lane,
+                                i as f32 / (samples.len() - 1) as f32,
+                                theme,
+                            ),
                         )
                     })
                     .collect();
@@ -436,6 +481,52 @@ impl Waveform {
                     let trace = &points[range];
                     if trace.len() < 2 {
                         continue;
+                    }
+                    if self.appearance.finish != super::retro::Finish::Smooth {
+                        let gradient = |amplitude| {
+                            self.trace_color(amplitude, [0.0; 3], 1.0, lane, 0.5, theme)
+                        };
+                        let fill_gradient: Option<&dyn Fn(f32) -> Color32> = matches!(
+                            self.color_mode,
+                            WaveformColorMode::ColorMap | WaveformColorMode::SignedGradient
+                        )
+                        .then_some(&gradient);
+                        super::retro::pixel_trace(
+                            &painter,
+                            trace,
+                            lane_rect,
+                            (self.style == TraceStyle::Filled).then_some(self.fill_opacity),
+                            &self.appearance,
+                            fill_gradient,
+                        );
+                        continue;
+                    }
+                    if self.appearance.glow > 0.0 {
+                        for (width, opacity) in [(7.0, 0.08), (3.0, 0.16)] {
+                            if self.color_mode == WaveformColorMode::Static {
+                                painter.add(egui::Shape::line(
+                                    trace.iter().map(|(p, _)| *p).collect(),
+                                    Stroke::new(
+                                        self.thickness + width,
+                                        trace[0].1.gamma_multiply(
+                                            self.appearance.glow.clamp(0.0, 1.0) * opacity,
+                                        ),
+                                    ),
+                                ));
+                            } else {
+                                for pair in trace.windows(2) {
+                                    painter.line_segment(
+                                        [pair[0].0, pair[1].0],
+                                        Stroke::new(
+                                            self.thickness + width,
+                                            mix(pair[0].1, pair[1].1, 0.5).gamma_multiply(
+                                                self.appearance.glow.clamp(0.0, 1.0) * opacity,
+                                            ),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
                     }
                     if self.style == TraceStyle::Filled {
                         paint_colored_fill(
@@ -542,27 +633,68 @@ impl Waveform {
         bands: [f32; 3],
         gain: f32,
         lane: usize,
+        time: f32,
         theme: &AppTheme,
     ) -> Color32 {
-        match self.color_mode {
-            WaveformColorMode::Static => {
-                if self.palette != Palette::Theme {
-                    self.palette
-                        .gradient(theme)
-                        .color(if lane == 0 { 0.8 } else { 0.25 })
-                } else if lane == 0 {
-                    theme.accent
-                } else {
-                    theme.accent_alt
+        let color =
+            match self.color_mode {
+                WaveformColorMode::Static => {
+                    if self.palette != Palette::Theme {
+                        self.palette.gradient(theme).color(
+                            self.appearance
+                                .coordinate(if lane == 0 { 0.8 } else { 0.25 }),
+                        )
+                    } else if lane == 0 {
+                        theme.accent
+                    } else {
+                        theme.accent_alt
+                    }
                 }
-            }
-            WaveformColorMode::MultiBand => multiband_color(bands, theme),
-            WaveformColorMode::ColorMap => self.palette.color_with_contrast(
-                (sample * gain).abs().clamp(0.0, 1.0),
-                self.contrast,
-                theme,
-            ),
-        }
+                WaveformColorMode::MultiBand => multiband_color(bands, theme),
+                WaveformColorMode::ColorMap => self.palette.color_with_contrast(
+                    self.appearance.coordinate((sample * gain).abs()),
+                    self.contrast,
+                    theme,
+                ),
+                WaveformColorMode::TimeGradient => self.palette.color_with_contrast(
+                    self.appearance.coordinate(time),
+                    self.contrast,
+                    theme,
+                ),
+                WaveformColorMode::SignedGradient => self.palette.color_with_contrast(
+                    self.appearance
+                        .coordinate((sample * gain).clamp(-1.0, 1.0) * 0.5 + 0.5),
+                    self.contrast,
+                    theme,
+                ),
+            };
+        self.appearance.tint(color)
+    }
+
+    fn apply_look(&mut self, look: super::retro::Look) {
+        use super::retro::Look;
+        (self.appearance, self.palette) = look.style();
+        self.style = if matches!(look, Look::PixelFire | Look::Classic) {
+            TraceStyle::Filled
+        } else {
+            TraceStyle::Line
+        };
+        self.color_mode = match look {
+            Look::Studio => WaveformColorMode::Static,
+            Look::Neon => WaveformColorMode::TimeGradient,
+            _ => WaveformColorMode::ColorMap,
+        };
+        self.contrast = 1.0;
+        self.fill_opacity = if self.style == TraceStyle::Filled {
+            0.75
+        } else {
+            0.3
+        };
+        self.thickness = 1.2;
+        self.grid = false;
+        self.labels = look == Look::Studio;
+        self.centerline = look == Look::Studio;
+        self.peak_history = false;
     }
 }
 
@@ -797,6 +929,91 @@ fn envelope(samples: &[f32], pixels: usize) -> Vec<(usize, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retro_looks_keep_capture_settings_and_roundtrip_with_legacy_defaults() {
+        let mut waveform = Waveform {
+            speed_ms: 42.0,
+            amplitude: 2.3,
+            trigger: true,
+            trigger_level: 0.2,
+            channels: [WaveformChannel::Mid, WaveformChannel::Side],
+            looped: true,
+            loop_cursor: 23,
+            ..Default::default()
+        };
+        for look in super::super::retro::Look::ALL {
+            waveform.apply_look(look);
+            assert_eq!(waveform.speed_ms, 42.0);
+            assert_eq!(waveform.amplitude, 2.3);
+            assert!(waveform.trigger && waveform.looped);
+            assert_eq!(waveform.trigger_level, 0.2);
+            assert_eq!(
+                waveform.channels,
+                [WaveformChannel::Mid, WaveformChannel::Side]
+            );
+            assert_eq!(waveform.loop_cursor, 23);
+            let snapshot = waveform.settings_snapshot();
+            let text = serde_json::to_string(&snapshot).unwrap();
+            let restored: WaveformSettings = serde_json::from_str(&text).unwrap();
+            assert_eq!(restored, snapshot);
+        }
+        let mut old = serde_json::to_value(Waveform::default().settings_snapshot()).unwrap();
+        old.as_object_mut().unwrap().remove("appearance");
+        let legacy: WaveformSettings = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            legacy.appearance,
+            super::super::retro::Appearance::default()
+        );
+    }
+
+    #[test]
+    fn retro_looks_render_bounded_geometry_and_distinct_gradient_directions() {
+        let context = egui::Context::default();
+        let theme = AppTheme::default();
+        let frame = AnalysisFrame {
+            waveform_left: (0..24000).map(|i| (i as f32 * 0.01).sin() * 0.8).collect(),
+            waveform_right: vec![0.0; 24000],
+            ..Default::default()
+        };
+        for look in super::super::retro::Look::ALL {
+            let mut waveform = Waveform::default();
+            waveform.apply_look(look);
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                waveform.draw(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 360.0)),
+                    &frame,
+                    &theme,
+                    Instant::now(),
+                    true,
+                );
+            });
+            output.textures_delta.clear();
+            let mut vertices = 0;
+            for primitive in context.tessellate(output.shapes, output.pixels_per_point) {
+                if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                    assert!(mesh.vertices.iter().all(|v| v.pos.is_finite()));
+                    vertices += mesh.vertices.len();
+                }
+            }
+            assert!(vertices > 0 && vertices < 400_000, "{look:?}: {vertices}");
+        }
+        let mut waveform = Waveform {
+            color_mode: WaveformColorMode::TimeGradient,
+            palette: Palette::PixelFire,
+            ..Default::default()
+        };
+        assert_ne!(
+            waveform.trace_color(0.5, [0.0; 3], 1.0, 0, 0.0, &theme),
+            waveform.trace_color(0.5, [0.0; 3], 1.0, 0, 1.0, &theme)
+        );
+        waveform.color_mode = WaveformColorMode::SignedGradient;
+        assert_ne!(
+            waveform.trace_color(-1.0, [0.0; 3], 1.0, 0, 0.5, &theme),
+            waveform.trace_color(1.0, [0.0; 3], 1.0, 0, 0.5, &theme)
+        );
+    }
 
     #[test]
     fn copy_settings_includes_channel_color_and_motion_but_not_runtime_cursor() {

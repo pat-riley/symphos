@@ -1,3 +1,6 @@
+mod appearance;
+use appearance::Appearance;
+
 use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
@@ -15,6 +18,7 @@ pub struct Spectrogram {
     seconds: f32,
     palette: Palette,
     contrast: f32,
+    appearance: Appearance,
     vertical: bool,
     smooth: bool,
     time_pixels: usize,
@@ -45,6 +49,7 @@ struct RasterKey {
     smooth: bool,
     palette: Palette,
     contrast: f32,
+    appearance: Appearance,
     settings: FrequencySettings,
     theme: AppTheme,
 }
@@ -54,6 +59,7 @@ frequency: super::frequency::FrequencySettings => history.data.settings,
 seconds: f32 => seconds,
 palette: Palette => palette,
 contrast: f32 => contrast,
+#[serde(default)] appearance: Appearance => appearance,
 vertical: bool => vertical,
 smooth: bool => smooth,
 time_pixels: usize => time_pixels,
@@ -69,6 +75,7 @@ impl Default for Spectrogram {
             seconds: 8.0,
             palette: Palette::default(),
             contrast: 1.0,
+            appearance: Appearance::default(),
             vertical: false,
             smooth: true,
             time_pixels: 240,
@@ -144,6 +151,14 @@ impl Spectrogram {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
+            super::settings_group(ui, "Starting look", |ui| {
+                if let Some(look) = super::retro::look_controls(ui) {
+                    self.apply_look(look);
+                }
+            });
+            super::settings_group(ui, "Texture & light", |ui| {
+                self.appearance.controls(ui);
+            });
             super::settings_group(ui, "Layout & detail", |ui| {
                 super::properties_combo("orientation", 176.0, 2)
                 .selected_text(if self.vertical { "Newest at bottom" } else { "Newest at right" })
@@ -151,7 +166,7 @@ impl Spectrogram {
                     ui.selectable_value(&mut self.vertical, false, "Newest at right").help_text("Time runs left to right; frequency runs low to high from bottom to top.");
                     ui.selectable_value(&mut self.vertical, true, "Newest at bottom").help_text("Time runs top to bottom; frequency runs low to high from left to right.");
                 }).response.help_text("Change scrolling orientation without clearing captured history.");
-                ui.checkbox(&mut self.smooth, "Smooth pixels")
+                ui.add_enabled(self.appearance.texture.finish == super::retro::Finish::Smooth, egui::Checkbox::new(&mut self.smooth, "Smooth pixels"))
                 .help_text("Interpolate between display cells. Turn off for sharp, pixelated cells. Does not change FFT or frequency smoothing.");
                 ui.add(crate::parameter::Parameter::new(&mut self.time_pixels, 64..=1024, 240).key("time_pixels").text("Time cells"))
                 .help_text("Display resolution along time. More cells produce a finer raster, not a higher capture rate; history is sampled up to 30 times per second.");
@@ -191,7 +206,12 @@ impl Spectrogram {
         } else {
             [times, bands]
         };
-        let mut pixels = vec![theme.background; width * height];
+        let background = if self.appearance.texture.black_background {
+            Color32::BLACK
+        } else {
+            theme.background
+        };
+        let mut pixels = vec![background; width * height];
         for time in 0..times {
             let age = self.seconds * (1.0 - time as f32 / (times - 1) as f32);
             if let Some(levels) = self.history.sample(now, age) {
@@ -202,10 +222,16 @@ impl Spectrogram {
                         .iter()
                         .copied()
                         .fold(-120.0_f32, f32::max);
-                    let color = self.palette.color_with_contrast(
-                        self.history.data.settings.intensity(db),
+                    let color = self.appearance.color(
+                        [
+                            self.history.data.settings.intensity(db),
+                            band as f32 / (bands - 1) as f32,
+                            time as f32 / (times - 1) as f32,
+                        ],
+                        self.palette,
                         self.contrast,
                         theme,
+                        background,
                     );
                     let (x, y) = if self.vertical {
                         (band, time)
@@ -216,7 +242,8 @@ impl Spectrogram {
                 }
             }
         }
-        egui::ColorImage::new([width, height], pixels)
+        self.appearance
+            .texture(egui::ColorImage::new([width, height], pixels), background)
     }
 
     pub fn draw(
@@ -245,16 +272,18 @@ impl Spectrogram {
             smooth: self.smooth,
             palette: self.palette,
             contrast: self.contrast,
+            appearance: self.appearance.clone(),
             settings: self.history.data.settings.clone(),
             theme: theme.clone(),
         };
         if self.raster_key.as_ref() != Some(&key) {
             let image = self.image(now, theme);
-            let options = if self.smooth {
-                egui::TextureOptions::LINEAR
-            } else {
-                egui::TextureOptions::NEAREST
-            };
+            let options =
+                if self.smooth && self.appearance.texture.finish == super::retro::Finish::Smooth {
+                    egui::TextureOptions::LINEAR
+                } else {
+                    egui::TextureOptions::NEAREST
+                };
             match &mut self.texture {
                 Some(texture) => texture.set(image, options),
                 None => {
@@ -268,6 +297,9 @@ impl Spectrogram {
             self.raster_key = Some(key);
         }
         let painter = ui.painter_at(rect);
+        if self.appearance.texture.black_background {
+            painter.rect_filled(rect, 0.0, Color32::BLACK);
+        }
         let plot = Rect::from_min_max(
             rect.min + Vec2::new(if self.labels { 44.0 } else { 10.0 }, 12.0),
             rect.max - Vec2::new(12.0, if self.labels { 24.0 } else { 10.0 }),
@@ -409,6 +441,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn looks_preserve_analysis_history_and_measurements_and_restore_old_projects() {
+        let now = Instant::now();
+        let mut spectrogram = Spectrogram {
+            seconds: 3.2,
+            vertical: true,
+            ..Default::default()
+        };
+        spectrogram.history.rows.push_back(HistoryRow {
+            time: now,
+            levels: [-24.0; BANDS],
+            magnitudes: vec![].into(),
+            sequence: 7,
+        });
+        let settings = spectrogram.history.data.settings.clone();
+        let pin = spectrogram.measurement_at(0.5, 1.0, now, 48000);
+        spectrogram.pinned = Some(pin);
+        for look in super::super::retro::Look::ALL {
+            spectrogram.apply_look(look);
+            assert_eq!(spectrogram.history.rows.len(), 1);
+            assert_eq!(spectrogram.history.data.settings, settings);
+            assert_eq!(spectrogram.seconds, 3.2);
+            assert!(spectrogram.vertical);
+            assert_eq!(spectrogram.pinned, Some(pin));
+            assert_eq!(spectrogram.measurement_at(0.5, 1.0, now, 48000), pin);
+            let snapshot = spectrogram.settings_snapshot();
+            let restored: SpectrogramSettings =
+                serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+            assert_eq!(snapshot, restored);
+        }
+        let mut old = serde_json::to_value(Spectrogram::default().settings_snapshot()).unwrap();
+        old.as_object_mut().unwrap().remove("appearance");
+        let restored: SpectrogramSettings = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.appearance, Appearance::default());
+    }
+
+    #[test]
+    fn textured_rasters_are_bounded_keep_silence_dark_and_have_visible_gaps() {
+        let now = Instant::now();
+        let theme = AppTheme::default();
+        let mut spectrogram = Spectrogram {
+            seconds: 0.1,
+            time_pixels: 64,
+            frequency_pixels: 24,
+            ..Default::default()
+        };
+        spectrogram.history.rows.push_back(HistoryRow {
+            time: now,
+            levels: [0.0; BANDS],
+            magnitudes: vec![].into(),
+            sequence: 1,
+        });
+        for look in super::super::retro::Look::ALL {
+            spectrogram.apply_look(look);
+            let image = spectrogram.image(now, &theme);
+            let expected =
+                if spectrogram.appearance.texture.finish == super::super::retro::Finish::Smooth {
+                    [64, 24]
+                } else {
+                    [256, 96]
+                };
+            assert_eq!(image.size, expected);
+            if expected[0] == 256 {
+                let center = image.pixels[2 * 256 + 63 * 4 + 2];
+                let corner = image.pixels[63 * 4];
+                assert_ne!(center, corner, "{look:?} must show cell edges");
+            }
+        }
+        spectrogram.apply_look(super::super::retro::Look::PixelFire);
+        spectrogram.history.rows[0].levels.fill(-120.0);
+        assert!(
+            spectrogram
+                .image(now, &theme)
+                .pixels
+                .iter()
+                .all(|c| *c == Color32::BLACK)
+        );
+        spectrogram.time_pixels = usize::MAX;
+        spectrogram.frequency_pixels = usize::MAX;
+        assert_eq!(spectrogram.image(now, &theme).size, [4096, 384]);
+        spectrogram.vertical = true;
+        assert_eq!(spectrogram.image(now, &theme).size, [384, 4096]);
+    }
+
+    #[test]
     fn copying_appearance_leaves_destination_history_intact() {
         let source = Spectrogram {
             seconds: 2.0,
@@ -472,6 +588,14 @@ mod tests {
         spectrogram.palette = Palette::Heatmap;
         spectrogram.contrast = 3.0;
         assert_eq!(render(&mut spectrogram), 1);
+        spectrogram.apply_look(super::super::retro::Look::Phosphor);
+        assert_eq!(render(&mut spectrogram), 1);
+        assert_eq!(render(&mut spectrogram), 0);
+        spectrogram.appearance.texture.cell_gap = 0.5;
+        assert_eq!(render(&mut spectrogram), 1);
+        spectrogram.appearance.texture.reverse = true;
+        assert_eq!(render(&mut spectrogram), 1);
+        assert_eq!(spectrogram.history.rows.len(), 1);
     }
 
     #[test]

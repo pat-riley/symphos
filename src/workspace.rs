@@ -324,6 +324,9 @@ pub fn valid_settings(value: &impl Serialize) -> bool {
                         "time_pixels" | "frequency_pixels" => (1.0..=1024.0).contains(&n),
                         "seconds" => (0.1..=30.0).contains(&n),
                         "bar_bands" => (1.0..=96.0).contains(&n),
+                        "cell_size" => (1.0..=32.0).contains(&n),
+                        "cell_gap" => (0.0..=0.85).contains(&n),
+                        "unlit" => (0.0..=0.3).contains(&n),
                         "bar_time_step" | "line_spacing" | "y_line_spacing" | "wire_spacing"
                         | "dot_spacing" | "stem_spacing" => (1.0..=8.0).contains(&n),
                         "min_hz" | "max_hz" => n >= 1.0,

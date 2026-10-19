@@ -389,8 +389,14 @@ mod tests {
         assert_eq!(project.panes, loaded.panes);
         assert_eq!(project.layout, loaded.layout);
         let text = std::fs::read_to_string(&path).unwrap();
+        // Component appearance is creative state. GUI appearance preferences
+        // must stay absent at the project/scene level.
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(json.get("appearance").is_none());
+        for scene in json["scenes"].as_array().unwrap() {
+            assert!(scene.get("appearance").is_none());
+        }
         for excluded in [
-            "appearance",
             "window_position",
             "selected_node",
             "waveform_left",

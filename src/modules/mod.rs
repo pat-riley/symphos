@@ -23,6 +23,7 @@ mod flux;
 mod frequency;
 mod oscilloscope;
 pub(crate) mod performance;
+mod retro;
 mod rings;
 mod trackball;
 
