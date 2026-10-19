@@ -2709,6 +2709,17 @@ dependencies = [
  "rtrb",
  "serde",
  "serde_json",
+ "symphos-visuals",
+]
+
+[[package]]
+name = "symphos-visuals"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "naga",
+ "pollster",
+ "wgpu",
 ]
 
 [[package]]
