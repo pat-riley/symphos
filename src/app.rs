@@ -1819,7 +1819,7 @@ impl eframe::App for SymphosApp {
             self.project_action(ui.ctx(), action);
         }
         #[cfg(not(target_os = "macos"))]
-        if !ui.ctx().wants_keyboard_input() {
+        if !ui.ctx().egui_wants_keyboard_input() {
             let action = ui.ctx().input_mut(|i| {
                 if i.consume_key(
                     egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),

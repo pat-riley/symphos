@@ -465,7 +465,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn start() -> Self {
         let path = crate::workspace::directory().join("midi-inputs.json");
-        let preferences_value = std::fs::read(&path)
+        let preferences_value: Preferences = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
