@@ -135,7 +135,7 @@ impl Stereometer {
                     .response
                     .help_text("Choose the vectorscope projection. Linear is the conventional rotated stereo monitor.");
                 ui.add(
-                    crate::parameter::Parameter::new(&mut self.window_ms, 20.0..=250.0, 120.0)
+                    crate::parameter::Parameter::new(&mut self.window_ms, 20.0..=250.0, 120.0).key("window_ms")
                         .bounds(5.0..=500.0)
                         .logarithmic(true)
                         .text("Persistence ms"),
@@ -180,12 +180,14 @@ impl Stereometer {
             super::settings_group(ui, "Dots", |ui| {
                 ui.add(
                     crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=5.0, 2.2)
+                        .key("dot_size")
                         .bounds(0.5..=12.0)
                         .text("Size px"),
                 )
                 .help_text("Screen-space size of each plotted audio sample.");
                 ui.add(
                     crate::parameter::Parameter::new(&mut self.intensity, 0.1..=1.0, 0.9)
+                        .key("intensity")
                         .bounds(0.01..=1.0)
                         .text("Intensity"),
                 )

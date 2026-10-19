@@ -32,7 +32,7 @@ impl ColorMode {
 #[serde(default)]
 pub(crate) struct FluxSettings {
     #[serde(default)]
-    modulation: Option<ModulationSettings>,
+    pub(crate) modulation: Option<ModulationSettings>,
     brightness: f32,
     expansion: f32,
     impact: f32,
@@ -196,7 +196,7 @@ pub struct Flux {
     modulator: Modulator,
     performance: Performance,
     color_phase: f64,
-    settings: FluxSettings,
+    pub(crate) settings: FluxSettings,
     particles: Vec<Particle>,
     pattern: Option<(u32, u32)>,
     last_time: Option<Instant>,
@@ -216,6 +216,11 @@ impl Flux {
         self.performance = Performance::default();
         self.settings = settings.clone();
         self.settings.sanitize();
+    }
+    pub(crate) fn resume_signals(&mut self, frame: &AnalysisFrame) {
+        if let Some(s) = &self.settings.modulation {
+            self.modulator.consume_current_events(frame, s);
+        }
     }
     pub fn clear(&mut self) {
         self.modulator = Modulator::default();
@@ -250,6 +255,7 @@ impl Flux {
             ($ui:ident, $field:ident, $range:expr, $label:expr, $help:expr) => {
                 $ui.add(
                     Parameter::new(&mut s.$field, $range, FluxSettings::default().$field)
+                        .key(stringify!($field))
                         .text($label),
                 )
                 .help_text($help);
@@ -609,6 +615,12 @@ impl Flux {
                         self.settings.modulation.as_ref().unwrap(),
                     ) * 0.55,
                 );
+            for m in performance::Macro::ALL {
+                self.performance.modulation[m as usize] = self.modulator.value(m.target().unwrap());
+            }
+            self.performance.impact_event = self.modulator.event_strength;
+            self.performance.modulation[performance::Macro::Impact as usize] =
+                self.modulator.value(Target::Impact);
             self.performance.advance(&self.settings, input, STEP);
 
             if self.settings.auto_orbit {
@@ -626,10 +638,14 @@ impl Flux {
                         + self.performance.pulse
                             * self.performance.value(&self.settings, Macro::Impact)
                             * 0.35)
-                    * (self.settings.modulation.as_ref().unwrap().ambient
-                        + self.modulator.value(Target::Motion))
-                    .max(movement)
-                    .clamp(0.0, 3.0),
+                    * self
+                        .settings
+                        .modulation
+                        .as_ref()
+                        .unwrap()
+                        .ambient
+                        .max(movement)
+                        .clamp(0.0, 3.0),
             );
         }
     }
@@ -646,12 +662,9 @@ impl Flux {
         let base_expansion = self.performance.value(s, Macro::Expansion);
         let shape = self.performance.value(s, Macro::Shape);
         self.color_phase += f64::from(dt * self.performance.value(s, Macro::Color) * 0.18);
-        let expansion =
-            (base_expansion * (1.0 + self.energy[0] * 0.35 + impact * 0.5)).clamp(0.2, 2.6);
-        let turbulence =
-            (self.performance.value(s, Macro::Turbulence) + self.energy[2] * 0.8).clamp(0.0, 4.0);
-        let swirl = (self.performance.value(s, Macro::Swirl) * (1.0 + self.energy[1] * 1.2))
-            .clamp(-8.0, 8.0);
+        let expansion = (base_expansion * (1.0 + impact * 0.5)).clamp(0.2, 2.6);
+        let turbulence = self.performance.value(s, Macro::Turbulence).clamp(0.0, 4.0);
+        let swirl = self.performance.value(s, Macro::Swirl).clamp(-8.0, 8.0);
         self.flow_phase += f64::from(dt * swirl * 0.45);
         let flow = self.flow_phase.rem_euclid(f64::from(TAU)) as f32;
         let damping = (-dt * (s.drag + magnetism * 1.5)).exp();
@@ -818,9 +831,9 @@ impl Flux {
                     (self.phase * 2.7 + f64::from(p.variation * 48.0)).sin() as f32 * 0.5 + 0.5;
                 // A quieter resting cloud leaves headroom for audible peaks. Band-specific
                 // illumination and a small size bloom make changes visible at tiny dot sizes.
-                let drive = self.energy[3];
+                let drive = 0.0;
                 let light = (brightness
-                    * (0.20
+                    * (0.35
                         + drive * 0.60
                         + impact * 0.45
                         + sparkle * s.twinkle * (0.10 + drive * 0.22)))
@@ -863,9 +876,7 @@ impl Flux {
                         0.4,
                     )
                     .gamma_multiply(
-                        s.opacity
-                            * (brightness * (0.4 + self.energy[3] * 0.6 + impact * 0.3))
-                                .clamp(0.0, 1.0),
+                        s.opacity * (brightness * (0.4 + impact * 0.3)).clamp(0.0, 1.0),
                     ),
                     core: true,
                 });
@@ -1295,9 +1306,11 @@ mod tests {
             quiet.ensure_particles();
             let mut loud = small_cloud();
             loud.settings = quiet.settings.clone();
-            loud.energy[0] = 1.0;
+            loud.performance.modulation[Macro::Expansion as usize] = 0.35;
             loud.ensure_particles();
             for _ in 0..2400 {
+                quiet.performance.advance(&quiet.settings, 0.0, STEP);
+                loud.performance.advance(&loud.settings, 0.0, STEP);
                 quiet.step(STEP);
                 loud.step(STEP);
             }

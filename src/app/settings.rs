@@ -9,14 +9,16 @@ pub(super) enum Category {
     #[default]
     Theme,
     Audio,
+    Midi,
     Analysis,
     Help,
 }
 impl Category {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Display,
         Self::Theme,
         Self::Audio,
+        Self::Midi,
         Self::Analysis,
         Self::Help,
     ];
@@ -25,6 +27,7 @@ impl Category {
             Self::Display => "Display & Layout",
             Self::Theme => "Theme & Colors",
             Self::Audio => "Audio",
+            Self::Midi => "MIDI",
             Self::Analysis => "Analysis & Meters",
             Self::Help => "Help & About",
         }
@@ -217,7 +220,9 @@ fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
             Layout::left_to_right(Align::Center),
             control,
         );
-    });
+    })
+    .response
+    .help_fallback(|| format!("{label}\n{}", help::control_description(label)));
 }
 impl SymphosApp {
     pub(super) fn show_settings(&mut self, ctx: &egui::Context, frame: &AnalysisFrame) {
@@ -384,7 +389,7 @@ impl SymphosApp {
                 {
                     equalize_splits(tree);
                 }
-                ui.small("Layout and component presets are managed in the top preset browser.");
+                ui.small("Use the top scene menu to recall complete setups or open the visual preset library. File → Save Project saves all scenes.");
             }
             Category::Audio => {
                 section(ui, "Audio source");
@@ -421,7 +426,7 @@ impl SymphosApp {
                 {
                     self.engine.select_source(source);
                     self.status = AudioStatus::Connecting;
-                    self.reset_modules();
+                    self.reset_capture();
                 }
                 #[cfg(target_os = "macos")]
                 {
@@ -432,6 +437,11 @@ impl SymphosApp {
                 {
                     section(ui, "Linux capture");
                     ui.label("System output and microphone sources are provided by PipeWire. Choose the output monitor for computer playback.");
+                }
+            }
+            Category::Midi => {
+                if let Some(midi) = &mut self.midi_runtime {
+                    midi.settings(ui);
                 }
             }
             Category::Analysis => {

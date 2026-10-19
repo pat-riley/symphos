@@ -2,8 +2,9 @@
 
 Symphos opens with the default 3D waterfall above three analyzer panes on its
 first launch. Later launches restore the last workspace, including its component
-choices, settings, dividers, sidebar, and selected preset. Choose **Default view**
-in the top preset browser whenever you want the original view again.
+choices, settings, dividers, sidebar, and every project scene. Choose **Default view**
+in **Scene → Visual preset library…** to apply the original layout and components
+to the current scene.
 
 ## Component inspector
 
@@ -54,7 +55,10 @@ and the drag grip first, keeping fullscreen, inspect, and close accessible.
 
 ## Add components
 
-Click the white **Symphos logo** at the top left to open or close **New component**.
+**Add New** in the top-left navigation opens a dropdown of every component, grouped
+under Instruments and Visualizers. Selecting one adds a pane beside the selected
+pane. New empty workspaces also offer a component browser for dragging components
+to pane edges or centers.
 The browser docks flush on the left with a compact header and one list of components.
 Each single-line row shows an icon, name, and six-dot drag grip, with full-width
 dividers. Descriptions remain available on hover; search and category tabs are
@@ -224,11 +228,19 @@ capture or platform dependencies. Existing workspaces and full-view presets
 from the six-, seven-, and eight-component versions retain their settings and
 receive default Flux settings.
 
-## Browse and save presets
+## Scenes and reusable presets
 
-The top bar shows the selected preset's name and previous/next arrows. Click the
-name to search presets by category. Layout thumbnails preview the arrangement.
-An asterisk indicates changes since the selected preset was loaded.
+The top bar selects complete project scenes in both Signals and Visualize. Each
+scene owns its signal channels, component configurations, layout, mappings, and
+macros. Previous/next recalls scenes immediately; the + button duplicates the
+current setup. The scene menu also offers a new empty scene, rename, move
+earlier/later, and delete. Switching scenes retains edits, and File → Save Project
+saves every scene. See [projects and scenes](signal-sources.md#projects-and-presets).
+
+Use **Scene → Visual preset library…** for existing full-view, layout, and component
+presets. **Component presets…** in the inspector opens that library in the component
+category. Within the library, click the preset name to search by category; layout
+thumbnails preview the arrangement. An asterisk marks edits to the loaded preset.
 
 Click **Save**, enter a name, and choose a preset type:
 

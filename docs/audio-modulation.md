@@ -1,5 +1,9 @@
 # Audio mappings for visualizers
 
+> The Signals workspace now owns shared extraction and envelopes. See
+> [Signals and projects](signal-sources.md) for the current workflow. This document
+> also describes the retained legacy route math and Strata local band bank.
+
 Veroni, Strata, and Flux share an **Audio mappings** section at the top of their
 inspectors. Scientific instruments continue to show their measured signals with
 their existing controls. The component browser groups these two families with

@@ -96,6 +96,14 @@ pub(crate) enum Palette {
     Inferno,
     Plasma,
     Aurora,
+    ClassicLed,
+    PixelFire,
+    Phosphor,
+    AmberCrt,
+    NeonNights,
+    CandySunset,
+    Ultraviolet,
+    Monochrome,
     // Existing component presets retain their original names and colors.
     Solar,
     Ion,
@@ -104,7 +112,7 @@ pub(crate) enum Palette {
     Custom(Gradient),
 }
 impl Palette {
-    pub const FACTORY: [Self; 12] = [
+    pub const FACTORY: [Self; 20] = [
         Self::Spectrum,
         Self::Ocean,
         Self::Ember,
@@ -117,6 +125,14 @@ impl Palette {
         Self::Ice,
         Self::Lime,
         Self::Pearl,
+        Self::ClassicLed,
+        Self::PixelFire,
+        Self::Phosphor,
+        Self::AmberCrt,
+        Self::NeonNights,
+        Self::CandySunset,
+        Self::Ultraviolet,
+        Self::Monochrome,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -133,6 +149,14 @@ impl Palette {
             Self::Inferno => "Inferno",
             Self::Plasma => "Plasma",
             Self::Aurora => "Aurora",
+            Self::ClassicLed => "Classic LED",
+            Self::PixelFire => "Pixel fire",
+            Self::Phosphor => "Phosphor green",
+            Self::AmberCrt => "Amber CRT",
+            Self::NeonNights => "Neon nights",
+            Self::CandySunset => "Candy sunset",
+            Self::Ultraviolet => "Ultraviolet",
+            Self::Monochrome => "Monochrome",
             Self::Solar => "Solar",
             Self::Ion => "Ion",
             Self::Kiln => "Kiln",
@@ -172,6 +196,14 @@ impl Palette {
             Self::Inferno => &[0x000004, 0x57106e, 0xbc3754, 0xf98e09, 0xfcffa4],
             Self::Plasma => &[0x0d0887, 0x7e03a8, 0xcc4778, 0xf89540, 0xf0f921],
             Self::Aurora => &[0x092e44, 0x12a895, 0x9bf0c3, 0x837df4, 0xeb8fc3],
+            Self::ClassicLed => &[0x139c37, 0x52ec42, 0xd2f03b, 0xffc52b, 0xff493b],
+            Self::PixelFire => &[0x9e1208, 0xe83908, 0xff8712, 0xffc822, 0xf5ed50],
+            Self::Phosphor => &[0x0e4427, 0x20a951, 0x68ed8c, 0xd3ffb1],
+            Self::AmberCrt => &[0x60300c, 0xd87516, 0xffb833, 0xffe59e],
+            Self::NeonNights => &[0x4632c7, 0xa63cf0, 0xff3cbe, 0x37d8ff],
+            Self::CandySunset => &[0x5f3ca9, 0xdf5bc2, 0xff8b9c, 0xffd08d],
+            Self::Ultraviolet => &[0x241344, 0x673bd1, 0xa57bff, 0xe5d4ff],
+            Self::Monochrome => &[0x42464c, 0x8c949f, 0xd3d9e0, 0xffffff],
             Self::Ice => &[0x16477a, 0x41dcff, 0xe5faff],
             Self::Lime => &[0x205530, 0x96ff23, 0xf1ffad],
             Self::Pearl => &[0x535b69, 0xb2bccb, 0xf2f5fa],
@@ -432,7 +464,7 @@ fn tile(ui: &mut egui::Ui, name: &str, g: Gradient, selected: bool, width: f32) 
         );
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
-    response.on_hover_text(name).clicked()
+    response.help_text(name).clicked()
 }
 impl Palette {
     pub fn controls(&mut self, ui: &mut egui::Ui) {
@@ -669,7 +701,7 @@ impl Palette {
                             if response.clicked() {
                                 editor.gradient.colors[editor.selected] = s.color;
                             }
-                            response.clone().on_hover_text(&s.name);
+                            response.clone().help_text(&s.name);
                             response.context_menu(|ui| {
                                 ui.label(&s.name);
                                 if ui.button("Delete swatch").clicked() {
@@ -705,7 +737,7 @@ impl Palette {
                                                 rect,
                                                 egui::Button::new(&p.name).small().truncate(),
                                             )
-                                            .on_hover_text(&p.name)
+                                            .help_text(&p.name)
                                             .clicked()
                                         {
                                             editor.gradient = p.gradient;
@@ -713,7 +745,7 @@ impl Palette {
                                         }
                                         if ui
                                             .small_button("×")
-                                            .on_hover_text("Delete saved palette")
+                                            .help_text("Delete saved palette")
                                             .clicked()
                                         {
                                             remove = Some(i);

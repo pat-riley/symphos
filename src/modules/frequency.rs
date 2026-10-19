@@ -59,6 +59,7 @@ impl FrequencySettings {
         });
             ui.add(
                 crate::parameter::Parameter::new(&mut self.min_hz, 10.0..=2000.0, 20.0)
+                    .key("frequency.min_hz")
                     .bounds(1.0..=(self.max_hz - 1.0) as f64)
                     .logarithmic(true)
                     .text("Low Hz"),
@@ -66,6 +67,7 @@ impl FrequencySettings {
             .help_text("Lowest displayed frequency in Hz. Changes only this module's view.");
             ui.add(
                 crate::parameter::Parameter::new(&mut self.max_hz, 2000.0..=24_000.0, 20_000.0)
+                    .key("frequency.max_hz")
                     .bounds((self.min_hz + 1.0) as f64..=192_000.0)
                     .logarithmic(true)
                     .text("High Hz"),
@@ -76,7 +78,7 @@ impl FrequencySettings {
         super::settings_group(ui, "Musical labels", |ui| {
             ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
             if self.note_labels {
-                ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).bounds(200.0..=1000.0).text("A4 Hz"))
+                ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).key("frequency.tuning_hz").bounds(200.0..=1000.0).text("A4 Hz"))
                 .help_text("Tuning reference for note labels. Standard concert tuning is A4 = 440 Hz; this does not change the audio.");
             }
         });
@@ -87,6 +89,7 @@ impl FrequencySettings {
         super::settings_group(ui, "Level & dynamics", |ui| {
             ui.add(
                 crate::parameter::Parameter::new(&mut self.gain, -24.0..=36.0, 0.0)
+                    .key("frequency.gain")
                     .bounds(-96.0..=96.0)
                     .text("Gain dB"),
             )
@@ -95,11 +98,13 @@ impl FrequencySettings {
             );
             ui.add(
                 crate::parameter::Parameter::new(&mut self.smoothing, 0.0..=0.98, 0.72)
+                    .key("frequency.smoothing")
                     .text("Time smooth"),
             )
             .help_text("Higher values smooth rapid level changes; lower values respond faster.");
             ui.add(
                 crate::parameter::Parameter::new(&mut self.decay, 6.0..=96.0, 36.0)
+                    .key("frequency.decay")
                     .bounds(0.0..=240.0)
                     .text("Decay dB/s"),
             )
@@ -108,7 +113,7 @@ impl FrequencySettings {
             );
         });
         super::settings_group(ui, "Frequency smoothing", |ui| {
-            ui.add(crate::parameter::Parameter::new(&mut self.frequency_smoothing, 0..=8, 0).text("Freq. smooth"))
+            ui.add(crate::parameter::Parameter::new(&mut self.frequency_smoothing, 0..=8, 0).key("frequency.frequency_smoothing").text("Freq. smooth"))
             .help_text("Blend neighboring displayed frequency bands. 0 is off; higher values soften jagged peaks across frequency, independently of time smoothing. Retained history is reprocessed without clearing it; audio and FFT resolution are unchanged.");
         });
     }
@@ -116,12 +121,14 @@ impl FrequencySettings {
     pub fn level_controls(&mut self, ui: &mut egui::Ui) {
         ui.add(
             crate::parameter::Parameter::new(&mut self.floor, -120.0..=-24.0, -90.0)
+                .key("frequency.floor")
                 .bounds(-140.0..=(self.ceiling - 1.0) as f64)
                 .text("Floor dB"),
         )
         .help_text("Quietest visible signal level. Lower this to reveal quieter detail.");
         ui.add(
             crate::parameter::Parameter::new(&mut self.ceiling, -18.0..=12.0, 0.0)
+                .key("frequency.ceiling")
                 .bounds((self.floor + 1.0) as f64..=48.0)
                 .text("Ceiling dB"),
         )

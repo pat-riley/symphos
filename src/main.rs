@@ -9,11 +9,18 @@ mod global_bar;
 mod help;
 mod icons;
 mod issues;
+mod macros;
+mod midi;
 mod modulation;
 mod modules;
 mod parameter;
+mod project;
+mod project_menu;
+mod scenes;
 mod shortcuts;
+mod signals;
 mod theme;
+mod window_chrome;
 mod workspace;
 mod workspace_ui;
 

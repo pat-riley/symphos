@@ -13,16 +13,17 @@ signals can control shapes, particles, effects, and shaders.
 
 Symphos is currently a proof of concept with scientific analyzers, artistic
 visualizers, editable audio mappings, and performance controls. Named musical
-signal sources and reusable projects are the next planned milestone; see the
-[implementation handoff prompt](docs/signal-sources-implementation-prompt.md).
+signal sources feed visual parameters, and projects organize complete setups into
+scenes for quick recall of signals and visuals together.
 
 ## Current features
 
 - Tiled workspace with resizable dividers, draggable pane headers, close-and-fill
   behavior, and a compact component library. The first launch uses the default
   waterfall-on-top view; later launches restore the last workspace.
-- Searchable top preset browser with previous/next navigation, layout-only, full-view,
-  and individual component presets, plus named save, rename, and delete actions.
+- Shared top scene selector with previous/next recall, duplication, renaming,
+  reordering, and deletion. Scenes include both signals and visuals; File → Save
+  Project saves all scenes. Reusable visual presets remain in a separate library.
 
 - Spectrogram/waterfall history continues while panes are hidden or the app window
   is occluded. Returning views catch up from the latest 30 seconds of independently
@@ -32,7 +33,7 @@ signal sources and reusable projects are the next planned milestone; see the
   a settings-only snapshot to a matching module. Audio/history, pause state, and
   global FFT and footer-meter choices stay outside the destination pane. The
   clipboard is session-only; reusable component presets are available in the
-  top preset browser.
+  inspector’s **Component presets…** menu.
 - [Application Settings](docs/application-settings.md): movable, categorized window
   with eight GUI theme choices, including Resolve- and Ableton-inspired skins,
   and saved interface zoom. Open with the top gear or Ctrl+,
@@ -58,13 +59,13 @@ signal sources and reusable projects are the next planned milestone; see the
   Reports include typed-value changes, rejected values, capture errors, panic
   messages, and a preview of the selected module/current capture configuration.
   Review before sharing; no automatic uploads.
-- Compact top-right PipeWire source selector, defaulting to system-output speakers
-- Resizable panes with interchangeable waterfall, spectrum, waveform,
+- Audio source selection in Settings → Audio, defaulting to system-output speakers
+- Resizable panes with interchangeable waterfall, sphere, cylinder, spectrum, waveform,
   spectrogram, stereometer, oscilloscope, Veroni, Strata, and Flux components
 - [Flux particle cloud](docs/workspace-layouts.md#flux-particle-cloud) with
   music-driven 3D currents, 200–20,000 particles, trails, and 42 controls including
   orbit, roll, perspective, and color mapping
-- [Flux performance macros](docs/flux-performance.md) with twelve knobs/faders,
+- [Performance macros](docs/performance-modulation.md) for each scene with twelve assignable rotary controls across components,
   musical Impact bursts, and morphing Rings/Helix/Knot/Vortex/Petals formations
 - [Shared visualizer audio mappings](docs/audio-modulation.md) with draggable
   frequency bands, independent movement/appearance destinations, graphical ADSR,
@@ -89,7 +90,7 @@ signal sources and reusable projects are the next planned milestone; see the
 - Interactive camera orientation gizmos in the sidebar and waterfall viewport
 - Toggleable bottom-left Info View with hover descriptions instead of popup tooltips
 - Shared FFT size, window function, analysis channel, and frame-rate controls
-- Bottom navigation with FFT/rate controls, a stereo/mix icon, live levels, FPS, and sample rate
+- Bottom navigation switches Signals/Macros docks, with live levels, FPS, and sample rate
 - Raw FFT-bin inspection, detailed diagnostics, and fullscreen mode
 - GPU rendering with `wgpu` on native Wayland
 - Colors derived from the active Omarchy theme
@@ -257,19 +258,19 @@ history and leaving global settings and other panes alone.
   consume only the existing full-rate sample snapshot and do not alter capture
   or shared FFT analysis.
 
-The bottom bar keeps **FFT** and **Rate** visible. The overlapping-circles icon
-switches the footer meters between separate **L/R stereo** and a **single mixed
-view**, without changing waveform panes, frequency analysis, or captured history.
-The shared-options icon holds the FFT window, frequency-analysis channel,
-single-view channel (mix/left/right), diagnostics, capture details, and theme info.
+The bottom bar toggles **Signals**, **Macros**, and **Info View**. Signals and
+Macros occupy one dock at a time, leaving the visualizations visible above.
+**Settings → Analysis & Meters** contains FFT size, update rate, window,
+frequency-analysis channel, stereo/single-meter mode, and single-meter channel.
+These meter choices do not change waveform panes or captured history.
 Level bars show RMS with live and retained peak markers. Left, Right, and Mix
 maxima are held independently, clipping latches visibly, and both can be reset
 from Settings → Analysis & Meters or by restarting capture. Mixed levels are measured from the
 summed signal, including phase cancellation. Waveform time
-windows are independent of the FFT capture window. The source selector
-and a compact settings icon remain at the top right; there is no top-left menu button.
+windows are independent of the FFT capture window. A borderless outline inspector toggle remains at the top right; **Add New** is
+at the top left. Audio source selection is in **Settings → Audio**.
 
-The top-right **settings icon**, matched to the source picker's height, opens
+**Symphos → Settings…** (Cmd+, on macOS; File → Settings… on other desktops) opens
 pane-size balancing, fullscreen (F11), and the FFT inspector with
 the detailed analyzer metrics and experimental tempo estimate. Pane assignments,
 sizes, module settings, and Info View visibility restore automatically at the
@@ -394,3 +395,123 @@ larger change.
 ## License
 
 Symphos is available under the [MIT License](LICENSE).
+
+### Signals and portable projects
+
+Use **Signals** to prepare reusable intensity, band-energy, hit, spectral-change
+and stereo controls in a resizable bottom dock while visuals remain visible.
+Use **Signals** or **Macros** in the bottom toolbar to switch docks; only one is
+shown at a time. Drag the Signals dock’s top edge to resize it. Clicking a channel
+shows its right inspector; clicking a visual pane returns to component settings.
+**Add New** in the top bar adds an instrument or visualizer. FFT size, analysis
+rate and mono/stereo meters live in **Settings → Analysis & Meters**. **File → Save Project** saves signals,
+mappings, layouts and component settings for every scene together. The scene
+selector remains in the top bar, and switching retains edits. Use its **+** to
+duplicate the complete setup, or **New empty scene** to start fresh. The selector’s
+**Visual preset library…** keeps existing factory and saved presets accessible.
+File → New Project starts a fresh scene collection; older projects become one
+initial scene. GUI and hardware preferences stay local. On macOS, **Settings → MIDI** enables
+hardware and virtual MIDI inputs. MIDI signal channels support Learn, CC, note
+velocity/gates, pitch bend, and aftertouch; DAW tracks can send to **Symphos Input**.
+OSC, direct Ableton integration, and file inputs remain planned.
+See [the Signals guide](docs/signal-sources.md#midi-inputs-macos).
+
+### 3D Sphere
+
+Add **3D Sphere** from the component library, or choose the **Spherical spectrum**
+view preset. It wraps the same processed FFT history as 3D Waterfall onto a closed
+sphere: frequency runs around the circumference, history flows from north to
+south, and level pushes the surface outward. A mirrored frequency wrap closes
+the seam; pole taper keeps both poles smooth. Reverse flow changes the direction.
+
+The inspector includes shared frequency range, logarithmic/linear spacing, gain,
+smoothing, decay, and dB limits, plus radius, displacement, three-axis stretch,
+twist, longitude offset, spectrum repeats, history duration, and mesh resolution.
+Choose wireframe, surface, rings, meridians, points, or radial spikes. Color by
+frequency, level, or history with the shared palettes; adjust brightness, contrast,
+opacity, rear visibility, and the resting grid independently.
+
+Drag to orbit, Shift/right-drag to pan, scroll to zoom, and double-click to reset.
+The Camera tab adds roll, axis views, and reversible auto-orbit. Numeric parameter
+labels can be dragged onto the twelve empty macro slots, including scientific
+processing controls. Project and view presets preserve settings and macro banks;
+older projects gain a default Sphere bank without altering existing components.
+
+Sphere’s **Geometry → Surface motion** picker also offers **Pole ripples**. Audio
+energy and rising hits launch circular crests and troughs that travel from the top
+pole toward the bottom pole. Adjust Travel speed, Ripple rate Hz, Damping, and
+Hit emphasis; Displacement controls their depth. Reverse history flow starts
+from the opposite pole. **Launch ripple** sends a manual wave, including in
+silence. The numeric ripple controls can be assigned to macros.
+
+Sphere rotation uses a free trackball: drag near the center to tilt, or around
+the silhouette to roll. The pivot follows the sphere when panned, and rotation
+remains free at the poles. The orientation gizmo reflects roll as well as yaw
+and elevation. Shift/right-drag still pans; double-click restores the camera.
+
+
+### 3D Cylinder
+
+Add **3D Cylinder** from the component library or use the **Cylindrical spectrum**
+view preset. Frequency wraps around the circumference, history travels down the
+height, and audio level displaces the radius. **Geometry → Surface motion → Axial
+ripples** sends audio-driven rings down the cylinder instead. Reverse flow starts
+from the bottom; Launch ripple sends a manual wave even in silence.
+
+Cylinder shares Sphere's frequency range and response processing, six rendering
+styles, palettes, lighting, history resolution, twist, repeats, ripple settings,
+free trackball rotation, pan/zoom, view presets, and auto-orbit. Its shape controls
+add independent height, top/bottom radius multipliers, displacement falloff near
+the rims, and optional end caps. Surface and wireframe caps follow the displaced
+rims, so the cylinder can become a tapered column or an open tube. In Geometry,
+uncheck **Show end caps** to remove the end faces and radial grid lines. Set
+**Top radius ×** or **Bottom radius ×** to zero to taper that end to a true point;
+audio displacement fades with the taper so the point stays closed.
+
+Numeric inspector labels can be dragged onto its twelve initially empty macro
+slots. Projects and presets preserve Cylinder settings and macro assignments;
+older projects keep their existing components and receive a blank Cylinder bank.
+No signal channels are created when adding or switching to Cylinder.
+
+### 3D Rings
+
+Add **3D Rings** from the component library or choose **Orbital waveforms** in the
+view presets. Live time-domain audio bends closed lines into moving orbital
+rings. Choose tilted orbital planes, concentric rings, or a vertical stack, with
+one to twelve rings, adjustable spacing, inclination, spread, and ellipticity.
+
+The waveform controls share Waveform's Left, Right, Mid, Side, and crossing
+trigger behavior. Alternate stereo rings keep Left and Right aligned. Adjust the
+capture window, repeats, seam blend, input gain, radial and sideways movement,
+and temporal or line smoothing. Auto scale is optional; disabling it preserves
+relative input amplitude. Orbit speed and trace spin set independent movement,
+with optional alternating directions.
+
+Appearance includes palettes, color by ring/amplitude/position, line width, glow,
+audio-driven brightness, opacity, rear visibility, and resting orbit guides.
+Free trackball rotation, roll, pan, zoom, and axis views work like the other 3D
+primitives. Numeric controls can be dragged onto twelve initially empty macro
+slots. Project and view presets save settings and assignments; adding Rings does
+not create signal channels or alter existing components.
+
+### 3D Resonance
+
+Add **3D Resonance** for layered, petal-shaped wavefronts inspired by radiation
+and merging-black-hole artwork. Start with **Radiation petals**, **Solar waves**,
+or **Bloom** in Geometry. Adjust one to sixteen layers, one to eight petals,
+spacing, depth, flattening, waist, sharpness, twist, and shell opening. This is
+an artistic primitive rather than a physical simulation.
+
+Flow controls layer expansion and recycling, with independent spin, traveling
+ripples, phase spread, and optional alternating rotation. Audio can expand the
+shells, displace their surfaces, and brighten them; frequency range, input gain,
+and response smoothing control the reaction. Membranes, wireframe, contours,
+and points share palettes and layer/petal/energy/position coloring, transparency,
+rim light, and optional wire overlays. Detail is bounded to keep geometry costs
+predictable as layers increase.
+
+Free trackball rotation, roll, pan, zoom, and axis views match the other 3D
+components. Numeric controls support scene macro assignment. Projects and
+presets save the configuration; the **Resonance petals** view preset provides
+another starting point. Existing projects gain default Resonance settings
+without changing their components, macros, or signal channels.

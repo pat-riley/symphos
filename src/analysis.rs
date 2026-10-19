@@ -110,6 +110,7 @@ pub struct SpectrumBand {
 
 #[derive(Clone, Debug)]
 pub struct AnalysisFrame {
+    pub signals: Option<Arc<crate::signals::Snapshot>>,
     pub features: Option<Arc<crate::modulation::AudioFeatures>>,
     pub capture_epoch: u64,
     pub sequence: u64,
@@ -140,6 +141,7 @@ pub struct AnalysisFrame {
 impl Default for AnalysisFrame {
     fn default() -> Self {
         Self {
+            signals: None,
             features: None,
             capture_epoch: 0,
             sequence: 0,
@@ -463,6 +465,7 @@ impl Analyzer {
             &bins, mix_rms, rms,
         )));
         AnalysisFrame {
+            signals: None,
             features,
             capture_epoch: 0,
             sequence,

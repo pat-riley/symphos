@@ -1,4 +1,7 @@
 use std::time::{Duration, Instant};
+mod appearance;
+mod raster;
+use appearance::Appearance;
 
 use eframe::egui::{self, Pos2, Rect, Sense, Stroke, Vec2};
 
@@ -30,6 +33,7 @@ pub struct Spectrum {
     contrast: f32,
     grid: bool,
     labels: bool,
+    appearance: Appearance,
 }
 
 struct ReferenceSpectrum {
@@ -61,6 +65,7 @@ palette: Palette => palette,
 contrast: f32 => contrast,
 grid: bool => grid,
 labels: bool => labels,
+#[serde(default)] appearance: Appearance => appearance,
 });
 
 impl Default for Spectrum {
@@ -85,6 +90,7 @@ impl Default for Spectrum {
             contrast: 1.0,
             grid: true,
             labels: true,
+            appearance: Appearance::default(),
         }
     }
 }
@@ -214,9 +220,9 @@ impl Spectrum {
                 ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
                     .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
                 ui.add_enabled_ui(!self.infinite_hold, |ui| {
-                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).bounds(0.0..=60.0).text("Hold s"))
+                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).key("hold_seconds").bounds(0.0..=60.0).text("Hold s"))
                         .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
-                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).bounds(0.0..=240.0).text("Fall dB/s"))
+                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).key("peak_falloff").bounds(0.0..=240.0).text("Fall dB/s"))
                         .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
                 });
                 if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
@@ -226,11 +232,13 @@ impl Spectrum {
             });
         });
         settings_panel(ui, "Appearance", |ui| {
+            super::settings_group(ui, "Starting look", |ui| self.look_controls(ui));
             super::settings_group(ui, "Trace", |ui| {
                 self.style.controls(ui, true);
                 if self.style == TraceStyle::Bars {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.bar_gap, 0.0..=90.0, 15.0)
+                            .key("bar_gap")
                             .text("Gap %"),
                     )
                     .help_text(
@@ -239,6 +247,7 @@ impl Spectrum {
                 } else {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.5)
+                            .key("thickness")
                             .bounds(0.1..=20.0)
                             .text("Line px"),
                     )
@@ -247,18 +256,27 @@ impl Spectrum {
                 if self.style == TraceStyle::Filled {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.fill_opacity, 0.05..=1.0, 0.3)
+                            .key("fill_opacity")
                             .bounds(0.0..=1.0)
                             .text("Fill opacity"),
                     )
                     .help_text("Opacity of the filled area beneath the spectrum.");
                 }
             });
+            super::settings_group(ui, "Texture & light", |ui| {
+                self.appearance.controls(ui, self.style == TraceStyle::Bars);
+            });
             super::settings_group(ui, "Color & level", |ui| {
                 self.palette.controls(ui);
                 self.palette.contrast_controls(ui, &mut self.contrast);
                 self.data.settings.level_controls(ui);
             });
-            super::settings_group(ui, "Guides", |ui| {
+            super::settings_group(ui, "Peaks & guides", |ui| {
+                if ui.checkbox(&mut self.peak_hold, "Peak markers").help_text("Floating markers retain recent maxima. Set hold time and release speed in Signal Response → Peak markers.").changed() { self.reset_peaks(); }
+                if self.peak_hold {
+                    self.appearance
+                        .peak_controls(ui, self.style == TraceStyle::Bars);
+                }
                 ui.checkbox(&mut self.grid, "Grid")
                     .help_text("Show horizontal dB reference lines.");
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
@@ -334,6 +352,9 @@ impl Spectrum {
         }
         self.refresh_reference(frame.sample_rate);
         let painter = ui.painter_at(rect);
+        if self.appearance.black_background {
+            painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
+        }
         let plot = Rect::from_min_max(
             rect.min + Vec2::new(if self.labels { 36.0 } else { 10.0 }, 12.0),
             rect.max - Vec2::new(12.0, if self.labels { 24.0 } else { 10.0 }),
@@ -363,14 +384,24 @@ impl Spectrum {
                 );
             }
         }
-        let color = |intensity| {
-            if self.palette == Palette::Theme {
-                mix(theme.accent_alt, theme.accent, intensity)
-            } else {
-                self.palette
-                    .color_with_contrast(intensity, self.contrast, theme)
-            }
+        let color = |level, height, frequency| {
+            self.appearance
+                .color(self.palette, level, height, frequency, self.contrast, theme)
         };
+        if self.style == TraceStyle::Bars {
+            raster::bars(
+                &painter,
+                plot,
+                &self.data.levels,
+                settings,
+                &self.appearance,
+                self.bar_gap,
+                self.palette,
+                self.contrast,
+                theme,
+                live,
+            );
+        }
         let band_width = plot.width() / BANDS as f32;
         let mut points = Vec::with_capacity(BANDS);
         let mut peak_points = Vec::with_capacity(BANDS);
@@ -380,49 +411,78 @@ impl Spectrum {
             let intensity = if live { settings.intensity(*db) } else { 0.0 };
             let point = Pos2::new(x, plot.bottom() - intensity * plot.height());
             points.push(point);
-            if self.style == TraceStyle::Bars {
-                painter.rect_filled(
-                    Rect::from_min_max(
-                        Pos2::new(x - width * 0.5, point.y),
-                        Pos2::new(x + width * 0.5, plot.bottom()),
-                    ),
-                    0.5,
-                    color(intensity),
-                );
-            }
             if self.peak_hold && live {
                 let y = plot.bottom() - settings.intensity(self.peaks[i]) * plot.height();
                 peak_points.push(Pos2::new(x, y));
                 if self.style == TraceStyle::Bars {
-                    painter.line_segment(
-                        [Pos2::new(x - width * 0.5, y), Pos2::new(x + width * 0.5, y)],
-                        Stroke::new(1.0, theme.foreground),
+                    let tint = if self.appearance.white_peaks {
+                        theme.foreground
+                    } else {
+                        color(
+                            settings.intensity(self.peaks[i]),
+                            settings.intensity(self.peaks[i]),
+                            (i as f32 + 0.5) / BANDS as f32,
+                        )
+                    };
+                    self.appearance.draw_peak(
+                        &painter.with_clip_rect(plot.intersect(painter.clip_rect())),
+                        x,
+                        y,
+                        width,
+                        tint,
                     );
                 }
             }
         }
         if self.style != TraceStyle::Bars {
             // Per-segment color follows actual dB intensity for every palette.
-            for pair in points.windows(2) {
+            for (index, pair) in points.windows(2).enumerate() {
                 let intensity = (plot.bottom() - (pair[0].y + pair[1].y) * 0.5) / plot.height();
+                let frequency = (index as f32 + 1.0) / BANDS as f32;
+                let tint = color(intensity, intensity, frequency);
                 if self.style == TraceStyle::Filled {
-                    super::fill_trace(
-                        &painter,
-                        pair,
-                        plot.bottom(),
-                        color(intensity).gamma_multiply(self.fill_opacity),
+                    let mut fill = egui::Mesh::default();
+                    let a = ((plot.bottom() - pair[0].y) / plot.height()).clamp(0.0, 1.0);
+                    let b = ((plot.bottom() - pair[1].y) / plot.height()).clamp(0.0, 1.0);
+                    raster::quad(
+                        &mut fill,
+                        [
+                            pair[0],
+                            pair[1],
+                            Pos2::new(pair[1].x, plot.bottom()),
+                            Pos2::new(pair[0].x, plot.bottom()),
+                        ],
+                        [
+                            color(intensity, a, frequency).gamma_multiply(self.fill_opacity),
+                            color(intensity, b, frequency).gamma_multiply(self.fill_opacity),
+                            color(intensity, 0.0, frequency).gamma_multiply(self.fill_opacity),
+                            color(intensity, 0.0, frequency).gamma_multiply(self.fill_opacity),
+                        ],
+                    );
+                    painter.add(egui::Shape::mesh(fill));
+                }
+                if self.appearance.glow > 0.0 {
+                    painter.line_segment(
+                        [pair[0], pair[1]],
+                        Stroke::new(
+                            self.thickness + 5.0,
+                            tint.gamma_multiply(self.appearance.glow.clamp(0.0, 1.0) * 0.16),
+                        ),
                     );
                 }
-                painter.line_segment(
-                    [pair[0], pair[1]],
-                    Stroke::new(self.thickness, color(intensity)),
-                );
+                painter.line_segment([pair[0], pair[1]], Stroke::new(self.thickness, tint));
             }
             if peak_points.len() > 1 {
-                painter.add(egui::Shape::line(
-                    peak_points,
-                    Stroke::new(1.0, theme.foreground),
-                ));
+                for (index, pair) in peak_points.windows(2).enumerate() {
+                    let height = ((plot.bottom() - (pair[0].y + pair[1].y) * 0.5) / plot.height())
+                        .clamp(0.0, 1.0);
+                    let tint = if self.appearance.white_peaks {
+                        theme.foreground
+                    } else {
+                        color(height, height, (index as f32 + 1.0) / BANDS as f32)
+                    };
+                    painter.line_segment([pair[0], pair[1]], Stroke::new(1.0, tint));
+                }
             }
         }
         if let Some(reference) = &self.reference {

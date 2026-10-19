@@ -2,7 +2,7 @@
 use crate::analysis::{AnalysisFrame, FrequencyBin};
 use serde::{Deserialize, Serialize};
 
-mod ui;
+pub(crate) mod ui;
 
 pub const MAX_LAYERS: usize = 12;
 const MAX_ROUTES: usize = 24;
@@ -12,8 +12,8 @@ pub struct AudioFeatures {
     frequencies: Vec<f32>,
     powers: Vec<f64>,
     pub spectrum: [f32; 96],
-    rms: f32,
-    balance: f32,
+    pub(crate) rms: f32,
+    pub(crate) balance: f32,
 }
 impl AudioFeatures {
     pub fn new(bins: &[FrequencyBin], rms: f32, stereo: [f32; 2]) -> Self {
@@ -68,7 +68,7 @@ fn finite(v: f32, default: f32) -> f32 {
     if v.is_finite() { v } else { default }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Target {
     Motion,
     Expansion,
@@ -80,6 +80,14 @@ pub enum Target {
     LayerBend,
     LayerRipple,
     LayerShimmer,
+    Impact,
+    Magnetism,
+    Shape,
+    Depth,
+    Trails,
+    Glow,
+    Color,
+    Drift,
 }
 impl Target {
     pub fn label(self) -> &'static str {
@@ -94,9 +102,17 @@ impl Target {
             Self::LayerBend => "Layer bend",
             Self::LayerRipple => "Layer ripples",
             Self::LayerShimmer => "Layer shimmer",
+            Self::Impact => "Impact",
+            Self::Magnetism => "Magnetism",
+            Self::Shape => "Orbit shape",
+            Self::Depth => "Depth",
+            Self::Trails => "Trails",
+            Self::Glow => "Glow",
+            Self::Color => "Color drift",
+            Self::Drift => "Drift",
         }
     }
-    fn layered(self) -> bool {
+    pub(crate) fn layered(self) -> bool {
         matches!(
             self,
             Self::LayerBend | Self::LayerRipple | Self::LayerShimmer
@@ -110,11 +126,16 @@ pub enum Visualizer {
     Strata,
 }
 impl Visualizer {
-    fn targets(self) -> &'static [Target] {
+    pub(crate) fn targets(self) -> &'static [Target] {
         use Target::*;
         match self {
-            Self::Flux | Self::Veroni => &[
-                Motion, Expansion, Swirl, Turbulence, Brightness, Size, Steering,
+            Self::Flux => &[
+                Motion, Expansion, Swirl, Turbulence, Brightness, Size, Steering, Impact,
+                Magnetism, Shape, Depth, Trails, Glow, Color,
+            ],
+            Self::Veroni => &[
+                Motion, Expansion, Swirl, Turbulence, Brightness, Size, Steering, Drift, Magnetism,
+                Shape, Depth, Trails, Glow,
             ],
             Self::Strata => &[
                 Motion,
@@ -123,6 +144,13 @@ impl Visualizer {
                 LayerShimmer,
                 Brightness,
                 Size,
+                Turbulence,
+                Swirl,
+                Depth,
+                Steering,
+                Expansion,
+                Trails,
+                Glow,
             ],
         }
     }
@@ -178,6 +206,8 @@ impl Default for Envelope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Route {
+    pub signal: Option<u64>,
+    pub invert: bool,
     pub id: u64,
     pub enabled: bool,
     pub source: Source,
@@ -200,6 +230,8 @@ pub struct Route {
 impl Default for Route {
     fn default() -> Self {
         Self {
+            signal: None,
+            invert: false,
             id: 1,
             enabled: true,
             source: Source::Band,
@@ -341,8 +373,8 @@ enum Stage {
     Release,
 }
 #[derive(Clone, Debug, Default)]
-struct Voice {
-    value: f32,
+pub(crate) struct Voice {
+    pub(crate) value: f32,
     stage: Stage,
     elapsed: f32,
     start: f32,
@@ -352,6 +384,7 @@ struct Voice {
     hold: f32,
     cooldown: f32,
     peak: f32,
+    pub(crate) fired: bool,
     pub input: f32,
     pub output: f32,
 }
@@ -361,7 +394,15 @@ impl Voice {
         self.elapsed = 0.0;
         self.start = self.value;
     }
-    fn advance(&mut self, amplitude: f32, sign: f32, r: &Route, adaptive: bool, dt: f32) {
+    pub(crate) fn advance(
+        &mut self,
+        amplitude: f32,
+        sign: f32,
+        r: &Route,
+        adaptive: bool,
+        dt: f32,
+    ) {
+        self.fired = false;
         let db = 20.0 * amplitude.max(1e-9).log10() + r.gain_db;
         self.peak = (self.peak - dt * 3.0).max(db).max(-42.0);
         let ceiling = if adaptive {
@@ -389,6 +430,7 @@ impl Voice {
                     && input > self.previous + 0.005
                     && self.cooldown == 0.0
                 {
+                    self.fired = true;
                     self.hold = r.hold_ms / 1000.0;
                     self.cooldown = (r.hold_ms / 1000.0).max(0.08);
                     self.stage(Stage::Attack);
@@ -454,12 +496,26 @@ struct RouteState {
 pub struct Modulator {
     states: Vec<RouteState>,
     epoch: Option<(u64, u32, usize)>,
-    outputs: [f32; 10],
+    outputs: [f32; 18],
+    inputs: [f32; 18],
     layers: [[f32; MAX_LAYERS]; 3],
+    events: std::collections::HashMap<u64, u64>,
+    pub(crate) event_strength: f32,
     selected: Option<u64>,
     envelope_span: Option<f32>,
 }
 impl Modulator {
+    pub fn consume_current_events(&mut self, frame: &AnalysisFrame, settings: &ModulationSettings) {
+        self.events.clear();
+        if let Some(snapshot) = &frame.signals {
+            for r in &settings.routes {
+                if let Some(sample) = r.signal.and_then(|id| snapshot.values.get(&id)) {
+                    self.events.insert(r.id, sample.event.id);
+                }
+            }
+        }
+    }
+    #[cfg(test)]
     pub fn select_target(&mut self, target: Target, settings: &ModulationSettings) {
         self.selected = settings
             .routes
@@ -468,21 +524,23 @@ impl Modulator {
             .map(|r| r.id);
     }
     pub fn input_for(&self, target: Target, settings: &ModulationSettings) -> f32 {
-        settings
-            .routes
-            .iter()
-            .filter(|r| r.enabled && r.target == target)
-            .filter_map(|r| {
-                self.states.iter().find(|s| s.id == r.id).map(|s| {
-                    s.voices
-                        .iter()
-                        .map(|v| v.input * r.amount.abs())
-                        .fold(0.0, f32::max)
+        self.inputs[target as usize].max(
+            settings
+                .routes
+                .iter()
+                .filter(|r| r.enabled && r.target == target)
+                .filter_map(|r| {
+                    self.states.iter().find(|s| s.id == r.id).map(|s| {
+                        s.voices
+                            .iter()
+                            .map(|v| v.input * r.amount.abs())
+                            .fold(0.0, f32::max)
+                    })
                 })
-            })
-            .fold(0.0, f32::max)
-            .mul_add(settings.amount, 0.0)
-            .clamp(0.0, 4.0)
+                .fold(0.0, f32::max)
+                .mul_add(settings.amount, 0.0)
+                .clamp(0.0, 4.0),
+        )
     }
     pub fn value(&self, target: Target) -> f32 {
         self.outputs[target as usize]
@@ -513,16 +571,59 @@ impl Modulator {
             fallback = AudioFeatures::new(&frame.bins, frame.mix_rms, frame.rms);
             &fallback
         };
-        self.outputs = [0.0; 10];
+        self.outputs = [0.0; 18];
+        self.inputs = [0.0; 18];
+        self.event_strength = 0.0;
         self.layers = [[0.0; MAX_LAYERS]; 3];
         self.states
             .retain(|s| settings.routes.iter().any(|r| r.enabled && r.id == s.id));
+        let mut destinations = std::collections::HashSet::new();
         for r in settings
             .routes
             .iter()
-            .filter(|r| r.enabled)
+            .filter(|r| r.enabled && destinations.insert(r.target))
             .take(MAX_ROUTES)
         {
+            if let Some(id) = r.signal {
+                if let Some(sample) = frame.signals.as_ref().and_then(|s| s.values.get(&id)) {
+                    let value = sample.mapped(r) * settings.amount;
+                    self.inputs[r.target as usize] = self.inputs[r.target as usize]
+                        .max(sample.input * r.amount.abs() * settings.amount);
+                    if r.target.layered() {
+                        for i in 0..layers.min(MAX_LAYERS) {
+                            if r.layer == 0 || r.layer == i + 1 {
+                                self.layers[r.target as usize - Target::LayerBend as usize][i] +=
+                                    value;
+                            }
+                        }
+                    } else {
+                        self.outputs[r.target as usize] += value;
+                    }
+                    if r.target == Target::Impact {
+                        let previous = self.events.insert(r.id, sample.event.id);
+                        // First observation / resume consumes current state without replaying old hits.
+                        if previous.is_some_and(|old| old != sample.event.id)
+                            && frame
+                                .signals
+                                .as_ref()
+                                .is_some_and(|s| s.time - sample.event.time < 0.1)
+                            && sample.availability > 0.0
+                            && sample.event.id != 0
+                        {
+                            self.event_strength = self
+                                .event_strength
+                                .max(sample.event.strength * r.amount.abs() * settings.amount);
+                        }
+                    }
+                }
+                continue;
+            }
+            // An unassigned artistic mapping must not silently extract local
+            // audio when the shared signal system is active. Strata's scientific
+            // automatic layer bank remains an explicit local mode.
+            if frame.signals.is_some() && !(r.target.layered() && r.layer == 0) {
+                continue;
+            }
             let count = if r.target.layered() && r.layer == 0 {
                 layers.clamp(1, MAX_LAYERS)
             } else {
@@ -671,6 +772,18 @@ mod tests {
         assert_eq!(f.band(250.0, 4000.0), 0.5);
         assert!((f.band(4000.0, 20000.0) - 1e-4).abs() < 1e-7);
         assert_eq!(f.band(100.0, 200.0), 0.0);
+    }
+    #[test]
+    fn unassigned_macro_with_shared_signals_cannot_fall_back_to_system_audio() {
+        let mut settings = one_route(Target::Brightness);
+        settings.routes[0].output_min = 0.5;
+        let mut frame = tone(80.0, 0.8);
+        frame.signals = Some(std::sync::Arc::new(crate::signals::Snapshot::default()));
+        let mut modulator = Modulator::default();
+        settle(&mut modulator, &frame, &settings);
+        assert_eq!(modulator.value(Target::Brightness), 0.0);
+        assert_eq!(modulator.input_for(Target::Brightness, &settings), 0.0);
+        assert!(modulator.states.is_empty());
     }
     #[test]
     fn routing_changes_only_its_destination_and_caches_analysis_features() {

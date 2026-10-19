@@ -443,14 +443,14 @@ impl Waterfall {
                     let mut degrees = angle.to_degrees();
                     if ui.add(crate::parameter::Parameter::new(
                         &mut degrees, -180.0..=180.0, default.to_degrees())
-                        .bounds(-3600.0..=3600.0).text(label))
+                        .key(if label=="Rotation °" {"yaw"} else {"elevation"}).raw_scale(std::f64::consts::PI/180.0).bounds(-3600.0..=3600.0).text(label))
                         .help_text("Rotate the camera around the waterfall. Angles are in degrees; full rotation is supported.")
                         .changed() {
                         *angle = wrap_angle(degrees.to_radians());
                         self.auto_orbit = false;
                     }
                 }
-                if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).logarithmic(true).text("Zoom"))
+                if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).key("zoom").logarithmic(true).text("Zoom"))
                     .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
                     self.auto_orbit = false;
                 }
@@ -471,19 +471,20 @@ impl Waterfall {
             super::settings_group(ui, "Auto-orbit", |ui| {
                 ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
                 ui.add_enabled_ui(self.auto_orbit, |ui| {
-                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 1.0..=30.0, 10.0).bounds(0.0..=360.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
+                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 1.0..=30.0, 10.0).key("orbit_speed").bounds(0.0..=360.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
             });
             });
         });
         settings_panel(ui, "Geometry", |ui| {
             super::settings_group(ui, "Dimensions", |ui| {
-                ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length X"))
+                ui.add(crate::parameter::Parameter::new(&mut self.length_x, MIN_LENGTH..=MAX_LENGTH, 1.0).key("length_x").bounds(0.01..=100.0).text("Length X"))
                 .help_text("Stretch or compress the frequency axis visually. 1 is the default size; frequency range and audio are unchanged.");
-                ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).bounds(0.01..=100.0).text("Length Y"))
+                ui.add(crate::parameter::Parameter::new(&mut self.length_y, MIN_LENGTH..=MAX_LENGTH, 1.0).key("length_y").bounds(0.01..=100.0).text("Length Y"))
                 .help_text("Stretch or compress the time axis visually. 1 is the default size; history duration and audio are unchanged.");
                 ui.add(
                     crate::parameter::Parameter::new(&mut self.height, 0.0..=MAX_HEIGHT, 0.85)
+                        .key("height")
                         .bounds(0.0..=10.0)
                         .text("Height"),
                 )
@@ -491,11 +492,11 @@ impl Waterfall {
             });
             super::settings_group(ui, "Time & detail", |ui| {
                 ui.add(
-                crate::parameter::Parameter::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS, DEFAULT_HISTORY_SECONDS)
+                crate::parameter::Parameter::new(&mut self.seconds, MIN_HISTORY_SECONDS..=MAX_HISTORY_SECONDS, DEFAULT_HISTORY_SECONDS).key("seconds")
                     .logarithmic(true)
                     .text("History s"),
             ).help_text("How many seconds of recent audio are displayed. Does not change the waterfall's physical length.");
-                ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).bounds(8.0..=256.0).text("Time slices"))
+                ui.add(crate::parameter::Parameter::new(&mut self.detail, 24..=128, 72).key("detail").bounds(8.0..=256.0).text("Time slices"))
                 .help_text("Number of displayed time slices. More slices add detail and rendering work; history duration is unchanged.");
             });
         });
@@ -517,11 +518,12 @@ impl Waterfall {
                     }
                     RenderMode::Lines => {
                         ui.push_id("x-line-width", |ui| {
-                            width_control(ui, &mut self.line_width, 1.1)
+                            width_control(ui, &mut self.line_width, 1.1, "line_width")
                         });
                         spacing_control(
                             ui,
                             &mut self.line_spacing,
+                            "line_spacing",
                             1,
                             "Trace spacing",
                             "Display every Nth time slice. Does not change history duration or audio sampling.",
@@ -529,11 +531,12 @@ impl Waterfall {
                     }
                     RenderMode::YLines => {
                         ui.push_id("y-line-width", |ui| {
-                            width_control(ui, &mut self.y_line_width, 1.1)
+                            width_control(ui, &mut self.y_line_width, 1.1, "y_line_width")
                         });
                         spacing_control(
                             ui,
                             &mut self.y_line_spacing,
+                            "y_line_spacing",
                             1,
                             "Band spacing",
                             "Display every Nth frequency trace. Does not change FFT resolution.",
@@ -541,11 +544,12 @@ impl Waterfall {
                     }
                     RenderMode::Wireframe => {
                         ui.push_id("wire-width", |ui| {
-                            width_control(ui, &mut self.wire_width, 1.1)
+                            width_control(ui, &mut self.wire_width, 1.1, "wire_width")
                         });
                         spacing_control(
                             ui,
                             &mut self.wire_spacing,
+                            "wire_spacing",
                             1,
                             "Mesh spacing",
                             "Display every Nth frequency and time grid line; keeps the outer edges.",
@@ -554,6 +558,7 @@ impl Waterfall {
                     RenderMode::Dots => {
                         ui.add(
                             crate::parameter::Parameter::new(&mut self.dot_size, 1.0..=12.0, 3.2)
+                                .key("dot_size")
                                 .bounds(0.1..=40.0)
                                 .text("Dot size px"),
                         )
@@ -563,6 +568,7 @@ impl Waterfall {
                         spacing_control(
                             ui,
                             &mut self.dot_spacing,
+                            "dot_spacing",
                             1,
                             "Point spacing",
                             "Display every Nth band and time slice for a more open point cloud.",
@@ -570,23 +576,25 @@ impl Waterfall {
                     }
                     RenderMode::Stems => {
                         ui.push_id("stem-width", |ui| {
-                            width_control(ui, &mut self.stem_width, 1.2)
+                            width_control(ui, &mut self.stem_width, 1.2, "stem_width")
                         });
                         spacing_control(
                             ui,
                             &mut self.stem_spacing,
+                            "stem_spacing",
                             4,
                             "Stem spacing",
                             "Display every Nth band and time slice. Wider spacing makes individual pins easier to see.",
                         );
                     }
                     RenderMode::Bars => {
-                        ui.add(crate::parameter::Parameter::new(&mut self.bar_width, 10.0..=100.0, 75.0).bounds(1.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
-                        ui.add(crate::parameter::Parameter::new(&mut self.bar_depth, 10.0..=100.0, 65.0).bounds(1.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
-                        ui.add(crate::parameter::Parameter::new(&mut self.bar_bands, 1..=12, 4).text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.bar_width, 10.0..=100.0, 75.0).key("bar_width").bounds(1.0..=100.0).text("Width %")).help_text("Bar width as a percentage of its frequency group. Lower values leave wider gaps; 100% fills the group. Geometry Length X still controls the overall span.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.bar_depth, 10.0..=100.0, 65.0).key("bar_depth").bounds(1.0..=100.0).text("Depth %")).help_text("Bar depth as a percentage of its displayed time slot. Lower values leave more space between rows. Geometry Length Y controls the overall span.");
+                        ui.add(crate::parameter::Parameter::new(&mut self.bar_bands, 1..=12, 4).key("bar_bands").text("Bands/bar")).help_text("Combine this many display bands into each bar, using their highest level so narrow peaks are retained. More bands makes fewer, broader bars; FFT resolution is unchanged.");
                         spacing_control(
                             ui,
                             &mut self.bar_time_step,
+                            "bar_time_step",
                             3,
                             "Time spacing",
                             "Display every Nth time slice. Larger values give fewer rows of bars, without changing history duration or stored audio.",
@@ -1137,20 +1145,25 @@ fn surface_faces(valid: &[bool], cell_view: Vec2, grid: bool, walls: bool) -> Ve
     faces
 }
 
-fn width_control(ui: &mut egui::Ui, width: &mut f32, default: f32) {
-    ui.add(crate::parameter::Parameter::new(width, 0.5..=5.0, default).bounds(0.1..=20.0).text("Thickness px"))
+fn width_control(ui: &mut egui::Ui, width: &mut f32, default: f32, key: &str) {
+    ui.add(crate::parameter::Parameter::new(width, 0.5..=5.0, default).key(key).bounds(0.1..=20.0).text("Thickness px"))
         .help_text("Screen-space line thickness, independent of camera zoom. Remembered separately for each render style.");
 }
 
 fn spacing_control(
     ui: &mut egui::Ui,
     spacing: &mut usize,
+    key: &str,
     default: usize,
     name: &str,
     description: &str,
 ) {
-    ui.add(crate::parameter::Parameter::new(spacing, 1..=8, default).text(name))
-        .help_text(description);
+    ui.add(
+        crate::parameter::Parameter::new(spacing, 1..=8, default)
+            .key(key)
+            .text(name),
+    )
+    .help_text(description);
 }
 
 struct Camera {
@@ -1191,7 +1204,7 @@ fn mesh_line(mesh: &mut egui::Mesh, a: Pos2, b: Pos2, color: egui::Color32) {
     mesh_segment(mesh, a, b, color, color, 0.6);
 }
 
-fn mesh_dot(mesh: &mut egui::Mesh, center: Pos2, color: egui::Color32, radius: f32) {
+pub(super) fn mesh_dot(mesh: &mut egui::Mesh, center: Pos2, color: egui::Color32, radius: f32) {
     // Small screen-space discs stay legible at every zoom and share one GPU mesh.
     const SIDES: usize = 8;
     let offset = mesh.vertices.len() as u32;
@@ -1209,7 +1222,7 @@ fn mesh_dot(mesh: &mut egui::Mesh, center: Pos2, color: egui::Color32, radius: f
     }
 }
 
-fn mesh_segment(
+pub(super) fn mesh_segment(
     mesh: &mut egui::Mesh,
     a: Pos2,
     b: Pos2,

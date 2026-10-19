@@ -1,5 +1,6 @@
 //! Native frequency selection and envelope editing for visualizer mappings.
 use super::*;
+use crate::help::HoverHelp;
 use crate::parameter::Parameter;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
@@ -13,9 +14,22 @@ impl Modulator {
         layers: usize,
     ) {
         ui.add(Parameter::new(&mut settings.ambient, 0.0..=1.0, 0.25).text("Ambient motion"));
-        ui.add(Parameter::new(&mut settings.amount, 0.0..=4.0, 1.0).text("Audio amount"));
-        ui.checkbox(&mut settings.adaptive, "Adaptive sensitivity")
-            .on_hover_text("Track each band's recent peak. The noise floor still rejects silence.");
+        ui.add(Parameter::new(&mut settings.amount, 0.0..=4.0, 1.0).text("Modulation amount"));
+        if ui
+            .data(|d| {
+                d.get_temp::<crate::signals::ui::Shared>(egui::Id::new(
+                    crate::signals::ui::CONTEXT_KEY,
+                ))
+            })
+            .is_none()
+            || settings
+                .routes
+                .iter()
+                .any(|r| r.signal.is_none() && r.target.layered())
+        {
+            ui.checkbox(&mut settings.adaptive, "Adaptive sensitivity")
+                .help_text("Track each band's recent peak. The noise floor still rejects silence.");
+        }
         ui.add_space(8.0);
         if !settings.routes.iter().any(|r| Some(r.id) == self.selected) {
             self.selected = settings.routes.first().map(|r| r.id);
@@ -46,11 +60,7 @@ impl Modulator {
                         {
                             self.selected = Some(r.id);
                         }
-                        if ui
-                            .small_button("×")
-                            .on_hover_text("Remove mapping")
-                            .clicked()
-                        {
+                        if ui.small_button("×").help_text("Remove mapping").clicked() {
                             remove = Some(r.id);
                         }
                     });
@@ -64,6 +74,11 @@ impl Modulator {
             ui.menu_button("+ Add mapping", |ui| {
                 for &target in kind.targets() {
                     if ui.button(target.label()).clicked() {
+                        if let Some(route) = settings.routes.iter().find(|r| r.target == target) {
+                            self.selected = Some(route.id);
+                            ui.close();
+                            continue;
+                        }
                         let id = (1..)
                             .find(|id| settings.routes.iter().all(|r| r.id != *id))
                             .unwrap();
@@ -87,6 +102,10 @@ impl Modulator {
         };
         ui.separator();
         ui.strong(r.target.label());
+        if crate::signals::ui::mapping_editor(ui, r, kind) {
+            settings.sanitize(kind);
+            return;
+        }
         combo(
             ui,
             "source",
@@ -94,14 +113,6 @@ impl Modulator {
             &mut r.source,
             &[Source::Band, Source::FullMix, Source::Stereo],
             Source::label,
-        );
-        combo(
-            ui,
-            "target",
-            "Destination",
-            &mut r.target,
-            kind.targets(),
-            Target::label,
         );
         if r.target.layered() {
             egui::ComboBox::from_id_salt("mapping-layer")
@@ -216,7 +227,7 @@ impl Modulator {
         settings.sanitize(kind);
     }
 }
-fn combo<T: Copy + PartialEq>(
+pub(crate) fn combo<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     id: &str,
     label: &str,
@@ -235,12 +246,22 @@ fn combo<T: Copy + PartialEq>(
                 }
             })
             .response
-            .on_hover_text(label);
+            .help_text(format!(
+                "{label}\n{}",
+                crate::help::control_description(label)
+            ));
     });
 }
-fn spectrum_editor(ui: &mut egui::Ui, f: &AudioFeatures, r: &mut Route, layers: usize) -> Rect {
+pub(crate) fn spectrum_editor(
+    ui: &mut egui::Ui,
+    f: &AudioFeatures,
+    r: &mut Route,
+    layers: usize,
+) -> Rect {
     ui.add_space(6.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 100.0), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 100.0), Sense::hover());
+    response.help_text("Frequency selection\nDrag the left and right handles to isolate the frequency band used for detection. The horizontal scale is logarithmic: bass is left, treble is right. A band can emphasize a kick or melody, but cannot separate instruments that overlap in frequency.");
     let plot = rect.shrink2(Vec2::new(6.0, 16.0));
     let x = |hz: f32| plot.left() + (hz / 20.0).log10() / 3.0 * plot.width();
     let hz = |x: f32| 20.0 * 1000.0_f32.powf(((x - plot.left()) / plot.width()).clamp(0.0, 1.0));
@@ -304,7 +325,8 @@ fn spectrum_editor(ui: &mut egui::Ui, f: &AudioFeatures, r: &mut Route, layers: 
                 ui.id().with(("band-handle", r.id, index)),
                 Sense::drag(),
             )
-            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            .help_text("Frequency boundary\nDrag horizontally to set the lower or upper frequency limit. Use the Hz fields below for exact values.");
         if response.dragged()
             && let Some(pos) = response.interact_pointer_pos()
         {
@@ -345,7 +367,7 @@ fn spectrum_editor(ui: &mut egui::Ui, f: &AudioFeatures, r: &mut Route, layers: 
     rect
 }
 
-fn envelope_editor(
+pub(crate) fn envelope_editor(
     ui: &mut egui::Ui,
     e: &mut Envelope,
     mode: Response,
@@ -353,7 +375,9 @@ fn envelope_editor(
     level: f32,
 ) -> Rect {
     ui.add_space(6.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 108.0), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 108.0), Sense::hover());
+    response.help_text("Response envelope\nAttack sets rise time; decay falls toward sustain; sustain holds a level; release returns to zero. Drag A, D and R horizontally and S vertically. Follow mode uses attack and release to follow incoming level instead of triggering a full ADSR shape.");
     let plot = rect.shrink2(Vec2::new(12.0, 20.0));
     let follow = mode == Response::Follow;
     let decay = if follow { 0.0 } else { e.decay };
@@ -436,7 +460,10 @@ fn envelope_editor(
             ("D", &mut e.decay, 3000.0),
             ("R", &mut e.release, 5000.0),
         ] {
-            ui.add_enabled_ui(!follow || label != "D", |ui| {
+            if follow && label == "D" {
+                continue;
+            }
+            ui.scope(|ui| {
                 ui.add(
                     egui::DragValue::new(value)
                         .range(1.0..=max)
@@ -447,11 +474,13 @@ fn envelope_editor(
             });
         }
     });
-    ui.add_enabled_ui(!follow, |ui| {
-        ui.add(Parameter::new(&mut e.sustain, 0.0..=1.0, 0.65).text("Sustain"));
-    });
+    if !follow {
+        ui.scope(|ui| {
+            ui.add(Parameter::new(&mut e.sustain, 0.0..=1.0, 0.65).text("Sustain"));
+        });
+    }
     ui.small(if follow {
-        "A/R follow the level. D/S apply in ADSR modes."
+        "Attack and release follow the incoming level."
     } else {
         "Drag A / D / R horizontally; S vertically."
     });

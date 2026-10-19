@@ -219,6 +219,7 @@ impl Oscilloscope {
                     });
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.trigger_level, -1.0..=1.0, 0.0)
+                            .key("trigger_level")
                             .text("Threshold"),
                     )
                     .help_text(
@@ -250,7 +251,7 @@ impl Oscilloscope {
                         .help_text("Choose a single detected cycle or several consecutive cycles.");
                     ui.add_enabled_ui(self.cycle_mode == CycleMode::Multi, |ui| {
                         ui.add(
-                            crate::parameter::Parameter::new(&mut self.cycles, 2..=8, 3)
+                            crate::parameter::Parameter::new(&mut self.cycles, 2..=8, 3).key("cycles")
                                 .bounds(2.0..=16.0)
                                 .text("Cycles"),
                         )
@@ -265,7 +266,7 @@ impl Oscilloscope {
                             &mut self.timebase_ms,
                             1.0..=100.0,
                             20.0,
-                        )
+                        ).key("timebase_ms")
                         .bounds(0.1..=500.0)
                         .logarithmic(true)
                         .text("Across ms"),
@@ -282,6 +283,7 @@ impl Oscilloscope {
                 ui.add_enabled_ui(!self.auto_scale, |ui| {
                     ui.add(
                         crate::parameter::Parameter::new(&mut self.amplitude, 0.1..=10.0, 1.0)
+                            .key("amplitude")
                             .bounds(0.01..=100.0)
                             .logarithmic(true)
                             .text("Amplitude"),
@@ -303,6 +305,7 @@ impl Oscilloscope {
             super::settings_group(ui, "Trace", |ui| {
                 ui.add(
                     crate::parameter::Parameter::new(&mut self.thickness, 0.5..=4.0, 1.4)
+                        .key("thickness")
                         .bounds(0.1..=20.0)
                         .text("Line px"),
                 )
@@ -328,7 +331,7 @@ impl Oscilloscope {
             });
             super::settings_group(ui, "Persistence", |ui| {
                 ui.add(
-                        crate::parameter::Parameter::new(&mut self.afterglow_traces, 0..=8, 2)
+                        crate::parameter::Parameter::new(&mut self.afterglow_traces, 0..=8, 2).key("afterglow_traces")
                             .bounds(0.0..=16.0)
                     .text("Older traces"),
                 )
@@ -340,6 +343,7 @@ impl Oscilloscope {
                             0.03..=0.5,
                             0.16,
                         )
+                        .key("afterglow_opacity")
                         .bounds(0.0..=1.0)
                         .text("Afterglow"),
                     )
