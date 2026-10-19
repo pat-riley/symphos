@@ -25,6 +25,16 @@ class DevelopmentSupervisorTests(unittest.TestCase):
             source.write_text("second change")
             self.assertNotEqual(before, dev.fingerprint(root))
 
+    def test_gpu_crates_and_shaders_are_watched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shader = root / "crates/visuals/src/particles.wgsl"
+            shader.parent.mkdir(parents=True)
+            shader.write_text("first")
+            before = dev.fingerprint(root)
+            shader.write_text("second shader")
+            self.assertNotEqual(before, dev.fingerprint(root))
+
     def test_failed_build_leaves_current_app_untouched(self):
         args = argparse.Namespace(build_only=False, system_audio=False, once=False)
         runner = dev.Supervisor(args)

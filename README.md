@@ -515,3 +515,36 @@ components. Numeric controls support scene macro assignment. Projects and
 presets save the configuration; the **Resonance petals** view preset provides
 another starting point. Existing projects gain default Resonance settings
 without changing their components, macros, or signal channels.
+
+
+### Orbital GPU visualizer
+
+Add **Orbital** for a GPU orbital/flocking hybrid: collective particle currents,
+moving attractor orbs, repulsive cores, turbulence, HDR trails, bloom and shaded
+orb lighting. The inspector exposes 111 continuous parameters that can be dragged
+onto scene macros and connected to Signals. Audio force/light provide optional
+main-audio response; turn those down to use only manual controls and signal mappings.
+
+Start with **Balanced (32,768 particles)**; the Particles inspector also offers
+16,384, 65,536 and 131,072. Quality and appearance are saved per component. The
+**60 FPS display target** is a local preference under **Settings → Display & Layout**,
+independent of analysis rate and project contents. Drag the canvas to rotate,
+Shift/right-drag to pan, and scroll to zoom. **Camera** adds orthographic/perspective
+views, XYZ grids, axis presets and auto-orbit. **Particles → Paths & trails** traces recent world-space
+trajectories for a configurable subset of particles. Choose **Arrow** in Particles
+to show travel direction; **Particles → Flow & motion** provides neighborhood, turning, drag,
+minimum-speed, drift and confinement controls. Hover a control with Info View open
+for practical guidance, defaults and related controls.
+
+For the richer orb treatments, open **Rendering → Starting looks** and choose **Lensing swarm** or
+**Solar ribbons**. These starting looks combine dark cores or radiant surfaces,
+asymmetric rims, lens warping, fine irregular corona rays and surface-following flow.
+**Orbs → Corona & rays** exposes the atmosphere controls. **Signal Response** groups
+audio-reactive motion, lighting, size and transient flares; map a
+Signal to **Burst drive** for direct control. **Core occlusion** hides particles
+and paths behind an orb while retaining foreground motion. Lens distortion is a
+stylized screen effect, separate from the actual particle forces in **Orbs → Surface field**.
+
+The new [GPU visualizer library](docs/gpu-visualizers.md) is independent of the UI
+and capture engine. It provides the foundation for additional bespoke GPU sketches;
+Cinder and MilkDrop integration are not included in this implementation.

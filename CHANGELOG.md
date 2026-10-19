@@ -7,6 +7,14 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- Add Orbital, a native GPU orbital/flocking visualizer with configurable particles,
+  attractor orbs, surface avoidance fields, world-space paths, arrow glyphs,
+  XYZ camera guides, lensing cores, coronas and transient flares. Expose 111
+  scene-saved macro parameters in grouped Particles, Orbs, Signal Response,
+  Camera and Rendering inspectors, preserving older projects and mappings.
+- Add the internal Rust/wgpu `symphos-visuals` library and a local display frame-rate
+  preference (60 FPS default) independent of audio analysis and project settings.
+
 - Add Flux, a music-reactive 3D particle cloud with moving attraction points,
   bass bursts, swirling currents, trails, four palettes and color mappings,
   42 controls, and orbit/roll/zoom/perspective camera controls. Add the Flux

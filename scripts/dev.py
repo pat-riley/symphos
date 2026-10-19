@@ -24,7 +24,7 @@ def atomic_json(path, value):
 
 def fingerprint(root=ROOT):
     files = [root / name for name in ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml")]
-    for name in ("src", "assets/macos", "assets/development"):
+    for name in ("src", "crates", "assets/macos", "assets/development"):
         directory = root / name
         if directory.exists():
             files.extend(path for path in directory.rglob("*") if path.is_file())
