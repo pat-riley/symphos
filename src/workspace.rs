@@ -371,6 +371,8 @@ pub struct Session {
     pub signals: crate::signals::Bank,
     #[serde(default)]
     pub appearance: crate::theme::AppearancePreferences,
+    #[serde(default = "default_render_fps")]
+    pub render_fps: u32,
     pub version: u32,
     #[serde(default = "default_demo")]
     pub demo: bool,
@@ -392,6 +394,9 @@ pub struct Session {
     #[serde(default = "default_preset")]
     pub active_preset: String,
 }
+pub fn default_render_fps() -> u32 {
+    60
+}
 pub fn default_signals_height() -> f32 {
     390.0
 }
@@ -408,6 +413,7 @@ impl Session {
             && self.macros.as_ref().is_none_or(|m| m.valid(&self.panes))
             && self.signals.valid()
             && self.appearance.valid()
+            && [30, 60, 90, 120].contains(&self.render_fps)
             && self.version == 2
             && !self.panes.is_empty()
             && self.panes.len() <= MAX_PANES
@@ -597,6 +603,12 @@ pub fn factory_presets() -> Vec<Preset> {
             &[ModuleKind::Rings],
         ),
         view("flux", "Flux currents", Tile::Pane(0), &[ModuleKind::Flux]),
+        view(
+            "orbital",
+            "Orbital flocking",
+            Tile::Pane(0),
+            &[ModuleKind::Orbital],
+        ),
         view(
             "resonance",
             "Resonance petals",
@@ -963,6 +975,7 @@ mod tests {
                     && entry.get("Cylinder").is_none()
                     && entry.get("Rings").is_none()
                     && entry.get("Resonance").is_none()
+                    && entry.get("Orbital").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -997,6 +1010,7 @@ mod tests {
                     && entry.get("Cylinder").is_none()
                     && entry.get("Rings").is_none()
                     && entry.get("Resonance").is_none()
+                    && entry.get("Orbital").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1025,6 +1039,7 @@ mod tests {
                     && entry.get("Cylinder").is_none()
                     && entry.get("Rings").is_none()
                     && entry.get("Resonance").is_none()
+                    && entry.get("Orbital").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1046,6 +1061,7 @@ mod tests {
                     && s.get("Cylinder").is_none()
                     && s.get("Rings").is_none()
                     && s.get("Resonance").is_none()
+                    && s.get("Orbital").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
             pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
@@ -1080,6 +1096,7 @@ mod tests {
                 s.get("Cylinder").is_none()
                     && s.get("Rings").is_none()
                     && s.get("Resonance").is_none()
+                    && s.get("Orbital").is_none()
             });
             for settings in pane["settings"].as_array_mut().unwrap() {
                 if let Some(sphere) = settings.get_mut("Sphere") {
@@ -1115,7 +1132,7 @@ mod tests {
             pane["settings"]
                 .as_array_mut()
                 .unwrap()
-                .retain(|s| s.get("Resonance").is_none());
+                .retain(|s| s.get("Resonance").is_none() && s.get("Orbital").is_none());
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(12);
             pane["macros"]["banks"][11][0]["depth"] = 0.6.into();
         }
@@ -1148,10 +1165,11 @@ mod tests {
         let mut legacy = serde_json::to_value(&original).unwrap();
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(11);
-            pane["settings"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|s| s.get("Rings").is_none() && s.get("Resonance").is_none());
+            pane["settings"].as_array_mut().unwrap().retain(|s| {
+                s.get("Rings").is_none()
+                    && s.get("Resonance").is_none()
+                    && s.get("Orbital").is_none()
+            });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(11);
             pane["macros"]["banks"][10][0]["depth"] = 0.7.into();
         }
@@ -1212,6 +1230,7 @@ mod tests {
             sidebar_width: 236.0,
             signals_height: default_signals_height(),
             help_open: false,
+            render_fps: 60,
             analysis: AnalysisSettings::default(),
             meter_stereo: true,
             meter_channel: ChannelMode::StereoMix,
@@ -1272,6 +1291,25 @@ mod tests {
         assert!(!bad.validate());
     }
 
+    #[test]
+    fn render_rate_is_local_and_old_sessions_default_to_sixty() {
+        let mut value = serde_json::to_value(session()).unwrap();
+        value.as_object_mut().unwrap().remove("render_fps");
+        let mut state = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(state.render_fps, 60);
+        state.render_fps = 120;
+        let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.render_fps, 120);
+        let scene = crate::project::SceneState::capture(state);
+        assert!(
+            serde_json::to_value(scene)
+                .unwrap()
+                .get("render_fps")
+                .is_none()
+        );
+        value["render_fps"] = 0.into();
+        assert!(Session::decode(&serde_json::to_vec(&value).unwrap()).is_none());
+    }
     #[test]
     fn old_sessions_default_appearance_and_new_preferences_roundtrip() {
         let mut value = serde_json::to_value(session()).unwrap();

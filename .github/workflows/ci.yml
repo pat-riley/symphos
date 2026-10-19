@@ -61,15 +61,15 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-targets --locked
+        run: cargo test --workspace --all-targets --locked
 
       - name: Validate development tools
         run: |
-          cargo clippy --all-targets --features development --locked -- -D warnings
-          cargo test --all-targets --features development --locked
+          cargo clippy --workspace --all-targets --features development --locked -- -D warnings
+          cargo test --workspace --all-targets --features development --locked
           python3 -m unittest discover -s scripts/tests
 
       - name: Build release binary

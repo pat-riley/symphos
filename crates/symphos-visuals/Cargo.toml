@@ -1,0 +1,14 @@
+[package]
+name = "symphos-visuals"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "GPU visualizer building blocks for Symphos"
+
+[dependencies]
+wgpu = "30.0.1"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }
+pollster = "1.0.1"

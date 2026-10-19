@@ -35,6 +35,7 @@ impl SceneState {
     }
     pub fn validate(&self) -> bool {
         let session = Session {
+            render_fps: 60,
             macros: self.macros.clone(),
             project_path: None,
             scenes: None,
@@ -476,6 +477,7 @@ mod tests {
             pane.paste_settings(&s);
         }
         let mut session = Session {
+            render_fps: 60,
             macros: None,
             project_path: None,
             scenes: None,

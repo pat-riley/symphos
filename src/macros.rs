@@ -117,14 +117,14 @@ impl Default for Slot {
 pub struct State {
     pub open: bool,
     #[serde(deserialize_with = "decode_banks")]
-    pub banks: [[Slot; 12]; 13],
+    pub banks: [[Slot; 12]; 14],
 }
 // Preserve older component banks when adding new primitives.
-fn decode_banks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[[Slot; 12]; 13], D::Error> {
+fn decode_banks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[[Slot; 12]; 14], D::Error> {
     let banks = Vec::<[Slot; 12]>::deserialize(d)?;
-    if !(9..=13).contains(&banks.len()) {
+    if !(9..=14).contains(&banks.len()) {
         return Err(serde::de::Error::custom(
-            "expected nine to thirteen macro banks",
+            "expected nine to fourteen macro banks",
         ));
     }
     let mut result = std::array::from_fn(|_| std::array::from_fn(|_| Slot::default()));
