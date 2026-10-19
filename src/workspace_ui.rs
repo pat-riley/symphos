@@ -115,12 +115,19 @@ pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
     ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
     ui.spacing_mut().interact_size.y = 22.0;
     ui.spacing_mut().indent = 16.0;
+    // Inspector chrome shares the navigation surface in every app theme.
+    // Derive its secondary surfaces from that same base instead of panel/card.
+    let base = theme.navigation;
+    let section = sidebar_blend(base, theme.foreground, 0.045);
     let field = if theme.dark_mode {
-        sidebar_blend(theme.panel, Color32::BLACK, 0.24)
+        sidebar_blend(base, Color32::BLACK, 0.24)
     } else {
-        sidebar_blend(theme.panel, theme.foreground, 0.07)
+        sidebar_blend(base, theme.foreground, 0.07)
     };
     let visuals = ui.visuals_mut();
+    visuals.panel_fill = base;
+    visuals.widgets.noninteractive.bg_fill = section;
+    visuals.widgets.noninteractive.weak_bg_fill = section;
     visuals.collapsing_header_frame = false;
     visuals.extreme_bg_color = field;
     visuals.widgets.inactive.bg_fill = field;
@@ -270,6 +277,61 @@ pub fn navigation_region(ui: &mut egui::Ui, rect: Rect, id: &str, theme: &AppThe
     visuals.selection.bg_fill = theme.selection;
     visuals.selection.stroke = Stroke::new(1.0, theme.foreground);
     child
+}
+
+/// A compact capsule with the restrained fill and icon spacing of a native toolbar.
+pub fn add_component_button(ui: &mut egui::Ui, theme: &AppTheme) -> egui::Response {
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = Vec2::new(30.0, 0.0);
+            let visuals = ui.visuals_mut();
+            visuals.widgets.inactive.bg_fill =
+                sidebar_blend(theme.navigation, theme.foreground, 0.075);
+            visuals.widgets.inactive.weak_bg_fill = visuals.widgets.inactive.bg_fill;
+            visuals.widgets.inactive.bg_stroke =
+                Stroke::new(0.75, theme.foreground.gamma_multiply(0.09));
+            for (widget, amount) in [
+                (&mut visuals.widgets.hovered, 0.12),
+                (&mut visuals.widgets.active, 0.17),
+                (&mut visuals.widgets.open, 0.17),
+            ] {
+                widget.bg_fill = sidebar_blend(theme.navigation, theme.foreground, amount);
+                widget.weak_bg_fill = widget.bg_fill;
+                widget.bg_stroke = Stroke::new(0.75, theme.foreground.gamma_multiply(0.14));
+                widget.fg_stroke.color = theme.foreground;
+            }
+            ui.add(
+                egui::Button::new(RichText::new("Add New").size(13.0).color(theme.foreground))
+                    .min_size(Vec2::new(112.0, NAV_CONTROL_HEIGHT))
+                    .corner_radius(NAV_CONTROL_HEIGHT * 0.5),
+            )
+        })
+        .inner;
+    let rect = response.rect;
+    let stroke = Stroke::new(1.4, theme.foreground);
+    let plus = egui::pos2(rect.left() + 14.0, rect.center().y);
+    ui.painter().line_segment(
+        [plus - Vec2::new(5.0, 0.0), plus + Vec2::new(5.0, 0.0)],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [plus - Vec2::new(0.0, 5.0), plus + Vec2::new(0.0, 5.0)],
+        stroke,
+    );
+    let chevron = egui::pos2(rect.right() - 14.0, rect.center().y);
+    ui.painter().add(egui::Shape::line(
+        vec![
+            chevron + Vec2::new(-3.0, -1.5),
+            chevron + Vec2::new(0.0, 1.5),
+            chevron + Vec2::new(3.0, -1.5),
+        ],
+        Stroke::new(1.3, theme.foreground.gamma_multiply(0.7)),
+    ));
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .help_text(
+            "Add a component\nChoose an instrument or visualizer to add beside the selected pane.",
+        )
 }
 
 #[derive(Clone, Copy, Debug)]

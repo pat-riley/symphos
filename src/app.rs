@@ -1464,27 +1464,34 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 }
             });
             let mut add = None;
-            ui.menu_button("Add New", |ui| {
-                for (heading, kinds) in [
-                    ("Instruments", &ModuleKind::ALL[..6]),
-                    ("Visualizers", &ModuleKind::ALL[6..]),
-                ] {
-                    ui.weak(heading);
-                    for &kind in kinds {
-                        if ui
-                            .add_enabled(
-                                self.open_panes().len() < MAX_PANES,
-                                egui::Button::new(kind.label()),
-                            )
-                            .clicked()
-                        {
-                            add = Some(kind);
-                            ui.close();
+            let add_button = workspace_ui::add_component_button(ui, &self.theme);
+            egui::Popup::menu(&add_button)
+                .frame(
+                    egui::Frame::popup(ui.style())
+                        .corner_radius(12)
+                        .inner_margin(6),
+                )
+                .show(|ui| {
+                    for (heading, kinds) in [
+                        ("Instruments", &ModuleKind::ALL[..6]),
+                        ("Visualizers", &ModuleKind::ALL[6..]),
+                    ] {
+                        ui.weak(heading);
+                        for &kind in kinds {
+                            if ui
+                                .add_enabled(
+                                    self.open_panes().len() < MAX_PANES,
+                                    egui::Button::new(kind.label()),
+                                )
+                                .clicked()
+                            {
+                                add = Some(kind);
+                                ui.close();
+                            }
                         }
+                        ui.separator();
                     }
-                    ui.separator();
-                }
-            });
+                });
             if let Some(kind) = add {
                 self.add_component(kind, self.selected_pane, Edge::Right);
                 self.inspecting_signal = false;
@@ -1706,7 +1713,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         if let Some(sidebar_rect) = layout.sidebar {
             ui.painter()
-                .rect_filled(sidebar_rect, 0.0, self.theme.panel);
+                .rect_filled(sidebar_rect, 0.0, self.theme.navigation);
+            ui.painter().hline(
+                sidebar_rect.x_range(),
+                sidebar_rect.top() + 0.5,
+                Stroke::new(1.0, self.theme.foreground.gamma_multiply(0.14)),
+            );
             ui.painter().vline(
                 sidebar_rect.left(),
                 sidebar_rect.y_range(),
