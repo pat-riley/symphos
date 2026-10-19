@@ -598,6 +598,12 @@ pub fn factory_presets() -> Vec<Preset> {
         ),
         view("flux", "Flux currents", Tile::Pane(0), &[ModuleKind::Flux]),
         view(
+            "resonance",
+            "Resonance petals",
+            Tile::Pane(0),
+            &[ModuleKind::Resonance],
+        ),
+        view(
             "stereo",
             "Stereo lab",
             Tile::split(
@@ -956,6 +962,7 @@ mod tests {
                     && entry.get("Sphere").is_none()
                     && entry.get("Cylinder").is_none()
                     && entry.get("Rings").is_none()
+                    && entry.get("Resonance").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -989,6 +996,7 @@ mod tests {
                     && entry.get("Sphere").is_none()
                     && entry.get("Cylinder").is_none()
                     && entry.get("Rings").is_none()
+                    && entry.get("Resonance").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1016,6 +1024,7 @@ mod tests {
                     && entry.get("Sphere").is_none()
                     && entry.get("Cylinder").is_none()
                     && entry.get("Rings").is_none()
+                    && entry.get("Resonance").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1033,14 +1042,17 @@ mod tests {
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(9);
             pane["settings"].as_array_mut().unwrap().retain(|s| {
-                s.get("Sphere").is_none() && s.get("Cylinder").is_none() && s.get("Rings").is_none()
+                s.get("Sphere").is_none()
+                    && s.get("Cylinder").is_none()
+                    && s.get("Rings").is_none()
+                    && s.get("Resonance").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
             pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         for pane in &decoded.panes {
-            assert_eq!(pane.settings.len(), 12);
+            assert_eq!(pane.settings.len(), ModuleKind::ALL.len());
             let macros = pane.macros.as_ref().unwrap();
             assert_eq!(macros.banks[8][0].depth, -0.75);
             assert!(
@@ -1064,10 +1076,11 @@ mod tests {
         let mut legacy = serde_json::to_value(&original).unwrap();
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(10);
-            pane["settings"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|s| s.get("Cylinder").is_none() && s.get("Rings").is_none());
+            pane["settings"].as_array_mut().unwrap().retain(|s| {
+                s.get("Cylinder").is_none()
+                    && s.get("Rings").is_none()
+                    && s.get("Resonance").is_none()
+            });
             for settings in pane["settings"].as_array_mut().unwrap() {
                 if let Some(sphere) = settings.get_mut("Sphere") {
                     sphere.as_object_mut().unwrap().remove("cylinder");
@@ -1093,6 +1106,38 @@ mod tests {
     }
 
     #[test]
+    fn twelve_component_projects_preserve_rings_and_add_resonance_defaults() {
+        let mut original = session();
+        original.panes[0] = ModulePane::new(ModuleKind::Rings).snapshot();
+        let mut legacy = serde_json::to_value(&original).unwrap();
+        for pane in legacy["panes"].as_array_mut().unwrap() {
+            pane["sections"].as_array_mut().unwrap().truncate(12);
+            pane["settings"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|s| s.get("Resonance").is_none());
+            pane["macros"]["banks"].as_array_mut().unwrap().truncate(12);
+            pane["macros"]["banks"][11][0]["depth"] = 0.6.into();
+        }
+        let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(decoded.panes[0].kind, ModuleKind::Rings);
+        assert_eq!(decoded.panes[0].settings, original.panes[0].settings);
+        for pane in &decoded.panes {
+            let banks = &pane.macros.as_ref().unwrap().banks;
+            assert_eq!(banks[11][0].depth, 0.6);
+            assert!(
+                banks[12]
+                    .iter()
+                    .all(|s| s.parameter.is_none() && s.signal.is_none())
+            );
+        }
+        assert_eq!(
+            decoded.signals.channels.len(),
+            original.signals.channels.len()
+        );
+    }
+
+    #[test]
     fn eleven_component_projects_keep_cylinder_settings_and_add_empty_rings_macros() {
         let mut original = session();
         let mut pane = ModulePane::new(ModuleKind::Cylinder);
@@ -1106,7 +1151,7 @@ mod tests {
             pane["settings"]
                 .as_array_mut()
                 .unwrap()
-                .retain(|s| s.get("Rings").is_none());
+                .retain(|s| s.get("Rings").is_none() && s.get("Resonance").is_none());
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(11);
             pane["macros"]["banks"][10][0]["depth"] = 0.7.into();
         }

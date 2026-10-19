@@ -554,7 +554,7 @@ impl Manager {
         }
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux] {
+            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux, ModuleKind::Resonance] {
                 if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
                     egui::Frame::new().inner_margin(12).show(ui, |ui| {
                         ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));

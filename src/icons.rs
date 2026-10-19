@@ -10,6 +10,7 @@ pub enum Icon {
     Sphere,
     Cylinder,
     Rings,
+    Resonance,
     Spectrogram,
     Oscilloscope,
     Veroni,
@@ -124,6 +125,18 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
                 egui::StrokeKind::Inside,
             );
             line(&[(12.0, 3.0), (12.0, 17.0)]);
+        }
+        Icon::Resonance => {
+            for radius in [4.5, 6.5, 9.0] {
+                let points = (0..=64)
+                    .map(|i| {
+                        let t = i as f32 * std::f32::consts::TAU / 64.0;
+                        let r = radius * (0.3 + 0.7 * t.cos().abs());
+                        p(10.0 + r * t.cos(), 10.0 + r * t.sin())
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(points, stroke));
+            }
         }
         Icon::Rings => {
             for angle in [-0.8_f32, 0.0, 0.8] {

@@ -23,6 +23,7 @@ mod flux;
 mod frequency;
 mod oscilloscope;
 pub(crate) mod performance;
+mod resonance;
 mod retro;
 mod rings;
 mod trackball;
@@ -60,6 +61,7 @@ use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 use flux::Flux;
 use oscilloscope::Oscilloscope;
+use resonance::Resonance;
 use rings::Rings;
 use spectral_surface::SpectralSurface;
 use spectrogram::Spectrogram;
@@ -90,10 +92,11 @@ pub enum ModuleKind {
     Sphere,
     Cylinder,
     Rings,
+    Resonance,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
@@ -106,10 +109,12 @@ impl ModuleKind {
         Self::Sphere,
         Self::Cylinder,
         Self::Rings,
+        Self::Resonance,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Resonance => "3D Resonance",
             Self::Rings => "3D Rings",
             Self::Cylinder => "3D Cylinder",
             Self::Sphere => "3D Sphere",
@@ -127,6 +132,7 @@ impl ModuleKind {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Resonance => Icon::Resonance,
             Self::Rings => Icon::Rings,
             Self::Cylinder => Icon::Cylinder,
             Self::Sphere => Icon::Sphere,
@@ -144,6 +150,7 @@ impl ModuleKind {
 
     pub fn subtitle(self) -> &'static str {
         match self {
+            Self::Resonance => "Layered petal wavefronts",
             Self::Rings => "Orbital waveform rings",
             Self::Cylinder => "Cylindrical frequency history",
             Self::Sphere => "Spherical frequency history",
@@ -161,6 +168,9 @@ impl ModuleKind {
 
     pub fn description(self) -> &'static str {
         match self {
+            Self::Resonance => {
+                "Translucent, layered petal shells inspired by radiation wavefronts. Adjust layers, spacing, lobes, twist and ripples; audio expands and illuminates the form. An artistic primitive, not a physical simulation. Drag to rotate freely; Shift/right-drag to pan."
+            }
             Self::Rings => {
                 "Live waveforms flow around configurable orbital, concentric, or stacked rings. Choose stereo or Mid/Side input, shape the audio displacement, and rotate freely in 3D."
             }
@@ -210,6 +220,7 @@ pub struct ModulePane {
     sphere: SpectralSurface,
     cylinder: SpectralSurface,
     rings: Rings,
+    resonance: Resonance,
     spectrum: Spectrum,
     waveform: Waveform,
     spectrogram: Spectrogram,
@@ -218,7 +229,7 @@ pub struct ModulePane {
     veroni: Veroni,
     strata: Strata,
     flux: Flux,
-    active_sections: [usize; 12],
+    active_sections: [usize; 13],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -231,6 +242,7 @@ pub enum ModuleSettings {
     Sphere(spectral_surface::SurfaceSettings),
     Cylinder(spectral_surface::SurfaceSettings),
     Rings(rings::RingsSettings),
+    Resonance(resonance::ResonanceSettings),
     Spectrum(spectrum::SpectrumSettings),
     Waveform(waveform::WaveformSettings),
     Spectrogram(spectrogram::SpectrogramSettings),
@@ -253,6 +265,7 @@ impl ModuleSettings {
 
     pub fn kind(&self) -> ModuleKind {
         match self {
+            Self::Resonance(_) => ModuleKind::Resonance,
             Self::Rings(_) => ModuleKind::Rings,
             Self::Cylinder(_) => ModuleKind::Cylinder,
             Self::Sphere(_) => ModuleKind::Sphere,
@@ -277,23 +290,23 @@ pub struct PaneState {
     pub instance_id: String,
     pub kind: ModuleKind,
     #[serde(deserialize_with = "decode_sections")]
-    pub sections: [usize; 12],
+    pub sections: [usize; 13],
     #[serde(deserialize_with = "decode_module_settings")]
     pub settings: Vec<ModuleSettings>,
 }
 
-// Upgrade workspaces and view presets from earlier six- through eleven-component schemas.
+// Upgrade workspaces and view presets from earlier six- through twelve-component schemas.
 // Only complete known legacy sets are upgraded; malformed sets still fail validation.
 fn decode_sections<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<[usize; 12], D::Error> {
+) -> Result<[usize; 13], D::Error> {
     let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
-    if !(6..=12).contains(&values.len()) {
+    if !(6..=13).contains(&values.len()) {
         return Err(serde::de::Error::custom(
-            "expected six to twelve module sections",
+            "expected six to thirteen module sections",
         ));
     }
-    let mut sections = [0; 12];
+    let mut sections = [0; 13];
     sections[..values.len()].copy_from_slice(&values);
     Ok(sections)
 }
@@ -302,7 +315,7 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<ModuleSettings>, D::Error> {
     let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
     let legacy_len = settings.len();
-    if (6..=11).contains(&legacy_len)
+    if (6..=12).contains(&legacy_len)
         && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
             settings
                 .iter()
@@ -334,7 +347,12 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
                 SpectralSurface::cylinder().settings_snapshot(),
             ));
         }
-        settings.push(ModuleSettings::Rings(Rings::default().settings_snapshot()));
+        if legacy_len <= 11 {
+            settings.push(ModuleSettings::Rings(Rings::default().settings_snapshot()));
+        }
+        settings.push(ModuleSettings::Resonance(
+            Resonance::default().settings_snapshot(),
+        ));
     }
     Ok(settings)
 }
@@ -436,6 +454,7 @@ impl ModulePane {
             ModuleKind::Veroni => ModuleSettings::Veroni(self.veroni.settings_snapshot()),
             ModuleKind::Strata => ModuleSettings::Strata(self.strata.settings_snapshot()),
             ModuleKind::Flux => ModuleSettings::Flux(self.flux.settings_snapshot()),
+            ModuleKind::Resonance => ModuleSettings::Resonance(self.resonance.settings_snapshot()),
             ModuleKind::Rings => ModuleSettings::Rings(self.rings.settings_snapshot()),
             ModuleKind::Cylinder => ModuleSettings::Cylinder(self.cylinder.settings_snapshot()),
             ModuleKind::Sphere => ModuleSettings::Sphere(self.sphere.settings_snapshot()),
@@ -462,6 +481,7 @@ impl ModulePane {
             ModuleSettings::Veroni(settings) => self.veroni.apply_settings(settings),
             ModuleSettings::Strata(settings) => self.strata.apply_settings(settings),
             ModuleSettings::Flux(settings) => self.flux.apply_settings(settings),
+            ModuleSettings::Resonance(settings) => self.resonance.apply_settings(settings),
             ModuleSettings::Rings(settings) => self.rings.apply_settings(settings),
             ModuleSettings::Cylinder(settings) => self.cylinder.apply_settings(settings),
             ModuleSettings::Sphere(settings) => self.sphere.apply_settings(settings),
@@ -494,6 +514,7 @@ impl ModulePane {
                 ModuleSettings::Sphere(self.sphere.settings_snapshot()),
                 ModuleSettings::Cylinder(self.cylinder.settings_snapshot()),
                 ModuleSettings::Rings(self.rings.settings_snapshot()),
+                ModuleSettings::Resonance(self.resonance.settings_snapshot()),
             ],
         }
     }
@@ -523,6 +544,7 @@ impl ModulePane {
             sphere: SpectralSurface::default(),
             cylinder: SpectralSurface::cylinder(),
             rings: Rings::default(),
+            resonance: Resonance::default(),
             spectrum: Spectrum::default(),
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
@@ -531,7 +553,7 @@ impl ModulePane {
             veroni: Veroni::default(),
             strata: Strata::default(),
             flux: Flux::default(),
-            active_sections: [0; 12],
+            active_sections: [0; 13],
             inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
@@ -545,6 +567,7 @@ impl ModulePane {
         self.sphere.clear();
         self.cylinder.clear();
         self.rings.clear();
+        self.resonance.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -559,6 +582,7 @@ impl ModulePane {
         self.sphere.clear();
         self.cylinder.clear();
         self.rings.clear();
+        self.resonance.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -591,6 +615,7 @@ impl ModulePane {
 
     pub(crate) fn reset_settings(&mut self) {
         match self.kind {
+            ModuleKind::Resonance => self.resonance.reset_settings(),
             ModuleKind::Rings => self.rings.reset_settings(),
             ModuleKind::Cylinder => self.cylinder.reset_settings(),
             ModuleKind::Sphere => self.sphere.reset_settings(),
@@ -835,6 +860,7 @@ impl ModulePane {
         });
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         match self.kind {
+            ModuleKind::Resonance => self.resonance.controls(ui),
             ModuleKind::Rings => self.rings.controls(ui),
             ModuleKind::Cylinder => self.cylinder.controls(ui),
             ModuleKind::Sphere => self.sphere.controls(ui),
@@ -884,6 +910,7 @@ impl ModulePane {
             ModuleKind::Waterfall | ModuleKind::Sphere | ModuleKind::Cylinder => {
                 &[Geometry, Frequency, Response, Appearance, Camera]
             }
+            ModuleKind::Resonance => &[Geometry, Flow, Frequency, Response, Appearance, Camera],
             ModuleKind::Rings => &[Geometry, Channels, TimeWindow, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
@@ -967,6 +994,7 @@ impl ModulePane {
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
+            ModuleKind::Resonance => self.resonance.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Rings => self.rings.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Cylinder => self.cylinder.draw(ui, rect, frame, theme, now),
             ModuleKind::Sphere => self.sphere.draw(ui, rect, frame, theme, now),

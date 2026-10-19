@@ -493,3 +493,25 @@ Free trackball rotation, roll, pan, zoom, and axis views work like the other 3D
 primitives. Numeric controls can be dragged onto twelve initially empty macro
 slots. Project and view presets save settings and assignments; adding Rings does
 not create signal channels or alter existing components.
+
+### 3D Resonance
+
+Add **3D Resonance** for layered, petal-shaped wavefronts inspired by radiation
+and merging-black-hole artwork. Start with **Radiation petals**, **Solar waves**,
+or **Bloom** in Geometry. Adjust one to sixteen layers, one to eight petals,
+spacing, depth, flattening, waist, sharpness, twist, and shell opening. This is
+an artistic primitive rather than a physical simulation.
+
+Flow controls layer expansion and recycling, with independent spin, traveling
+ripples, phase spread, and optional alternating rotation. Audio can expand the
+shells, displace their surfaces, and brighten them; frequency range, input gain,
+and response smoothing control the reaction. Membranes, wireframe, contours,
+and points share palettes and layer/petal/energy/position coloring, transparency,
+rim light, and optional wire overlays. Detail is bounded to keep geometry costs
+predictable as layers increase.
+
+Free trackball rotation, roll, pan, zoom, and axis views match the other 3D
+components. Numeric controls support scene macro assignment. Projects and
+presets save the configuration; the **Resonance petals** view preset provides
+another starting point. Existing projects gain default Resonance settings
+without changing their components, macros, or signal channels.
