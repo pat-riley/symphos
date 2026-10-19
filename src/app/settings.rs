@@ -341,6 +341,13 @@ impl SymphosApp {
                 }
             }
             Category::Display => {
+                section(ui, "Display performance");
+                row(ui, "Target frame rate", |ui| {
+                    egui::ComboBox::from_id_salt("display-fps").selected_text(format!("{} FPS", self.render_fps)).show_ui(ui, |ui| {
+                        for rate in [30, 60, 90, 120] { ui.selectable_value(&mut self.render_fps, rate, format!("{rate} FPS")); }
+                    }).response.help_text("Global display target, saved on this computer. Does not change audio analysis or project settings. Actual FPS depends on GPU load and display refresh rate.");
+                });
+
                 section(ui, "Display");
                 let mut zoom = self
                     .pending_zoom
@@ -479,7 +486,7 @@ impl SymphosApp {
                         &mut settings.channel_mode,
                     );
                 });
-                row(ui, "Update rate", |ui| {
+                row(ui, "Analysis rate", |ui| {
                     egui::ComboBox::from_id_salt("settings-rate")
                         .selected_text(format!("{} Hz", settings.analysis_fps))
                         .show_ui(ui, |ui| {

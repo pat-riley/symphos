@@ -51,6 +51,7 @@ pub struct SymphosApp {
     show_shortcuts: bool,
     settings_clipboard: Option<ModuleSettings>,
     display_fps: f32,
+    render_fps: u32,
     last_frame: Instant,
     panes: Vec<ModulePane>,
     scene_macros: crate::macros::scene::SceneMacros,
@@ -71,6 +72,7 @@ pub struct SymphosApp {
 
 impl SymphosApp {
     pub fn new(context: &eframe::CreationContext<'_>) -> Self {
+        crate::visuals::install(context);
         let theme = AppTheme::load_omarchy();
         apply_style(&context.egui_ctx, &theme);
         let engine = AudioEngine::start();
@@ -115,6 +117,7 @@ impl SymphosApp {
             show_shortcuts: false,
             settings_clipboard: None,
             display_fps: 0.0,
+            render_fps: 60,
             last_frame: Instant::now(),
             panes: vec![
                 ModulePane::new(ModuleKind::Waterfall),
@@ -173,6 +176,7 @@ impl SymphosApp {
                 .settings
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = state.analysis;
+            app.render_fps = state.render_fps;
             app.appearance = state.appearance;
             app.global_bar.stereo = state.meter_stereo;
             app.global_bar.channel = state.meter_channel;
@@ -210,6 +214,7 @@ impl SymphosApp {
                 .clone(),
             version: 2,
             appearance: self.appearance.clone(),
+            render_fps: self.render_fps,
             demo: {
                 #[cfg(feature = "development")]
                 {
@@ -1961,15 +1966,13 @@ impl eframe::App for SymphosApp {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
         }
-        let target_rate = self
-            .engine
-            .analysis()
-            .settings
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .analysis_fps;
+        // Display cadence is a local performance preference, independent of FFT cadence.
+        let budget = Duration::from_secs_f32(1.0 / self.render_fps.max(1) as f32);
+        // egui subtracts predicted_dt internally. Compensate so a 60 FPS
+        // target does not become an immediate repaint on a 120 Hz display.
+        let predicted = Duration::from_secs_f32(ui.input(|i| i.predicted_dt).max(0.0));
         ui.ctx()
-            .request_repaint_after(Duration::from_secs_f32(1.0 / target_rate.max(1) as f32));
+            .request_repaint_after(budget.saturating_sub(now.elapsed()) + predicted);
     }
 }
 
@@ -2028,6 +2031,7 @@ mod workspace_interaction_tests {
             show_shortcuts: false,
             settings_clipboard: None,
             display_fps: 0.0,
+            render_fps: 60,
             last_frame: Instant::now(),
             panes: [
                 ModuleKind::Waterfall,

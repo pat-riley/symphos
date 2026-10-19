@@ -20,6 +20,7 @@ mod scenes;
 mod shortcuts;
 mod signals;
 mod theme;
+mod visuals;
 mod window_chrome;
 mod workspace;
 mod workspace_ui;
