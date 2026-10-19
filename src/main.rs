@@ -10,6 +10,7 @@ mod help;
 mod icons;
 mod issues;
 mod macros;
+mod midi;
 mod modulation;
 mod modules;
 mod parameter;

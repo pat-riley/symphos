@@ -15,7 +15,8 @@ flowchart LR
   F --> G[Named signal + activity / hit events]
   G --> H[Component mapping: depth / polarity / range]
   H --> I[Visualizer + manual performance macros]
-  J[Future MIDI / OSC / Ableton adapters] -.-> G
+  J[MIDI input: CC / notes / bend / pressure] --> G
+  K[Future OSC / Ableton adapters] -.-> G
 ```
 
 ## First use
@@ -67,8 +68,59 @@ Undo restores the source but does not recreate mappings. Disconnected sources
 remain assigned and resume when reconnected; deleted sources are unassigned. The inspector lists linked destinations for currently
 selected component types in the workspace, including retained closed pane slots.
 
-MIDI, OSC, Ableton, and file inputs are visible as **planned**, disabled choices.
-No MIDI device, network listener, DAW connection, or file player is implemented.
+## MIDI inputs (macOS)
+
+1. Open **Symphos → Settings… → MIDI** (`Cmd+,`). Enable a hardware input or
+   use the enabled **Symphos Input · virtual** destination. Ports refresh automatically.
+2. Right-click empty space in Signals → **Add channel → MIDI control**. Alternatively,
+   switch an existing channel’s Source to MIDI. Inputs never create channels automatically.
+3. Click the channel and open its Source inspector. Choose **Learn MIDI**, then move
+   a control or play a note. Learn captures the port, channel, message and number.
+   You can also enter them manually, choose all enabled ports/channels, or Any note.
+4. Connect that signal to a scene macro using the macro’s source picker. Use the
+   macro ring for depth; the signal’s Output tab still supplies normalization and
+   final smoothing. Muting, soloing and influence work like other signals.
+   For a fader to cover a macro’s full range, set the macro base to its minimum
+   and depth to +100%; the MIDI signal then supplies its 0–1 travel.
+
+| Message | Behavior |
+| --- | --- |
+| Control change | Absolute CC 0–127 becomes 0–1; holds between messages |
+| Note velocity | Strike velocity while held; zero on release; Any note uses the strongest held note |
+| Note gate | 1 while matching notes are held, 0 when all are released |
+| Pitch bend | 14-bit position becomes −1…+1, with exact zero at center |
+| Channel pressure | Channel aftertouch becomes 0–1 |
+| Note pressure | Per-note aftertouch becomes 0–1; cleared on note-off |
+
+MIDI strip previews show incoming data before normalization, smoothing and visual
+influence. CC and channel pressure use stepped histories with native 0–127 values;
+pitch bend has a centered zero line and signed 14-bit values. Notes and per-note
+pressure use a four-second piano roll with held-key highlights and intensity
+shading. Brief strikes remain visible after release. The In/Out meters below the
+preview continue to show the channel’s processed signal.
+
+Notes support polyphony, velocity-zero note-off, sustain pedal, and All Notes Off /
+All Sound Off. **Reset held MIDI values** clears stuck notes/controllers without
+closing ports. MIDI values do not expire simply because a controller is idle.
+Disabling/unplugging a selected input clears its held state and fades influence
+including mapping offsets; reconnecting resumes immediately on new data.
+
+For Ableton Live, enable **Track** for its MIDI output to **Symphos Input**, then
+route the MIDI track there and choose a channel. In Symphos select the corresponding
+port/channel or use Learn. This uses standard MIDI, not a Live-specific API.
+See [Ableton’s routing documentation](https://www.ableton.com/en/manual/routing-and-i-o/).
+
+Port enablement is saved locally in `midi-inputs.json`; project scenes save the
+binding (port ID, channel, message, number), signal shaping, and macro assignments.
+Loading a project does not change which devices are enabled. Missing devices remain
+assigned and can be replaced in the inspector. The virtual destination has a stable
+logical identity across app restarts. Learn state, held notes and live values are
+never saved in a project.
+
+Current scope: macOS CoreMIDI input, MIDI 1.0 channel messages. Configure relative
+encoders to send **absolute CC** for this version. MIDI clock/transport, SysEx,
+MIDI file playback, output feedback, and a Linux MIDI backend are not implemented.
+OSC, direct Ableton integration, and audio file inputs remain disabled placeholders.
 
 ## What the detectors mean
 
@@ -149,13 +201,13 @@ signal instead drives the selected layer/all layers from that shared scalar.
   simulations while clearing measurement histories.
 
 The current stale threshold assumes normal analysis rates (the application's
-standard options are 30 Hz and above). Future slow external controls need their
-own declared freshness interval, units, timestamps and value/event contracts.
+standard options are 30 Hz and above). MIDI is event-driven and retains held values while its input is connected;
+future slow external providers need their own freshness/value contracts.
 `Input` supplies stable logical provider aliases; `OutputKind`, `Sample`, and
-`Event` distinguish intensity, polarity and hits. Future adapter configuration
-will need versioned addresses/ports/channels and logical bindings. The disabled
-placeholders are not connection implementations. Ableton audio, MIDI, transport
-and control delivery must be evaluated separately when that milestone starts.
+`Event` distinguish intensity, polarity and hits. MIDI bindings store input IDs, channel and message filters. Future network adapters
+will need versioned addresses and logical bindings. The disabled placeholders are
+not connection implementations; direct Ableton audio and transport remain separate
+from the standard MIDI track route above.
 
 ## Projects and presets
 

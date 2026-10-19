@@ -52,7 +52,7 @@ impl Input {
         match self {
             Self::System => "Main audio",
             Self::Lfo => "LFO",
-            Self::Midi => "MIDI · planned",
+            Self::Midi => "MIDI",
             Self::Osc => "OSC · planned",
             Self::Ableton => "Ableton · planned",
             Self::File => "Audio file · planned",
@@ -67,15 +67,17 @@ pub enum Method {
     SpectralChange,
     Balance,
     Lfo,
+    Midi,
 }
 impl Method {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Intensity,
         Self::Band,
         Self::BassHits,
         Self::SpectralChange,
         Self::Balance,
         Self::Lfo,
+        Self::Midi,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -85,10 +87,14 @@ impl Method {
             Self::SpectralChange => "Spectral change",
             Self::Balance => "Stereo balance",
             Self::Lfo => "LFO",
+            Self::Midi => "MIDI control",
         }
     }
     pub fn description(self) -> &'static str {
         match self {
+            Self::Midi => {
+                "MIDI controller, note, pitch bend or pressure from an enabled input. Configure the message in the MIDI mapping section. Values hold between messages; disconnected inputs fade to zero."
+            }
             Self::Lfo => "Free-running oscillator, independent of the audio device. Rate is in Hz.",
             Self::Intensity => "Full-mix RMS level / shaped intensity.",
             Self::Band => "Energy within the selected band / shaped intensity.",
@@ -248,6 +254,8 @@ pub struct Definition {
     #[serde(default)]
     pub lfo: Lfo,
     #[serde(default)]
+    pub midi: crate::midi::Binding,
+    #[serde(default)]
     pub color: Option<[u8; 3]>,
 }
 impl Definition {
@@ -272,7 +280,9 @@ impl Definition {
         Self {
             id,
             name: method.label().into(),
-            input: if method == Method::Lfo {
+            input: if method == Method::Midi {
+                Input::Midi
+            } else if method == Method::Lfo {
                 Input::Lfo
             } else {
                 Input::System
@@ -286,11 +296,17 @@ impl Definition {
             smoothing_ms: 0.0,
             response,
             lfo: Lfo::default(),
+            midi: Default::default(),
             color: None,
         }
     }
     pub fn sanitize(&mut self) {
         self.lfo.sanitize();
+        self.midi.sanitize();
+        if self.input == Input::Midi || self.method == Method::Midi {
+            self.input = Input::Midi;
+            self.method = Method::Midi;
+        }
         self.normalization.sanitize();
         if !self.smoothing_ms.is_finite() {
             self.smoothing_ms = 0.0;
@@ -318,7 +334,13 @@ impl Definition {
         self.influence = self.influence.clamp(0.0, 2.0);
     }
     pub fn kind(&self) -> OutputKind {
-        if self.normalization.enabled {
+        if self.input == Input::Midi {
+            if self.midi.message == crate::midi::Message::PitchBend && !self.normalization.enabled {
+                OutputKind::Bipolar
+            } else {
+                OutputKind::Unipolar
+            }
+        } else if self.normalization.enabled {
             if self.input != Input::Lfo && self.response.response == Response::Transient {
                 OutputKind::EventsAndEnvelope
             } else {
@@ -425,7 +447,10 @@ impl Bank {
     #[cfg(test)]
     pub(crate) fn test_sources() -> Self {
         let mut bank = Self::default();
-        for method in Method::ALL.into_iter().filter(|m| *m != Method::Lfo) {
+        for method in Method::ALL
+            .into_iter()
+            .filter(|m| !matches!(m, Method::Lfo | Method::Midi))
+        {
             bank.add(method).unwrap();
         }
         bank
@@ -449,6 +474,8 @@ impl Bank {
                     && (0.0..=2.0).contains(&d.influence)
                     && d.response.signal.is_none()
                     && d.lfo.valid()
+                    && d.midi.valid()
+                    && ((d.input == Input::Midi) == (d.method == Method::Midi))
                     && d.normalization.valid()
                     && d.smoothing_ms.is_finite()
                     && (0.0..=5000.0).contains(&d.smoothing_ms)
@@ -548,6 +575,7 @@ struct ChannelState {
     spectral: f32,
     lfo_phase: f64,
     output_smoother: OutputSmoother,
+    midi_binding: Option<crate::midi::Binding>,
 }
 #[derive(Default)]
 pub struct Processor {
@@ -559,12 +587,29 @@ pub struct Processor {
     next_event: u64,
 }
 impl Processor {
+    #[cfg(test)]
     pub fn step(
         &mut self,
         bank: &Bank,
         frame: &AnalysisFrame,
         time: f64,
         connected: bool,
+    ) -> Snapshot {
+        self.step_with_midi(
+            bank,
+            frame,
+            time,
+            connected,
+            &crate::midi::Snapshot::default(),
+        )
+    }
+    pub fn step_with_midi(
+        &mut self,
+        bank: &Bank,
+        frame: &AnalysisFrame,
+        time: f64,
+        connected: bool,
+        midi: &crate::midi::Snapshot,
     ) -> Snapshot {
         let dt = (time - self.last_step).clamp(0.0, 0.1) as f32;
         self.last_step = time;
@@ -605,9 +650,12 @@ impl Processor {
                 d.response.low.to_bits(),
                 d.response.high.to_bits(),
             );
-            if s.signature != Some(sig) {
+            if s.signature != Some(sig)
+                || (d.input == Input::Midi && s.midi_binding.as_ref() != Some(&d.midi))
+            {
                 *s = ChannelState {
                     signature: Some(sig),
+                    midi_binding: Some(d.midi.clone()),
                     ..Default::default()
                 };
             }
@@ -615,6 +663,12 @@ impl Processor {
                 Status::Muted
             } else if d.input == Input::Lfo {
                 Status::Live
+            } else if d.input == Input::Midi {
+                if midi.available(&d.midi) {
+                    Status::Live
+                } else {
+                    Status::Stale
+                }
             } else if d.input != Input::System {
                 Status::Planned
             } else if live {
@@ -641,6 +695,18 @@ impl Processor {
                 // Disconnect/mute uses the existing short fade, independent of
                 // smoothing. Reconnection resumes on the very next live sample.
                 s.output_smoother = OutputSmoother::default();
+                continue;
+            }
+            if d.input == Input::Midi {
+                s.sample.raw = midi.value(&d.midi);
+                s.sample.input = s.sample.raw.abs();
+                s.sample.level = s.sample.input;
+                s.sample.value = s.output_smoother.process(
+                    d.normalization.map(s.sample.raw) * d.influence,
+                    d.smoothing_ms,
+                    dt,
+                );
+                s.sample.availability = 1.0;
                 continue;
             }
             if d.input == Input::Lfo {
@@ -675,7 +741,7 @@ impl Processor {
                 s.prior_spectrum = Some(f.spectrum);
             }
             let amplitude = match d.method {
-                Method::Lfo => 0.0,
+                Method::Lfo | Method::Midi => 0.0,
                 Method::Intensity => f.rms,
                 Method::Band | Method::BassHits => f.band(d.response.low, d.response.high),
                 Method::Balance => f.rms * f.balance.abs(),
@@ -738,7 +804,10 @@ pub struct Runtime {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 impl Runtime {
-    pub fn start(audio: Arc<ArcSwap<AnalysisFrame>>) -> Self {
+    pub fn start(
+        audio: Arc<ArcSwap<AnalysisFrame>>,
+        midi: Arc<ArcSwap<crate::midi::Snapshot>>,
+    ) -> Self {
         let audio = Arc::new(ArcSwap::from(audio));
         let source = audio.clone();
         let definitions = Arc::new(ArcSwap::from_pointee(Bank::default()));
@@ -765,11 +834,12 @@ impl Runtime {
                     bound = next;
                 }
                 let time = start.elapsed().as_secs_f64();
-                out.store(Arc::new(processor.step(
+                out.store(Arc::new(processor.step_with_midi(
                     &defs.load(),
                     &bound.load(),
                     time,
                     live.load(Ordering::Relaxed),
+                    &midi.load(),
                 )));
                 std::thread::sleep(Duration::from_micros(8333));
             }
@@ -1243,7 +1313,10 @@ mod worker_tests {
     #[test]
     fn generated_audio_drives_worker_without_any_ui_or_visualizer() {
         let engine = crate::audio::AudioEngine::development_mode(true);
-        let runtime = Runtime::start(engine.analysis().snapshot.clone());
+        let runtime = Runtime::start(
+            engine.analysis().snapshot.clone(),
+            Arc::new(ArcSwap::from_pointee(crate::midi::Snapshot::default())),
+        );
         runtime.publish(&Bank::test_sources());
         let deadline = Instant::now() + Duration::from_secs(3);
         while runtime
@@ -1295,7 +1368,10 @@ mod session_rebinding_tests {
     #[test]
     fn follows_new_capture_runtime_even_when_epoch_and_sequence_repeat() {
         let startup = Arc::new(ArcSwap::from_pointee(AnalysisFrame::default()));
-        let runtime = Runtime::start(startup);
+        let runtime = Runtime::start(
+            startup,
+            Arc::new(ArcSwap::from_pointee(crate::midi::Snapshot::default())),
+        );
         runtime.publish(&Bank::test_sources());
         let first = Arc::new(ArcSwap::from_pointee(frame(0.5)));
         runtime.bind_audio(first.clone());

@@ -26,7 +26,7 @@ pub fn control_description(label: &str) -> &'static str {
             "Choose a modulation source created in Signals. Each macro has one source; a source can drive many macros. None disconnects modulation without changing the manual value."
         }
         "Input" => {
-            "Choose what feeds this channel. Main audio follows the capture device in Settings. An LFO generates movement without audio. MIDI, OSC and Ableton inputs are reserved for future support."
+            "Choose what feeds this channel. Main audio follows the capture device in Settings. An LFO generates movement without audio. MIDI receives controllers or notes from inputs enabled in Settings → MIDI. OSC and direct Ableton integration are reserved for future support."
         }
         "Detector" => {
             "Choose how to turn audio into a control signal. Band energy follows a frequency range; hit detectors emphasize transients; intensity follows the mix. These are estimates, not isolated instrument stems."

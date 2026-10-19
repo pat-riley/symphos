@@ -90,7 +90,7 @@ impl GlobalBar {
 
             if ui
                 .add(egui::Button::selectable(*signals_open, "Signals"))
-                .help_text("Signals\nShow the scene’s modulation sources. Create audio detectors or LFOs, shape their output, then connect them to macros. The Signals and Macros docks share this space.")
+                .help_text("Signals\nShow the scene’s modulation sources. Create audio detectors, MIDI controls or LFOs, shape their output, then connect them to macros. The Signals and Macros docks share this space.")
                 .clicked()
             {
                 *signals_open = !*signals_open;

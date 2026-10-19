@@ -13,6 +13,7 @@ use crate::{
 };
 use egui::{self, Rect};
 use std::sync::Mutex;
+mod midi_preview;
 
 pub type Shared = Arc<Mutex<Panel>>;
 pub const MIN_DOCK_HEIGHT: f32 = 320.0;
@@ -20,6 +21,8 @@ pub const CONTEXT_KEY: &str = "shared-musical-signals";
 pub struct Panel {
     pub bank: Bank,
     pub snapshot: Arc<Snapshot>,
+    pub midi_snapshot: Arc<crate::midi::Snapshot>,
+    midi_learning: Option<(u64, u64)>,
     pub selected: Option<u64>,
     pub show_signals: bool,
     pub inspect_requested: bool,
@@ -27,6 +30,7 @@ pub struct Panel {
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
     history: BTreeMap<u64, std::collections::VecDeque<f32>>,
+    midi_history: BTreeMap<u64, midi_preview::History>,
     last_history_time: f64,
     clipboard: Option<(Definition, bool)>,
     rename: Option<(u64, String, bool)>,
@@ -85,6 +89,8 @@ impl Default for Panel {
         Self {
             bank: Bank::default(),
             snapshot: Arc::new(Snapshot::default()),
+            midi_snapshot: Arc::new(crate::midi::Snapshot::default()),
+            midi_learning: None,
             selected: None,
             show_signals: false,
             inspect_requested: false,
@@ -92,6 +98,7 @@ impl Default for Panel {
             span: None,
             deleted: None,
             history: Default::default(),
+            midi_history: Default::default(),
             last_history_time: 0.0,
             clipboard: None,
             rename: None,
@@ -111,9 +118,11 @@ impl Panel {
         self.last_history_time = 0.0;
         self.rename = None;
         self.learning = None;
+        self.midi_learning = None;
         self.sections.clear();
         self.deleted = None;
         self.history.clear();
+        self.midi_history.clear();
     }
     fn can_paste(&self) -> bool {
         self.clipboard.as_ref().is_some_and(|(d, cut)| {
@@ -161,6 +170,20 @@ impl Panel {
                     history.pop_front();
                 }
             }
+        }
+        self.midi_history.retain(|id, _| {
+            self.bank
+                .channels
+                .iter()
+                .any(|d| d.id == *id && d.input == Input::Midi)
+        });
+        for definition in self.bank.channels.iter().filter(|d| d.input == Input::Midi) {
+            self.midi_history
+                .entry(definition.id)
+                .or_insert_with(|| {
+                    midi_preview::History::new(&definition.midi, self.midi_snapshot.serial)
+                })
+                .update(&definition.midi, &self.midi_snapshot, self.snapshot.time);
         }
         let width = if inspector_open {
             self.inspector_width
@@ -222,6 +245,11 @@ impl Panel {
                                     &sample,
                                     self.selected == Some(id),
                                     history,
+                                    Some((
+                                        &self.midi_snapshot,
+                                        self.midi_history.get(&id),
+                                        self.snapshot.time,
+                                    )),
                                 ) {
                                     action = Some(a);
                                 }
@@ -389,11 +417,12 @@ impl Panel {
                         .values
                         .get(&d.id)
                         .map_or(Status::Waiting, |s| s.status);
-                    let metadata = format!(
-                        "Channel {index} · {} · {:.0} kHz",
-                        status.label(),
-                        frame.sample_rate as f32 / 1000.0
-                    );
+                    let input_detail = match d.input {
+                        Input::Midi => "MIDI input".into(),
+                        Input::Lfo => "Free-running".into(),
+                        _ => format!("{:.0} kHz", frame.sample_rate as f32 / 1000.0),
+                    };
+                    let metadata = format!("Channel {index} · {} · {input_detail}", status.label());
                     (
                         if d.input == Input::Lfo {
                             Icon::Oscilloscope
@@ -421,6 +450,10 @@ impl Panel {
             .copied()
             .unwrap_or_default();
         let lfo = definition.as_ref().is_some_and(|d| d.input == Input::Lfo);
+        let midi = definition.as_ref().is_some_and(|d| d.input == Input::Midi);
+        if midi && matches!(section, SignalSection::Detection | SignalSection::Response) {
+            section = SignalSection::Source;
+        }
         if lfo && section == SignalSection::Response {
             section = SignalSection::Detection;
         }
@@ -432,6 +465,9 @@ impl Panel {
             ("signal-tabs", self.selected),
             |rail| {
                 for tab in SignalSection::ALL {
+                    if midi && matches!(tab, SignalSection::Detection | SignalSection::Response) {
+                        continue;
+                    }
                     if tab == SignalSection::Response && lfo {
                         continue;
                     }
@@ -671,45 +707,43 @@ impl Panel {
                         .width(ui.available_width())
                         .truncate()
                         .selected_text(d.input.label())
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_value(
-                                    &mut d.input,
-                                    Input::System,
-                                    Input::System.label(),
-                                )
-                                .changed()
-                            {
-                                d.method = Method::Intensity;
-                            }
-                            if ui
-                                .selectable_value(&mut d.input, Input::Lfo, "LFO")
-                                .changed()
-                            {
-                                d.method = Method::Lfo;
-                            }
-                            for input in Input::ALL.into_iter().skip(2) {
-                                ui.add_enabled(false, egui::Button::new(input.label()));
-                            }
-                        });
+                        .show_ui(ui, |ui| input_options(ui, d));
                 });
-                let previous = d.method;
-                combo(
-                    ui,
-                    "signal-method",
-                    "Detector",
-                    &mut d.method,
-                    &Method::ALL,
-                    Method::label,
-                );
-                if d.method != previous {
-                    d.input = if d.method == Method::Lfo {
-                        Input::Lfo
-                    } else {
-                        Input::System
-                    };
+                if d.input == Input::Midi {
+                    let mut learn = self
+                        .midi_learning
+                        .filter(|(channel, _)| *channel == id)
+                        .map(|(_, serial)| serial);
+                    crate::midi::ui::binding_editor(
+                        ui,
+                        &mut d.midi,
+                        &self.midi_snapshot,
+                        &mut learn,
+                    );
+                    self.midi_learning = learn.map(|serial| (id, serial));
+                } else {
+                    let previous = d.method;
+                    let methods: Vec<_> = Method::ALL
+                        .into_iter()
+                        .filter(|m| *m != Method::Midi)
+                        .collect();
+                    combo(
+                        ui,
+                        "signal-method",
+                        "Detector",
+                        &mut d.method,
+                        &methods,
+                        Method::label,
+                    );
+                    if d.method != previous {
+                        d.input = if d.method == Method::Lfo {
+                            Input::Lfo
+                        } else {
+                            Input::System
+                        };
+                    }
+                    ui.small(d.method.description());
                 }
-                ui.small(d.method.description());
                 property_row(ui, "Output", |ui| {
                     ui.label(match d.kind() {
                         OutputKind::Unipolar => "0 to 1",
@@ -923,7 +957,7 @@ fn normalization_editor(
             let (rect, _) = ui
                 .allocate_exact_size(egui::vec2(ui.available_width(), 52.0), egui::Sense::hover());
             let plot = rect.shrink2(egui::vec2(6.0, 5.0));
-            let signed = d.input == Input::Lfo && d.lfo.bipolar || d.method == Method::Balance;
+            let signed = d.kind() == OutputKind::Bipolar;
             let domain_low = if signed { -1.0 } else { 0.0 };
             let x = |v: f32| {
                 plot.left() + plot.width() * ((v - domain_low) / (1.0 - domain_low)).clamp(0.0, 1.0)
@@ -1207,6 +1241,7 @@ fn channel_strip(
     sample: &Sample,
     selected: bool,
     history: Option<&std::collections::VecDeque<f32>>,
+    midi: Option<(&crate::midi::Snapshot, Option<&midi_preview::History>, f64)>,
 ) -> Option<StripAction> {
     let color = channel_color(d);
     workspace_ui::strip_surface(ui, rect, color, selected);
@@ -1276,46 +1311,35 @@ fn channel_strip(
     egui::ComboBox::from_id_salt("strip-input")
         .width(142.0)
         .selected_text(d.input.label())
-        .show_ui(&mut controls, |ui| {
-            if ui
-                .selectable_value(&mut d.input, Input::System, Input::System.label())
-                .changed()
-            {
-                d.method = Method::Intensity;
-            }
-            if ui
-                .selectable_value(&mut d.input, Input::Lfo, "LFO")
-                .changed()
-            {
-                d.method = Method::Lfo;
-            }
-            for input in Input::ALL.into_iter().skip(2) {
-                ui.add_enabled(false, egui::Button::new(input.label()));
-            }
-        })
+        .show_ui(&mut controls, |ui| input_options(ui, d))
         .response
         .help_text(crate::help::control_description("Input"));
-    controls.small("Detector");
-    egui::ComboBox::from_id_salt("strip-method")
-        .width(142.0)
-        .selected_text(d.method.label())
-        .show_ui(&mut controls, |ui| {
-            for method in Method::ALL {
-                if ui
-                    .selectable_value(&mut d.method, method, method.label())
-                    .help_text(method.description())
-                    .changed()
-                {
-                    d.input = if method == Method::Lfo {
-                        Input::Lfo
-                    } else {
-                        Input::System
-                    };
+    if d.input == Input::Midi {
+        controls.small("Message");
+        crate::midi::ui::message_picker(&mut controls, &mut d.midi.message);
+    } else {
+        controls.small("Detector");
+        egui::ComboBox::from_id_salt("strip-method")
+            .width(142.0)
+            .selected_text(d.method.label())
+            .show_ui(&mut controls, |ui| {
+                for method in Method::ALL.into_iter().filter(|m| *m != Method::Midi) {
+                    if ui
+                        .selectable_value(&mut d.method, method, method.label())
+                        .help_text(method.description())
+                        .changed()
+                    {
+                        d.input = if method == Method::Lfo {
+                            Input::Lfo
+                        } else {
+                            Input::System
+                        };
+                    }
                 }
-            }
-        })
-        .response
-        .help_text(d.method.description());
+            })
+            .response
+            .help_text(d.method.description());
+    }
     d.sanitize();
     ui.interact(rect, ui.id().with("signal-strip-help"), egui::Sense::hover())
         .help_fallback(|| format!("{}\n{}\nClick to inspect this channel. Drag its header to reorder; right-click to duplicate, rename, delete or choose a color. The influence knob scales visual modulation, not audio volume. M mutes this source; S solos it alongside any other soloed sources.", d.name, d.method.description()));
@@ -1325,8 +1349,10 @@ fn channel_strip(
         egui::pos2(rect.left() + 8.0, graph_top),
         egui::pos2(rect.right() - 8.0, (bottom - 8.0).max(graph_top + 16.0)),
     );
-    ui.interact(graph, ui.id().with("signal-history-help"), egui::Sense::hover())
+    if d.input != Input::Midi {
+        ui.interact(graph, ui.id().with("signal-history-help"), egui::Sense::hover())
         .help_text("Signal history\nRecent final control output, after response, normalization, influence and smoothing. A flat line means the signal is steady or unavailable; use the channel inspector’s Output tab to expand a narrow range or smooth jitter.");
+    }
     ui.painter().rect_filled(
         graph,
         4.0,
@@ -1340,36 +1366,42 @@ fn channel_strip(
             ui.visuals().extreme_bg_color
         },
     );
-    for i in 1..4 {
-        ui.painter().hline(
-            graph.x_range(),
-            graph.top() + graph.height() * i as f32 / 4.0,
-            egui::Stroke::new(0.5, ui.visuals().weak_text_color().gamma_multiply(0.14)),
-        );
-    }
-    if let Some(history) = history
-        && history.len() > 1
-    {
-        let points: Vec<egui::Pos2> = history
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                egui::pos2(
-                    graph.left() + i as f32 / 95.0 * graph.width(),
-                    if d.kind() == OutputKind::Bipolar {
-                        graph.center().y - v.clamp(-2.0, 2.0) * 0.25 * graph.height()
-                    } else {
-                        graph.bottom() - v.clamp(0.0, 2.0) * 0.5 * graph.height()
-                    },
-                )
-            })
-            .collect();
-        ui.painter().add(egui::Shape::line(
-            points.clone(),
-            egui::Stroke::new(4.0, color.gamma_multiply(0.14)),
-        ));
-        ui.painter()
-            .add(egui::Shape::line(points, egui::Stroke::new(1.7, color)));
+    if d.input == Input::Midi {
+        let empty = crate::midi::Snapshot::default();
+        let (snapshot, history, time) = midi.unwrap_or((&empty, None, 0.0));
+        midi_preview::draw(ui, graph, &d.midi, snapshot, history, time, color);
+    } else {
+        for i in 1..4 {
+            ui.painter().hline(
+                graph.x_range(),
+                graph.top() + graph.height() * i as f32 / 4.0,
+                egui::Stroke::new(0.5, ui.visuals().weak_text_color().gamma_multiply(0.14)),
+            );
+        }
+        if let Some(history) = history
+            && history.len() > 1
+        {
+            let points: Vec<egui::Pos2> = history
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    egui::pos2(
+                        graph.left() + i as f32 / 95.0 * graph.width(),
+                        if d.kind() == OutputKind::Bipolar {
+                            graph.center().y - v.clamp(-2.0, 2.0) * 0.25 * graph.height()
+                        } else {
+                            graph.bottom() - v.clamp(0.0, 2.0) * 0.5 * graph.height()
+                        },
+                    )
+                })
+                .collect();
+            ui.painter().add(egui::Shape::line(
+                points.clone(),
+                egui::Stroke::new(4.0, color.gamma_multiply(0.14)),
+            ));
+            ui.painter()
+                .add(egui::Shape::line(points, egui::Stroke::new(1.7, color)));
+        }
     }
     ui.painter().hline(
         rect.x_range(),
@@ -1515,6 +1547,24 @@ fn channel_strip(
         }
     }
     action
+}
+
+fn input_options(ui: &mut egui::Ui, d: &mut Definition) {
+    for (input, method) in [
+        (Input::System, Method::Intensity),
+        (Input::Lfo, Method::Lfo),
+        (Input::Midi, Method::Midi),
+    ] {
+        if ui
+            .selectable_value(&mut d.input, input, input.label())
+            .changed()
+        {
+            d.method = method;
+        }
+    }
+    for input in Input::ALL.into_iter().skip(3) {
+        ui.add_enabled(false, egui::Button::new(input.label()));
+    }
 }
 
 fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::Color32) {
@@ -2077,7 +2127,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    channel_strip(ui, bounds, 0, d, &Sample::default(), false, None);
+                    channel_strip(ui, bounds, 0, d, &Sample::default(), false, None, None);
                 },
             );
             out.textures_delta.clear();
@@ -2153,6 +2203,7 @@ mod tests {
                         &mut definition,
                         &Sample::default(),
                         true,
+                        None,
                         None,
                     );
                 },

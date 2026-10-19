@@ -9,14 +9,16 @@ pub(super) enum Category {
     #[default]
     Theme,
     Audio,
+    Midi,
     Analysis,
     Help,
 }
 impl Category {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Display,
         Self::Theme,
         Self::Audio,
+        Self::Midi,
         Self::Analysis,
         Self::Help,
     ];
@@ -25,6 +27,7 @@ impl Category {
             Self::Display => "Display & Layout",
             Self::Theme => "Theme & Colors",
             Self::Audio => "Audio",
+            Self::Midi => "MIDI",
             Self::Analysis => "Analysis & Meters",
             Self::Help => "Help & About",
         }
@@ -434,6 +437,11 @@ impl SymphosApp {
                 {
                     section(ui, "Linux capture");
                     ui.label("System output and microphone sources are provided by PipeWire. Choose the output monitor for computer playback.");
+                }
+            }
+            Category::Midi => {
+                if let Some(midi) = &mut self.midi_runtime {
+                    midi.settings(ui);
                 }
             }
             Category::Analysis => {

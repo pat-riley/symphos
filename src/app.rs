@@ -20,6 +20,7 @@ const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
 
 pub struct SymphosApp {
+    midi_runtime: Option<crate::midi::Runtime>,
     signal_runtime: Option<crate::signals::Runtime>,
     signal_ui: crate::signals::ui::Shared,
     project_dialog: crate::project::Dialog,
@@ -76,10 +77,13 @@ impl SymphosApp {
         engine.refresh_sources();
         let dir = workspace::directory();
         let session = Session::load(&dir);
+        let midi_runtime = crate::midi::Runtime::start();
         let signal_runtime = Some(crate::signals::Runtime::start(
             engine.analysis().snapshot.clone(),
+            midi_runtime.snapshot.clone(),
         ));
         let mut app = Self {
+            midi_runtime: Some(midi_runtime),
             signal_runtime,
             signal_ui: Default::default(),
             scene_macros: Default::default(),
@@ -293,6 +297,7 @@ impl SymphosApp {
         if self.signal_runtime.is_some() {
             self.signal_runtime = Some(crate::signals::Runtime::start(
                 self.engine.analysis().snapshot.clone(),
+                self.midi_runtime.as_ref().unwrap().snapshot.clone(),
             ));
         }
         *self
@@ -1883,6 +1888,9 @@ impl eframe::App for SymphosApp {
                     }
                 }
             }
+            if let Some(midi) = &self.midi_runtime {
+                panel.midi_snapshot = midi.snapshot.load_full();
+            }
             if let Some(runtime) = &self.signal_runtime {
                 runtime.bind_audio(self.engine.analysis().snapshot.clone());
                 runtime.publish(&panel.bank);
@@ -1977,6 +1985,7 @@ mod workspace_interaction_tests {
 
     fn app() -> SymphosApp {
         SymphosApp {
+            midi_runtime: None,
             signal_runtime: None,
             signal_ui: Default::default(),
             scene_macros: Default::default(),

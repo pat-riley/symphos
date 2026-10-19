@@ -410,8 +410,11 @@ selector remains in the top bar, and switching retains edits. Use its **+** to
 duplicate the complete setup, or **New empty scene** to start fresh. The selector’s
 **Visual preset library…** keeps existing factory and saved presets accessible.
 File → New Project starts a fresh scene collection; older projects become one
-initial scene. GUI and hardware preferences stay local. MIDI, OSC, Ableton and file
-inputs are marked as planned. See [the Signals guide](docs/signal-sources.md).
+initial scene. GUI and hardware preferences stay local. On macOS, **Settings → MIDI** enables
+hardware and virtual MIDI inputs. MIDI signal channels support Learn, CC, note
+velocity/gates, pitch bend, and aftertouch; DAW tracks can send to **Symphos Input**.
+OSC, direct Ableton integration, and file inputs remain planned.
+See [the Signals guide](docs/signal-sources.md#midi-inputs-macos).
 
 ### 3D Sphere
 
