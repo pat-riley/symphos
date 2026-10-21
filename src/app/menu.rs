@@ -187,7 +187,7 @@ impl SymphosApp {
                 ctx.input_mut(|i| action.append_text_events(&mut i.events));
             }
             CopySettings => {
-                self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings())
+                self.settings_clipboard = Some(self.panes[self.selected_pane].export_settings())
             }
             PasteSettings => self.paste_module_settings(),
             ResetComponent => self.panes[self.selected_pane].reset_settings(),

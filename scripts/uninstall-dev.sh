@@ -11,6 +11,10 @@ targets=(
   "$data_home/metainfo/io.github.riley.Symphos.metainfo.xml"
 )
 
+for notice in THIRD_PARTY_NOTICES.md COPYING LICENSE.txt Apache-2.0.txt CC0-1.0.txt GLAD.txt GLM.txt HLSLParser.txt Khronos.txt projectm-eval.txt stb_image.txt; do
+  targets+=("$data_home/symphos/licenses/$notice")
+done
+
 for target in "${targets[@]}"; do
   if [[ -f "$target" ]]; then
     rm -- "$target"

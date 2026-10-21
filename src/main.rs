@@ -11,6 +11,7 @@ mod icons;
 mod issues;
 mod macros;
 mod midi;
+mod milkdrop;
 mod modulation;
 mod modules;
 mod parameter;

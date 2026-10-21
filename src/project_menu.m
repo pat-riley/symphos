@@ -136,3 +136,18 @@ char *symphos_project_choose(int save, const char *initial) {
     return strdup(panel.URL.path.UTF8String);
 }
 void symphos_project_path_free(char *path) { free(path); }
+
+// MilkDrop asset dialogs are separate from Symphos project file types.
+char *symphos_milk_choose(int save, const char *initial, int folder) {
+    NSSavePanel *panel = save ? [NSSavePanel savePanel] : [NSOpenPanel openPanel];
+    if (!save) {
+        NSOpenPanel *open = (NSOpenPanel *)panel;
+        open.canChooseDirectories = folder != 0;
+        open.canChooseFiles = folder == 0;
+        open.allowsMultipleSelection = NO;
+    }
+    if (!folder) panel.allowedContentTypes = @[[UTType typeWithFilenameExtension:@"milk"] ?: UTTypeData];
+    if (initial && initial[0] && save) panel.nameFieldStringValue = [NSString stringWithUTF8String:initial];
+    if ([panel runModal] != NSModalResponseOK || !panel.URL) return NULL;
+    return strdup(panel.URL.path.UTF8String);
+}

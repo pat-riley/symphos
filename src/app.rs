@@ -733,7 +733,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         .help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.")
                         .clicked()
                     {
-                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
+                        self.settings_clipboard = Some(self.panes[self.selected_pane].export_settings());
                     }
                     let compatible = self.settings_clipboard.as_ref()
                         .is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
@@ -878,7 +878,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Some(Action::Bindings) => self.show_shortcuts = true,
             Some(Action::Settings) => self.settings_window.open = true,
             Some(Action::CopySettings) => {
-                self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings())
+                self.settings_clipboard = Some(self.panes[self.selected_pane].export_settings())
             }
             Some(Action::PasteSettings) => self.paste_module_settings(),
             Some(Action::Pane(index)) if index < self.open_panes().len() => {
@@ -1178,7 +1178,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 }
             }
             Scope::Component => {
-                PresetContent::Component(Box::new(self.panes[self.selected_pane].copy_settings()))
+                PresetContent::Component(Box::new(self.panes[self.selected_pane].export_settings()))
             }
         })
     }

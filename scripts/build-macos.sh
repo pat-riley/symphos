@@ -13,6 +13,9 @@ cargo build --release --locked
 app="$PWD/target/macos/Symphos.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/symphos "$app/Contents/MacOS/symphos"
+mkdir -p "$app/Contents/Resources/Licenses"
+cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/"
+cp vendor/projectm/licenses/*.txt vendor/projectm/COPYING vendor/projectm/LICENSE.txt "$app/Contents/Resources/Licenses/"
 cp assets/macos/Info.plist "$app/Contents/Info.plist"
 version=$(cargo pkgid --offline | sed 's/.*#//; s/.*@//')
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
