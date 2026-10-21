@@ -19,6 +19,9 @@ pub enum Icon {
     Eye,
     Inspector,
     Plus,
+    Save,
+    GridView,
+    ListView,
     Fullscreen,
     Restore,
     Close,
@@ -56,6 +59,20 @@ pub fn sized_button(
 
 /// A monochrome, borderless toolbar control matching a native sidebar toggle.
 pub fn sidebar_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
+    sidebar_button(ui, Icon::Inspector, open, size, description)
+}
+
+pub fn library_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
+    sidebar_button(ui, Icon::Plus, open, size, description)
+}
+
+fn sidebar_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    open: bool,
+    size: f32,
+    description: &str,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click());
     if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
@@ -67,7 +84,7 @@ pub fn sidebar_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &st
         .fg_stroke
         .color
         .gamma_multiply(if open { 1.0 } else { 0.65 });
-    paint(ui, rect, Icon::Inspector, color);
+    paint(ui, rect, icon, color);
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .help_text(description)
@@ -85,6 +102,35 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         ));
     };
     match icon {
+        Icon::GridView => {
+            for (x, y) in [(3.0, 3.0), (11.0, 3.0), (3.0, 11.0), (11.0, 11.0)] {
+                painter.rect_stroke(
+                    Rect::from_min_size(p(x, y), Vec2::splat(6.0)),
+                    1.0,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        Icon::ListView => {
+            for y in [4.0, 10.0, 16.0] {
+                painter.circle_filled(p(3.0, y), 1.0, color);
+                line(&[(7.0, y), (18.0, y)]);
+            }
+        }
+        Icon::Save => {
+            line(&[
+                (3.0, 2.0),
+                (14.0, 2.0),
+                (18.0, 6.0),
+                (18.0, 18.0),
+                (2.0, 18.0),
+                (2.0, 2.0),
+                (3.0, 2.0),
+            ]);
+            line(&[(6.0, 2.0), (6.0, 8.0), (13.0, 8.0), (13.0, 2.0)]);
+            line(&[(6.0, 18.0), (6.0, 12.0), (14.0, 12.0), (14.0, 18.0)]);
+        }
         Icon::Palette => {
             painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
             for (x, y) in [(6.0, 5.0), (11.0, 4.0), (15.0, 8.0), (6.0, 11.0)] {

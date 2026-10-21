@@ -15,6 +15,7 @@ impl SymphosApp {
             || self.show_inspector
             || self.manager.modal_open()
             || self.scene_browser.dialog_open()
+            || self.scene_library.busy()
             || ctx.memory(|m| m.top_modal_layer().is_some())
     }
     pub(super) fn menu_item_state(&self, ctx: &egui::Context, action: Action) -> ItemState {
@@ -239,7 +240,7 @@ impl SymphosApp {
                 self.scenes
                     .cycle(if action == PreviousScene { -1 } else { 1 }),
             )),
-            Presets => self.manager.open_presets(Scope::View),
+            Presets => self.request_scene_preview(crate::scenes::library::CapturePurpose::Open),
             Add(kind) => self.add_component(kind, self.selected_pane, Edge::Right),
             Signal(method) => {
                 let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());

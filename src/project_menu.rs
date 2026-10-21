@@ -194,7 +194,7 @@ pub fn menus() -> &'static [Entry] {
                     item(Save, "Save Project", "s", CMD),
                     item(SaveAs, "Save Project As…", "s", CMD | SHIFT),
                     Sep,
-                    plain(Presets, "Visual Preset Library…"),
+                    plain(Presets, "Scene Library…"),
                     Sep,
                     item(CloseComponent, "Close Selected Component", "w", CMD | SHIFT),
                 ],
