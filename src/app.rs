@@ -12,6 +12,7 @@ use crate::icons::{self, Icon};
 use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::{AppTheme, AppearancePreferences};
 
+mod menu;
 mod settings;
 use crate::workspace::{self, Axis, Edge, MAX_PANES, PresetContent, Session, Storage, Tile};
 use crate::workspace_ui::{self, DragPayload, Manager, Scope};
@@ -837,15 +838,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
                 Some(Action::Help) => self.help_open = !self.help_open,
                 Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
-                Some(Action::Performance) => {
-                    let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                    if panel.show_signals {
-                        panel.show_signals = false;
-                        self.scene_macros.open = true;
-                    } else {
-                        self.scene_macros.open = !self.scene_macros.open;
-                    }
-                }
+                Some(Action::Performance) => self.toggle_macros(),
                 Some(Action::Bindings) => self.show_shortcuts = true,
                 Some(Action::Settings) => self.settings_window.open = true,
                 _ => {}
@@ -876,24 +869,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     }
                 }
             }
-            Some(Action::Performance) => {
-                if self.panel_fullscreen.is_some() {
-                    self.fullscreen_macros = !self.fullscreen_macros;
-                    if self.fullscreen_macros {
-                        self.scene_macros.open = true;
-                    }
-                    self.fullscreen_hint_started = None;
-                } else {
-                    let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                    if panel.show_signals {
-                        panel.show_signals = false;
-                        self.scene_macros.open = true;
-                    } else {
-                        self.scene_macros.open = !self.scene_macros.open;
-                    }
-                    self.inspecting_signal = false;
-                }
-            }
+            Some(Action::Performance) => self.toggle_macros(),
             Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
             Some(Action::Inspect) => self.inspect_panel(self.selected_pane),
             Some(Action::PanelFullscreen) => self.toggle_panel_fullscreen(self.selected_pane, now),
@@ -1447,26 +1423,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Pos2::new(navigation.center().x, header.center().y),
             Vec2::new((2.0 * half_width).min(500.0), header.height()),
         );
-        #[cfg(target_os = "macos")]
-        let mut file_action: Option<crate::project_menu::Action> = None;
         #[cfg(not(target_os = "macos"))]
-        let mut file_action: Option<crate::project_menu::Action> = None;
+        let mut menu_action = None;
         let mut tabs = workspace_ui::navigation_region(ui, left, "main-navigation", &self.theme);
         tabs.horizontal_centered(|ui| {
             #[cfg(not(target_os = "macos"))]
-            ui.menu_button("File", |ui| {
-                for (label, action) in [
-                    ("New Project", crate::project_menu::Action::New),
-                    ("Open Project…", crate::project_menu::Action::Open),
-                    ("Save Project", crate::project_menu::Action::Save),
-                    ("Save Project As…", crate::project_menu::Action::SaveAs),
-                    ("Settings…", crate::project_menu::Action::Settings),
-                ] {
-                    if ui.button(label).clicked() {
-                        file_action = Some(action);
-                        ui.close();
-                    }
-                }
+            ui.menu_button("Menu", |ui| {
+                let ctx = ui.ctx().clone();
+                menu_action =
+                    crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
             });
             let mut add = None;
             let add_button = workspace_ui::add_component_button(ui, &self.theme);
@@ -1503,8 +1468,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.inspecting_macro = None;
             }
         });
-        if let Some(action) = file_action.take() {
-            self.project_action(ui.ctx(), action);
+        #[cfg(not(target_os = "macos"))]
+        if let Some(action) = menu_action {
+            self.menu_action(ui.ctx(), action);
         }
         let signals_open = self
             .signal_ui
@@ -1811,6 +1777,16 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 }
 
 impl eframe::App for SymphosApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        while let Some(action) = crate::project_menu::take() {
+            if !self.menu_item_state(ctx, action).enabled {
+                continue;
+            }
+            if !action.append_text_events(&mut input.events) {
+                self.menu_action(ctx, action);
+            }
+        }
+    }
     fn on_exit(&mut self) {
         if let Some(ctx) = self.context.clone() {
             let state = self.workspace(&ctx);
@@ -1820,31 +1796,6 @@ impl eframe::App for SymphosApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.context = Some(ui.ctx().clone());
         crate::project_menu::install();
-        if let Some(action) = crate::project_menu::take() {
-            self.project_action(ui.ctx(), action);
-        }
-        #[cfg(not(target_os = "macos"))]
-        if !ui.ctx().egui_wants_keyboard_input() {
-            let action = ui.ctx().input_mut(|i| {
-                if i.consume_key(
-                    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-                    egui::Key::S,
-                ) {
-                    Some(crate::project_menu::Action::SaveAs)
-                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::N) {
-                    Some(crate::project_menu::Action::New)
-                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
-                    Some(crate::project_menu::Action::Open)
-                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
-                    Some(crate::project_menu::Action::Save)
-                } else {
-                    None
-                }
-            });
-            if let Some(action) = action {
-                self.project_action(ui.ctx(), action);
-            }
-        }
         #[cfg(feature = "development")]
         if let Some(dev) = &mut self.development
             && let Some((theme, scale)) = dev.poll(ui.ctx())
@@ -1927,6 +1878,19 @@ impl eframe::App for SymphosApp {
             )
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::new("performance-analysis"), snapshot.clone()));
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Compute availability outside input_mut to avoid re-locking egui input.
+            let available: std::collections::BTreeSet<_> = crate::project_menu::commands()
+                .filter(|c| self.menu_item_state(ui.ctx(), c.action).enabled)
+                .map(|c| c.action.code())
+                .collect();
+            if let Some(action) =
+                crate::project_menu::take_shortcut(ui.ctx(), |a| available.contains(&a.code()))
+            {
+                self.menu_action(ui.ctx(), action);
+            }
+        }
         self.handle_shortcut(ui.ctx(), &snapshot, now);
         let rect = ui.available_rect_before_wrap();
         ui.painter().rect_filled(rect, 0.0, self.theme.background);
@@ -1966,6 +1930,7 @@ impl eframe::App for SymphosApp {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
         }
+        crate::project_menu::update(|action| self.menu_item_state(ui.ctx(), action));
         // Display cadence is a local performance preference, independent of FFT cadence.
         let budget = Duration::from_secs_f32(1.0 / self.render_fps.max(1) as f32);
         // egui subtracts predicted_dt internally. Compensate so a 60 FPS
@@ -2885,6 +2850,116 @@ mod workspace_interaction_tests {
         }
         assert!(app.tiles.is_none());
         assert!(app.workspace(&ctx).validate());
+    }
+    #[test]
+    fn menu_docks_have_checked_states_and_preserve_scene_and_component_selection() {
+        use crate::project_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let ids = app.open_panes();
+        let selected = app.selected_pane;
+        app.scene_macros.open = false;
+        app.menu_action(&ctx, A::Signals);
+        assert!(app.menu_item_state(&ctx, A::Signals).checked);
+        assert!(!app.menu_item_state(&ctx, A::Macros).checked);
+        app.menu_action(&ctx, A::Macros);
+        assert!(app.scene_macros.open);
+        assert!(!app.signal_ui.lock().unwrap().show_signals);
+        assert!(app.menu_item_state(&ctx, A::Macros).checked);
+        app.menu_action(&ctx, A::Components);
+        app.menu_action(&ctx, A::Inspector);
+        app.menu_action(&ctx, A::Info);
+        assert!(app.menu_item_state(&ctx, A::Components).checked);
+        assert!(app.menu_item_state(&ctx, A::Inspector).checked);
+        assert!(app.menu_item_state(&ctx, A::Info).checked);
+        assert_eq!(app.open_panes(), ids);
+        assert_eq!(app.selected_pane, selected);
+        app.menu_action(&ctx, A::PanelFullscreen);
+        assert!(app.menu_item_state(&ctx, A::PanelFullscreen).checked);
+        assert!(!app.menu_item_state(&ctx, A::Signals).enabled);
+        app.menu_action(&ctx, A::Signals); // stale commands must be ignored
+        assert!(!app.signal_ui.lock().unwrap().show_signals);
+        app.menu_action(&ctx, A::PanelFullscreen);
+        assert!(app.panel_fullscreen.is_none());
+        assert_eq!(app.open_panes(), ids);
+    }
+
+    #[test]
+    fn menu_creation_and_scene_commands_keep_signals_explicit_and_use_existing_dialogs() {
+        use crate::project_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.scenes.store(app.capture_scene());
+        assert!(!app.menu_item_state(&ctx, A::DeleteScene).enabled);
+        let count = app.open_panes().len();
+        app.menu_action(&ctx, A::Add(ModuleKind::Orbital));
+        assert_eq!(app.open_panes().len(), count + 1);
+        assert_eq!(app.panes[app.selected_pane].kind, ModuleKind::Orbital);
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        app.menu_action(&ctx, A::Signal(crate::signals::Method::Midi));
+        assert!(app.inspecting_signal && app.sidebar_open);
+        assert_eq!(
+            app.signal_ui.lock().unwrap().bank.channels[0].input,
+            crate::signals::Input::Midi
+        );
+        let source_id = app.signal_ui.lock().unwrap().selected.unwrap();
+        app.menu_action(&ctx, A::DuplicateScene);
+        assert_eq!(app.scenes.scenes.len(), 2);
+        assert_eq!(app.signal_ui.lock().unwrap().selected, Some(source_id));
+        let duplicate = app.scenes.active_scene;
+        app.menu_action(&ctx, A::PreviousScene);
+        assert_ne!(app.scenes.active_scene, duplicate);
+        app.menu_action(&ctx, A::NextScene);
+        assert_eq!(app.scenes.active_scene, duplicate);
+        app.menu_action(&ctx, A::DeleteScene);
+        assert!(app.scene_browser.dialog_open());
+        assert_eq!(
+            app.scenes.scenes.len(),
+            2,
+            "deletion still requires the existing dialog"
+        );
+        assert!(!app.menu_item_state(&ctx, A::DuplicateScene).enabled);
+    }
+
+    #[test]
+    fn menu_availability_respects_settings_text_entry_and_component_clipboard_type() {
+        use crate::project_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        assert!(!app.menu_item_state(&ctx, A::PasteSettings).enabled);
+        app.menu_action(&ctx, A::CopySettings);
+        assert!(app.menu_item_state(&ctx, A::PasteSettings).enabled);
+        app.selected_pane = 1;
+        assert!(!app.menu_item_state(&ctx, A::PasteSettings).enabled);
+        app.menu_action(&ctx, A::MidiSettings);
+        assert!(app.settings_window.open);
+        assert_eq!(app.settings_window.category, settings::Category::Midi);
+        assert!(!app.menu_item_state(&ctx, A::NewScene).enabled);
+        let count = app.open_panes().len();
+        app.menu_action(&ctx, A::Add(ModuleKind::Sphere));
+        assert_eq!(app.open_panes().len(), count);
+        app.menu_action(&ctx, A::AudioSettings);
+        assert_eq!(app.settings_window.category, settings::Category::Audio);
+        app.settings_window.open = false;
+        let mut text = String::from("test");
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+        });
+        output.textures_delta.clear();
+        assert!(app.menu_item_state(&ctx, A::Copy).enabled);
+        assert!(!app.menu_item_state(&ctx, A::CloseComponent).enabled);
+        app.menu_action(&ctx, A::CloseComponent);
+        assert_eq!(app.open_panes().len(), count);
+        ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap()));
+        for id in app.open_panes() {
+            app.close_pane(id);
+        }
+        assert!(!app.menu_item_state(&ctx, A::CopySettings).enabled);
+        assert!(!app.menu_item_state(&ctx, A::PanelFullscreen).enabled);
+        assert!(
+            app.menu_item_state(&ctx, A::Add(ModuleKind::Sphere))
+                .enabled
+        );
     }
 }
 

@@ -36,7 +36,7 @@ scenes for quick recall of signals and visuals together.
   inspector’s **Component presets…** menu.
 - [Application Settings](docs/application-settings.md): movable, categorized window
   with eight GUI theme choices, including Resolve- and Ableton-inspired skins,
-  and saved interface zoom. Open with the top gear or Ctrl+,
+  and saved interface zoom. Open from the application menu or Ctrl+,
   (Cmd+, on Mac); drag its title bar to move, and press Escape to close.
 - **Settings → Help & About → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
@@ -94,6 +94,33 @@ scenes for quick recall of signals and visuals together.
 - Raw FFT-bin inspection, detailed diagnostics, and fullscreen mode
 - GPU rendering with `wgpu` on native Wayland
 - Colors derived from the active Omarchy theme
+
+## Menus and common commands
+
+On macOS, the menu bar exposes **File, Edit, Create, Scene, Playback, View,
+Window, and Help**. Other desktops expose the same app commands under **Menu**.
+
+- **Symphos → Settings…** opens preferences (Cmd+,). The **Preferences** submenu
+  jumps directly to Audio, MIDI, Analysis & Meters, Display & Layout, or Theme & Colors.
+- **File** creates, opens, and saves complete projects, opens the visual preset
+  library, and closes the selected component. **Edit** provides text clipboard
+  commands, compatible component settings copy/paste, and component reset.
+- **Create** adds any component or detector/LFO/MIDI signal channel, creates an
+  empty scene (Cmd+Shift+N), or duplicates the current scene (Cmd+Shift+D).
+  Creating components never creates signal channels automatically.
+- **Scene** navigates previous/next scenes (Cmd+Option+Left/Right), renames the
+  current scene, or opens the existing delete confirmation.
+- **Playback** pauses one/all components, clears captured history, and resets
+  peak/clip hold. **View** toggles the component browser (Cmd+Shift+A), inspector,
+  Macros (Cmd+B), Signals (Cmd+Shift+B), and Info View; balances pane sizes;
+  controls fullscreen; and changes interface zoom (Cmd+= / Cmd+- / Cmd+0).
+- **Window** uses the native Minimize, Zoom, and Bring All to Front commands.
+  **Help** opens the shortcut reference, FFT diagnostics, issue log, and app information.
+
+Checkmarks follow the live workspace. Unavailable actions are disabled, including
+incompatible component paste and workspace changes while editing or in a modal.
+Shortcuts above use Ctrl on other desktops (Alt in place of Option).
+Device and interface preferences remain local; scene edits are saved in projects.
 
 ## Using the dashboard
 

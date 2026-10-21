@@ -138,6 +138,20 @@ pub struct Browser {
     delete: Option<u64>,
 }
 impl Browser {
+    pub fn rename_current(&mut self, book: &Book) {
+        if let Some(scene) = book.current() {
+            self.rename = Some((scene.id, scene.name.clone()));
+        }
+    }
+    pub fn delete_current(&mut self, book: &Book) {
+        if book.scenes.len() > 1 {
+            self.delete = Some(book.active_scene);
+        }
+    }
+    pub fn dialog_open(&self) -> bool {
+        self.rename.is_some() || self.delete.is_some()
+    }
+
     pub fn toolbar(&mut self, ui: &mut egui::Ui, book: &Book) -> Option<Action> {
         use crate::workspace_ui::NAV_CONTROL_HEIGHT as H;
         let mut action = None;

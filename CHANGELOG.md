@@ -7,6 +7,12 @@ All notable changes to Symphos will be documented here. The project follows
 
 ### Added
 
+- Expand the application menu with Edit, Create, Scene, Playback, View, Window,
+  and Help; expose component/source creation, scene management, playback,
+  dock visibility, zoom, diagnostics, and direct settings categories. Share a
+  command catalog with the shortcut reference and non-macOS menu; reflect live
+  checkmarks, selection compatibility, modal state, and native text editing.
+
 - Add Orbital, a native GPU orbital/flocking visualizer with configurable particles,
   attractor orbs, surface avoidance fields, world-space paths, arrow glyphs,
   XYZ camera guides, lensing cores, coronas and transient flares. Expose 111
