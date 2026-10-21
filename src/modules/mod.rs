@@ -21,6 +21,7 @@ macro_rules! module_settings {
 mod camera_gizmo;
 mod flux;
 mod frequency;
+mod milkdrop;
 mod orbital;
 mod oscilloscope;
 pub(crate) mod performance;
@@ -61,6 +62,7 @@ use crate::help::HoverHelp;
 use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 use flux::Flux;
+use milkdrop::Milkdrop;
 use orbital::Orbital;
 use oscilloscope::Oscilloscope;
 use resonance::Resonance;
@@ -96,10 +98,11 @@ pub enum ModuleKind {
     Rings,
     Resonance,
     Orbital,
+    Milkdrop,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
@@ -114,10 +117,12 @@ impl ModuleKind {
         Self::Rings,
         Self::Resonance,
         Self::Orbital,
+        Self::Milkdrop,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Milkdrop => "MilkDrop",
             Self::Orbital => "Orbital",
             Self::Resonance => "3D Resonance",
             Self::Rings => "3D Rings",
@@ -137,6 +142,7 @@ impl ModuleKind {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Milkdrop => Icon::Flux,
             Self::Orbital => Icon::Flux,
             Self::Resonance => Icon::Resonance,
             Self::Rings => Icon::Rings,
@@ -156,6 +162,7 @@ impl ModuleKind {
 
     pub fn subtitle(self) -> &'static str {
         match self {
+            Self::Milkdrop => "MilkDrop-compatible presets",
             Self::Orbital => "GPU orbital flocking",
             Self::Resonance => "Layered petal wavefronts",
             Self::Rings => "Orbital waveform rings",
@@ -175,6 +182,9 @@ impl ModuleKind {
 
     pub fn description(self) -> &'static str {
         match self {
+            Self::Milkdrop => {
+                "Import, edit and perform MilkDrop presets with native audio response, feedback, waves, shapes and shaders. Drag inspector adjustments to scene macros. Powered by projectM."
+            }
             Self::Orbital => {
                 "GPU particles flock around moving attractor orbs. Shape orbital forces, collective motion, lighting, bloom and trails. Drag to rotate freely; Shift/right-drag pans. Parameters can be assigned to scene macros and driven by Signals."
             }
@@ -232,6 +242,7 @@ pub struct ModulePane {
     rings: Rings,
     resonance: Resonance,
     orbital: Orbital,
+    milkdrop: Milkdrop,
     spectrum: Spectrum,
     waveform: Waveform,
     spectrogram: Spectrogram,
@@ -240,7 +251,7 @@ pub struct ModulePane {
     veroni: Veroni,
     strata: Strata,
     flux: Flux,
-    active_sections: [usize; 14],
+    active_sections: [usize; 15],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -255,6 +266,7 @@ pub enum ModuleSettings {
     Rings(rings::RingsSettings),
     Resonance(resonance::ResonanceSettings),
     Orbital(Box<orbital::OrbitalSettings>),
+    Milkdrop(Box<milkdrop::MilkdropSettings>),
     Spectrum(spectrum::SpectrumSettings),
     Waveform(waveform::WaveformSettings),
     Spectrogram(spectrogram::SpectrogramSettings),
@@ -278,6 +290,7 @@ impl ModuleSettings {
     pub fn kind(&self) -> ModuleKind {
         match self {
             Self::Orbital(_) => ModuleKind::Orbital,
+            Self::Milkdrop(_) => ModuleKind::Milkdrop,
             Self::Resonance(_) => ModuleKind::Resonance,
             Self::Rings(_) => ModuleKind::Rings,
             Self::Cylinder(_) => ModuleKind::Cylinder,
@@ -303,9 +316,11 @@ pub struct PaneState {
     pub instance_id: String,
     pub kind: ModuleKind,
     #[serde(deserialize_with = "decode_sections")]
-    pub sections: [usize; 14],
+    pub sections: [usize; 15],
     #[serde(default)]
     pub orbital_inspector_version: u8,
+    #[serde(default)]
+    pub milkdrop_presets: Vec<std::sync::Arc<crate::milkdrop::preset::Preset>>,
     #[serde(deserialize_with = "decode_module_settings")]
     pub settings: Vec<ModuleSettings>,
 }
@@ -314,14 +329,14 @@ pub struct PaneState {
 // Only complete known legacy sets are upgraded; malformed sets still fail validation.
 fn decode_sections<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<[usize; 14], D::Error> {
+) -> Result<[usize; 15], D::Error> {
     let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
-    if !(6..=14).contains(&values.len()) {
+    if !(6..=15).contains(&values.len()) {
         return Err(serde::de::Error::custom(
-            "expected six to fourteen module sections",
+            "expected six to fifteen module sections",
         ));
     }
-    let mut sections = [0; 14];
+    let mut sections = [0; 15];
     sections[..values.len()].copy_from_slice(&values);
     Ok(sections)
 }
@@ -330,7 +345,7 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<ModuleSettings>, D::Error> {
     let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
     let legacy_len = settings.len();
-    if (6..=13).contains(&legacy_len)
+    if (6..=14).contains(&legacy_len)
         && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
             settings
                 .iter()
@@ -370,9 +385,12 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
                 Resonance::default().settings_snapshot(),
             ));
         }
-        settings.push(ModuleSettings::Orbital(Box::new(
-            Orbital::default().settings_snapshot(),
-        )));
+        if legacy_len <= 13 {
+            settings.push(ModuleSettings::Orbital(Box::new(
+                Orbital::default().settings_snapshot(),
+            )));
+        }
+        settings.push(ModuleSettings::Milkdrop(Box::default()));
     }
     Ok(settings)
 }
@@ -402,6 +420,7 @@ pub enum SettingsSection {
     Particles,
     Orbs,
     Rendering,
+    Presets,
 }
 
 impl SettingsSection {
@@ -424,6 +443,7 @@ impl SettingsSection {
             Self::Particles => "Particles",
             Self::Orbs => "Orbs",
             Self::Rendering => "Rendering",
+            Self::Presets => "Presets",
         }
     }
 }
@@ -445,6 +465,7 @@ impl SettingsSection {
             Self::Particles => Icon::Flux,
             Self::Orbs => Icon::Sphere,
             Self::Rendering => Icon::Palette,
+            Self::Presets => Icon::Surface,
         }
     }
 }
@@ -475,11 +496,21 @@ impl ModulePane {
         }
     }
 
+    pub fn export_settings(&self) -> ModuleSettings {
+        if self.kind == ModuleKind::Milkdrop {
+            ModuleSettings::Milkdrop(Box::new(self.milkdrop.export_settings()))
+        } else {
+            self.copy_settings()
+        }
+    }
     pub fn copy_settings(&self) -> ModuleSettings {
         match self.kind {
             ModuleKind::Veroni => ModuleSettings::Veroni(self.veroni.settings_snapshot()),
             ModuleKind::Strata => ModuleSettings::Strata(self.strata.settings_snapshot()),
             ModuleKind::Flux => ModuleSettings::Flux(self.flux.settings_snapshot()),
+            ModuleKind::Milkdrop => {
+                ModuleSettings::Milkdrop(Box::new(self.milkdrop.settings_snapshot()))
+            }
             ModuleKind::Orbital => {
                 ModuleSettings::Orbital(Box::new(self.orbital.settings_snapshot()))
             }
@@ -511,6 +542,7 @@ impl ModulePane {
             ModuleSettings::Strata(settings) => self.strata.apply_settings(settings),
             ModuleSettings::Flux(settings) => self.flux.apply_settings(settings),
             ModuleSettings::Orbital(settings) => self.orbital.apply_settings(settings),
+            ModuleSettings::Milkdrop(settings) => self.milkdrop.apply_settings(settings),
             ModuleSettings::Resonance(settings) => self.resonance.apply_settings(settings),
             ModuleSettings::Rings(settings) => self.rings.apply_settings(settings),
             ModuleSettings::Cylinder(settings) => self.cylinder.apply_settings(settings),
@@ -532,6 +564,7 @@ impl ModulePane {
             kind: self.kind,
             sections: self.active_sections,
             orbital_inspector_version: 1,
+            milkdrop_presets: self.milkdrop.presets.clone(),
             settings: vec![
                 ModuleSettings::Waterfall(self.waterfall.settings_snapshot()),
                 ModuleSettings::Spectrum(self.spectrum.settings_snapshot()),
@@ -547,12 +580,21 @@ impl ModulePane {
                 ModuleSettings::Rings(self.rings.settings_snapshot()),
                 ModuleSettings::Resonance(self.resonance.settings_snapshot()),
                 ModuleSettings::Orbital(Box::new(self.orbital.settings_snapshot())),
+                ModuleSettings::Milkdrop(Box::new(self.milkdrop.settings_snapshot())),
             ],
         }
     }
 
     pub fn restore(&mut self, state: &PaneState) {
         self.instance_id = state.instance_id.clone();
+        self.milkdrop.presets = if state.milkdrop_presets.is_empty() {
+            crate::milkdrop::preset::builtins()
+                .into_iter()
+                .map(std::sync::Arc::new)
+                .collect()
+        } else {
+            state.milkdrop_presets.clone()
+        };
         self.macros = state.macros.clone().unwrap_or_default();
         for settings in &state.settings {
             self.kind = settings.kind();
@@ -584,6 +626,7 @@ impl ModulePane {
             rings: Rings::default(),
             resonance: Resonance::default(),
             orbital: Orbital::default(),
+            milkdrop: Milkdrop::default(),
             spectrum: Spectrum::default(),
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
@@ -592,7 +635,7 @@ impl ModulePane {
             veroni: Veroni::default(),
             strata: Strata::default(),
             flux: Flux::default(),
-            active_sections: [0; 14],
+            active_sections: [0; 15],
             inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
@@ -631,6 +674,7 @@ impl ModulePane {
         self.strata.clear();
         self.flux.clear();
         self.orbital.clear();
+        self.milkdrop.clear();
     }
 
     pub fn is_frozen(&self) -> bool {
@@ -656,6 +700,7 @@ impl ModulePane {
     pub(crate) fn reset_settings(&mut self) {
         match self.kind {
             ModuleKind::Orbital => self.orbital.reset_settings(),
+            ModuleKind::Milkdrop => self.milkdrop.reset_settings(),
             ModuleKind::Resonance => self.resonance.reset_settings(),
             ModuleKind::Rings => self.rings.reset_settings(),
             ModuleKind::Cylinder => self.cylinder.reset_settings(),
@@ -902,6 +947,7 @@ impl ModulePane {
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         match self.kind {
             ModuleKind::Orbital => self.orbital.controls(ui),
+            ModuleKind::Milkdrop => self.milkdrop.controls(ui),
             ModuleKind::Resonance => self.resonance.controls(ui),
             ModuleKind::Rings => self.rings.controls(ui),
             ModuleKind::Cylinder => self.cylinder.controls(ui),
@@ -953,6 +999,7 @@ impl ModulePane {
                 &[Geometry, Frequency, Response, Appearance, Camera]
             }
             ModuleKind::Orbital => &[Particles, Orbs, Response, Camera, Rendering],
+            ModuleKind::Milkdrop => &[Presets, Flow, Appearance, Response, Rendering],
             ModuleKind::Resonance => &[Geometry, Flow, Frequency, Response, Appearance, Camera],
             ModuleKind::Rings => &[Geometry, Channels, TimeWindow, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
@@ -1032,6 +1079,9 @@ impl ModulePane {
         } else {
             Vec::new()
         };
+        if self.kind != ModuleKind::Milkdrop {
+            self.milkdrop.release_if_inactive();
+        }
         if self.kind != ModuleKind::Orbital {
             self.orbital.release_if_inactive();
         }
@@ -1040,6 +1090,7 @@ impl ModulePane {
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
+            ModuleKind::Milkdrop => self.milkdrop.draw(ui, rect, frame, now, live, frozen),
             ModuleKind::Orbital => self.orbital.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Resonance => self.resonance.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Rings => self.rings.draw(ui, rect, frame, theme, now, live),
@@ -1081,7 +1132,7 @@ impl ModulePane {
                 theme.foreground,
             );
         }
-        if !live && self.kind != ModuleKind::Orbital {
+        if !live && !matches!(self.kind, ModuleKind::Orbital | ModuleKind::Milkdrop) {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,

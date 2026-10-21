@@ -146,7 +146,7 @@ const BINDINGS: &[Binding] = &[
     },
 ];
 
-fn editing_text(ctx: &egui::Context) -> bool {
+pub(crate) fn editing_text(ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|id| {
         egui::text_edit::TextEditState::load(ctx, id).is_some()
             || ctx.data(|data| data.get_temp::<String>(id).is_some())
@@ -188,7 +188,16 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
         ui.label("Application shortcuts are disabled while typing or using a modal/menu. Bindings are currently fixed.");
         egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
             egui::Grid::new("bindings-list").striped(true).spacing([18.0, 8.0]).show(ui, |ui| {
-                for binding in BINDINGS { ui.monospace(platform_label(binding.label)); ui.label(binding.description); ui.end_row(); }
+                for command in crate::project_menu::commands().filter(|c| !c.key.is_empty()) {
+                    ui.monospace(crate::project_menu::shortcut_label(command));
+                    ui.label(command.title.trim_end_matches('…'));
+                    ui.end_row();
+                }
+                // Selection and inspector-focus shortcuts are not menu commands.
+                for binding in BINDINGS.iter().filter(|b| matches!(b.action,
+                    Action::Inspect | Action::Restore | Action::Pane(_))) {
+                    ui.monospace(platform_label(binding.label)); ui.label(binding.description); ui.end_row();
+                }
             });
             ui.separator();
             ui.strong("Parameter editing");

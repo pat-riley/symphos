@@ -33,6 +33,12 @@ install -Dm644 \
   "$project_dir/assets/io.github.riley.Symphos.metainfo.xml" \
   "$data_home/metainfo/io.github.riley.Symphos.metainfo.xml"
 
+# Ship notices with the statically linked renderer and its bundled dependencies.
+license_dir="$data_home/symphos/licenses"
+mkdir -p "$license_dir"
+install -m644 "$project_dir/THIRD_PARTY_NOTICES.md" "$project_dir/vendor/projectm/COPYING" \
+  "$project_dir/vendor/projectm/LICENSE.txt" "$project_dir"/vendor/projectm/licenses/*.txt "$license_dir/"
+
 command -v update-desktop-database >/dev/null && update-desktop-database "$data_home/applications" || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t "$data_home/icons/hicolor" || true
 

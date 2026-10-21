@@ -23,9 +23,9 @@ this is not a port of Magnetosphere or Cinder.
 
 The library is deliberately an internal API, not yet a dynamic plugin SDK.
 Existing scientific/CPU components remain supported without being rewritten.
-A future external renderer can feed a texture through a separate adapter; this
-version does not introduce a C++ ABI, OpenGL interop, or MilkDrop support. Do not
-force an external engine to implement Orbital's simulation or shader structure.
+MilkDrop now feeds a texture through a separate projectM/OpenGL adapter in
+`src/milkdrop/`; see [MilkDrop](milkdrop.md). That adapter does not depend on
+Orbital’s simulation or shader structure. The wgpu library remains Rust-only.
 
 ## Pipeline
 

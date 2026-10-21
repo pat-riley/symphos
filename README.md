@@ -21,9 +21,11 @@ scenes for quick recall of signals and visuals together.
 - Tiled workspace with resizable dividers, draggable pane headers, close-and-fill
   behavior, and a compact component library. The first launch uses the default
   waterfall-on-top view; later launches restore the last workspace.
-- Shared top scene selector with previous/next recall, duplication, renaming,
-  reordering, and deletion. Scenes include both signals and visuals; File → Save
-  Project saves all scenes. Reusable visual presets remain in a separate library.
+- Shared top scene navigation with a full-screen **Library** for project scenes
+  and reusable scene presets. Select, rename, duplicate, delete, search, and drag
+  scenes into performance order. The Save icon captures a named preset with its
+  signals, mappings, visuals, macros, and a thumbnail. File → Save Project keeps
+  the entire scene collection.
 
 - Spectrogram/waterfall history continues while panes are hidden or the app window
   is occluded. Returning views catch up from the latest 30 seconds of independently
@@ -36,7 +38,7 @@ scenes for quick recall of signals and visuals together.
   inspector’s **Component presets…** menu.
 - [Application Settings](docs/application-settings.md): movable, categorized window
   with eight GUI theme choices, including Resolve- and Ableton-inspired skins,
-  and saved interface zoom. Open with the top gear or Ctrl+,
+  and saved interface zoom. Open from the application menu or Ctrl+,
   (Cmd+, on Mac); drag its title bar to move, and press Escape to close.
 - **Settings → Help & About → Keyboard shortcuts** opens the shortcut reference modal (Ctrl+K).
   Space pauses the selected pane; Shift+Space pauses all/resumes all; N toggles
@@ -94,6 +96,33 @@ scenes for quick recall of signals and visuals together.
 - Raw FFT-bin inspection, detailed diagnostics, and fullscreen mode
 - GPU rendering with `wgpu` on native Wayland
 - Colors derived from the active Omarchy theme
+
+## Menus and common commands
+
+On macOS, the menu bar exposes **File, Edit, Create, Scene, Playback, View,
+Window, and Help**. Other desktops expose the same app commands under **Menu**.
+
+- **Symphos → Settings…** opens preferences (Cmd+,). The **Preferences** submenu
+  jumps directly to Audio, MIDI, Analysis & Meters, Display & Layout, or Theme & Colors.
+- **File** creates, opens, and saves complete projects, opens the scene
+  library, and closes the selected component. **Edit** provides text clipboard
+  commands, compatible component settings copy/paste, and component reset.
+- **Create** adds any component or detector/LFO/MIDI signal channel, creates an
+  empty scene (Cmd+Shift+N), or duplicates the current scene (Cmd+Shift+D).
+  Creating components never creates signal channels automatically.
+- **Scene** navigates previous/next scenes (Cmd+Option+Left/Right), renames the
+  current scene, or opens the existing delete confirmation.
+- **Playback** pauses one/all components, clears captured history, and resets
+  peak/clip hold. **View** toggles the component browser (Cmd+Shift+A), inspector,
+  Macros (Cmd+B), Signals (Cmd+Shift+B), and Info View; balances pane sizes;
+  controls fullscreen; and changes interface zoom (Cmd+= / Cmd+- / Cmd+0).
+- **Window** uses the native Minimize, Zoom, and Bring All to Front commands.
+  **Help** opens the shortcut reference, FFT diagnostics, issue log, and app information.
+
+Checkmarks follow the live workspace. Unavailable actions are disabled, including
+incompatible component paste and workspace changes while editing or in a modal.
+Shortcuts above use Ctrl on other desktops (Alt in place of Option).
+Device and interface preferences remain local; scene edits are saved in projects.
 
 ## Using the dashboard
 
@@ -267,8 +296,8 @@ Level bars show RMS with live and retained peak markers. Left, Right, and Mix
 maxima are held independently, clipping latches visibly, and both can be reset
 from Settings → Analysis & Meters or by restarting capture. Mixed levels are measured from the
 summed signal, including phase cancellation. Waveform time
-windows are independent of the FFT capture window. A borderless outline inspector toggle remains at the top right; **Add New** is
-at the top left. Audio source selection is in **Settings → Audio**.
+windows are independent of the FFT capture window. The borderless plus button at the top left toggles the component browser;
+the outline icon at the top right toggles the inspector. Audio source selection is in **Settings → Audio**.
 
 **Symphos → Settings…** (Cmd+, on macOS; File → Settings… on other desktops) opens
 pane-size balancing, fullscreen (F11), and the FFT inspector with
@@ -297,6 +326,9 @@ omarchy pkg add base-devel pipewire libxkbcommon wayland
 Install Rust with your distribution package or the official `rustup` installer.
 
 ## Build and run on Linux
+
+Install Rust, a C++17 compiler, CMake 3.21+, and the PipeWire/EGL development
+headers before building. MilkDrop’s pinned native dependencies are vendored.
 
 ```sh
 git clone https://github.com/pat-riley/symphos.git
@@ -341,7 +373,7 @@ Remove the installation with:
 The initial Mac backend visualizes system playback on macOS 14.2 or newer,
 without a virtual audio driver. Apple Silicon has been tested locally; Intel,
 additional input devices, and public distribution are still pending validation.
-Install Rust 1.95 or newer and Xcode command line tools, then run:
+Install Rust 1.95 or newer, Xcode command line tools, and CMake (`brew install cmake`), then run:
 
 ```sh
 ./scripts/build-macos.sh
@@ -403,12 +435,27 @@ and stereo controls in a resizable bottom dock while visuals remain visible.
 Use **Signals** or **Macros** in the bottom toolbar to switch docks; only one is
 shown at a time. Drag the Signals dock’s top edge to resize it. Clicking a channel
 shows its right inspector; clicking a visual pane returns to component settings.
-**Add New** in the top bar adds an instrument or visualizer. FFT size, analysis
+The top-left plus button opens the component browser. Click an instrument or
+visualizer to add it, or drag one into the workspace. Drag the browser’s right edge
+to resize it; double-click that edge to restore its compact width. The width is
+remembered locally across restarts. FFT size, analysis
 rate and mono/stereo meters live in **Settings → Analysis & Meters**. **File → Save Project** saves signals,
 mappings, layouts and component settings for every scene together. The scene
-selector remains in the top bar, and switching retains edits. Use its **+** to
-duplicate the complete setup, or **New empty scene** to start fresh. The selector’s
-**Visual preset library…** keeps existing factory and saved presets accessible.
+selector remains in the top bar, and switching retains edits. Use **Duplicate** to
+copy a setup, or **New scene** to start fresh. **Library**
+opens a full-screen manager: select cards without changing the playing scene,
+then use **Load scene** or double-click to recall one and close Library. Switch
+between thumbnail grid and compact list views; the choice is remembered locally.
+Right-click an item or use **More** for rename, duplicate, delete and ordering
+commands. New and duplicated cards stay unloaded
+until you choose them. Drag cards (with search cleared), or use Move earlier / later,
+to change order. The toolbar Save icon opens a naming dialog for a reusable scene
+preset. Loading one adds a scene to the project and keeps existing scenes intact.
+Scene presets include all channels, mappings, macros, components, and analysis
+settings; device bindings and GUI preferences stay local. Thumbnails capture the
+active workspace when opening Library or saving; **Refresh preview** updates the
+active scene. Older scenes show a placeholder until captured. The Scene presets
+section also links to the existing visual/component preset collection.
 File → New Project starts a fresh scene collection; older projects become one
 initial scene. GUI and hardware preferences stay local. On macOS, **Settings → MIDI** enables
 hardware and virtual MIDI inputs. MIDI signal channels support Learn, CC, note
@@ -546,5 +593,18 @@ and paths behind an orb while retaining foreground motion. Lens distortion is a
 stylized screen effect, separate from the actual particle forces in **Orbs → Surface field**.
 
 The new [GPU visualizer library](docs/gpu-visualizers.md) is independent of the UI
-and capture engine. It provides the foundation for additional bespoke GPU sketches;
-Cinder and MilkDrop integration are not included in this implementation.
+and capture engine. It provides the foundation for additional bespoke GPU sketches.
+MilkDrop uses the separate compatibility engine below; Cinder integration remains
+outside the current implementation.
+
+### MilkDrop-compatible visualizer
+
+**Component browser → MilkDrop** imports and edits `.milk` presets using a pinned native
+projectM engine. Use inspector adjustments with scene macros and Signals, browse
+favorites, blend between presets, and save preset source/textures with projects.
+See [MilkDrop integration](docs/milkdrop.md) for controls, compatibility limits,
+build dependencies and GPU validation. Builds now require CMake 3.21+ and a C++
+compiler; Linux additionally requires EGL development libraries.
+
+The bundled projectM library has its own LGPL license. See
+[third-party notices](THIRD_PARTY_NOTICES.md), including source/relinking requirements.

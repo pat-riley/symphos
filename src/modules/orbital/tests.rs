@@ -48,7 +48,7 @@ fn thirteen_component_projects_upgrade_without_changing_existing_settings() {
     value["settings"]
         .as_array_mut()
         .unwrap()
-        .retain(|s| s.get("Orbital").is_none());
+        .retain(|s| s.get("Orbital").is_none() && s.get("Milkdrop").is_none());
     value["sections"].as_array_mut().unwrap().truncate(13);
     value["macros"]["banks"]
         .as_array_mut()

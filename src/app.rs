@@ -12,6 +12,8 @@ use crate::icons::{self, Icon};
 use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::{AppTheme, AppearancePreferences};
 
+mod menu;
+mod scene_library;
 mod settings;
 use crate::workspace::{self, Axis, Edge, MAX_PANES, PresetContent, Session, Storage, Tile};
 use crate::workspace_ui::{self, DragPayload, Manager, Scope};
@@ -27,6 +29,7 @@ pub struct SymphosApp {
     scenes: crate::scenes::Book,
     saved_project: Option<Vec<u8>>,
     scene_browser: crate::scenes::Browser,
+    scene_library: crate::scenes::library::Library,
     pending_scene: Option<crate::scenes::Action>,
     engine: AudioEngine,
     #[cfg(feature = "development")]
@@ -63,6 +66,7 @@ pub struct SymphosApp {
     selected_pane: usize,
     sidebar_open: bool,
     sidebar_width: f32,
+    library_width: f32,
     signals_height: f32,
     inspecting_signal: bool,
     inspecting_macro: Option<usize>,
@@ -93,6 +97,7 @@ impl SymphosApp {
             scenes: Default::default(),
             saved_project: None,
             scene_browser: Default::default(),
+            scene_library: Default::default(),
             pending_scene: None,
             engine,
             #[cfg(feature = "development")]
@@ -128,6 +133,7 @@ impl SymphosApp {
             selected_pane: 0,
             sidebar_open: true,
             sidebar_width: DEFAULT_SETTINGS_WIDTH,
+            library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
             inspecting_signal: false,
             inspecting_macro: None,
@@ -168,6 +174,7 @@ impl SymphosApp {
             app.selected_pane = state.selected_pane;
             app.sidebar_open = state.sidebar_open;
             app.sidebar_width = state.sidebar_width;
+            app.library_width = state.library_width;
             app.signals_height = state.signals_height;
             app.help_open = state.help_open;
             app.storage.active = state.active_preset;
@@ -232,6 +239,7 @@ impl SymphosApp {
             focused_pane: None,
             sidebar_open: self.sidebar_open,
             sidebar_width: self.sidebar_width,
+            library_width: self.library_width,
             signals_height: self.signals_height,
             help_open: self.help_open,
             analysis: self
@@ -358,6 +366,14 @@ impl SymphosApp {
                 None
             }
             Action::Delete(id) => self.scenes.remove(id),
+            Action::Library => {
+                self.request_scene_preview(crate::scenes::library::CapturePurpose::Open);
+                None
+            }
+            Action::SavePreset => {
+                self.request_scene_preview(crate::scenes::library::CapturePurpose::Save);
+                None
+            }
             Action::Presets => {
                 self.manager.open_presets(Scope::View);
                 None
@@ -383,6 +399,7 @@ impl SymphosApp {
             selected_pane: 0,
             analysis: Default::default(),
         };
+        self.scene_library.reset_project();
         self.scenes = crate::scenes::Book::new(state.clone());
         self.apply_scene(state);
         self.project_dialog = Default::default();
@@ -513,6 +530,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         match crate::project::Project::open(path) {
             Ok(project) => {
                 self.saved_project = serde_json::to_vec(&project).ok();
+                self.scene_library.reset_project();
                 self.scenes = project.scenes;
                 let state = self
                     .scenes
@@ -732,7 +750,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         .help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.")
                         .clicked()
                     {
-                        self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings());
+                        self.settings_clipboard = Some(self.panes[self.selected_pane].export_settings());
                     }
                     let compatible = self.settings_clipboard.as_ref()
                         .is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
@@ -818,7 +836,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 
     fn handle_shortcut(&mut self, ctx: &egui::Context, frame: &AnalysisFrame, now: Instant) {
         use crate::shortcuts::Action;
-        if self.settings_window.open {
+        if self.scene_library.busy() || self.settings_window.open {
             return; // The modal owns Escape and blocks workspace shortcuts.
         }
         // Always provide an exit even if a hidden inspector or dialog held focus.
@@ -837,15 +855,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 Some(Action::Fullscreen) => self.toggle_fullscreen(ctx),
                 Some(Action::Help) => self.help_open = !self.help_open,
                 Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
-                Some(Action::Performance) => {
-                    let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                    if panel.show_signals {
-                        panel.show_signals = false;
-                        self.scene_macros.open = true;
-                    } else {
-                        self.scene_macros.open = !self.scene_macros.open;
-                    }
-                }
+                Some(Action::Performance) => self.toggle_macros(),
                 Some(Action::Bindings) => self.show_shortcuts = true,
                 Some(Action::Settings) => self.settings_window.open = true,
                 _ => {}
@@ -876,24 +886,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     }
                 }
             }
-            Some(Action::Performance) => {
-                if self.panel_fullscreen.is_some() {
-                    self.fullscreen_macros = !self.fullscreen_macros;
-                    if self.fullscreen_macros {
-                        self.scene_macros.open = true;
-                    }
-                    self.fullscreen_hint_started = None;
-                } else {
-                    let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                    if panel.show_signals {
-                        panel.show_signals = false;
-                        self.scene_macros.open = true;
-                    } else {
-                        self.scene_macros.open = !self.scene_macros.open;
-                    }
-                    self.inspecting_signal = false;
-                }
-            }
+            Some(Action::Performance) => self.toggle_macros(),
             Some(Action::Sidebar) => self.sidebar_open = !self.sidebar_open,
             Some(Action::Inspect) => self.inspect_panel(self.selected_pane),
             Some(Action::PanelFullscreen) => self.toggle_panel_fullscreen(self.selected_pane, now),
@@ -902,7 +895,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Some(Action::Bindings) => self.show_shortcuts = true,
             Some(Action::Settings) => self.settings_window.open = true,
             Some(Action::CopySettings) => {
-                self.settings_clipboard = Some(self.panes[self.selected_pane].copy_settings())
+                self.settings_clipboard = Some(self.panes[self.selected_pane].export_settings())
             }
             Some(Action::PasteSettings) => self.paste_module_settings(),
             Some(Action::Pane(index)) if index < self.open_panes().len() => {
@@ -983,12 +976,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
         child.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
-            let before = self.panes[index].kind;
-            module_kind_picker(ui, &mut self.panes[index].kind);
-            if before != self.panes[index].kind {
-                self.panes[index].reset();
-                self.selected_pane = index;
-            }
+            pane_title(ui, self.panes[index].kind);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icons::sized_button(ui, Icon::Close, false, 24.0, "Close pane. Its neighbor expands to fill the space.").clicked() {
                     self.pending_close = Some(index);
@@ -1078,16 +1066,18 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 
     fn dashboard(&mut self, ui: &mut egui::Ui, rect: Rect, frame: &AnalysisFrame) {
         if self.tiles.is_none() {
-            let mut empty = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt("empty-workspace")
-                    .max_rect(rect),
+            // Passive guidance: the empty canvas must not behave like a giant
+            // button or acquire a selection fill when the pointer crosses it.
+            let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+            let message = painter.layout(
+                "Click the + button at the top left,\nthen drag a visualizer into this window."
+                    .into(),
+                FontId::proportional(14.0),
+                self.theme.muted,
+                (rect.width() - 48.0).clamp(1.0, 400.0),
             );
-            empty.centered_and_justified(|ui| {
-                if ui.button("+ Add a component").clicked() {
-                    self.manager.library_open = true;
-                }
-            });
+            let position = rect.center() - message.size() * 0.5;
+            painter.galley(position, message, self.theme.muted);
             let response = ui.interact(rect, ui.id().with("empty-drop"), Sense::hover());
             if response.dnd_hover_payload::<DragPayload>().is_some() {
                 workspace_ui::drop_hint(ui, rect, "Add component", self.theme.accent);
@@ -1202,7 +1192,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 }
             }
             Scope::Component => {
-                PresetContent::Component(Box::new(self.panes[self.selected_pane].copy_settings()))
+                PresetContent::Component(Box::new(self.panes[self.selected_pane].export_settings()))
             }
         })
     }
@@ -1274,7 +1264,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             match action {
                 workspace_ui::Action::Apply(id) => self.apply_preset(&id),
                 workspace_ui::Action::Add(kind) => {
-                    self.add_component(kind, self.selected_pane, Edge::Right)
+                    self.add_component(kind, self.selected_pane, Edge::Right);
+                    self.inspecting_signal = false;
+                    self.inspecting_macro = None;
                 }
                 workspace_ui::Action::Save(name, scope) => {
                     if let Some(content) = self.preset_content(scope) {
@@ -1334,6 +1326,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         now: Instant,
     ) {
+        if self.scene_library.open {
+            if let Some(command) = self.scene_library.show(ui, rect, &self.scenes) {
+                self.scene_library_command(command);
+            }
+            return;
+        }
         for pane in &mut self.panes {
             pane.set_scene_macros(&self.scene_macros);
         }
@@ -1348,6 +1346,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 panel_rect.max.y = bar_rect.top() - 6.0;
                 self.scene_macro_bar(ui, bar_rect);
             }
+            self.scene_library.canvas = Some(panel_rect);
             self.pane(ui, index, panel_rect, snapshot);
             if let Some(id) = self.pending_close.take() {
                 self.close_pane(id);
@@ -1445,66 +1444,37 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             .min(right.left() - navigation.center().x - 6.0);
         let center = Rect::from_center_size(
             Pos2::new(navigation.center().x, header.center().y),
-            Vec2::new((2.0 * half_width).min(500.0), header.height()),
+            Vec2::new((2.0 * half_width).min(620.0), header.height()),
         );
-        #[cfg(target_os = "macos")]
-        let mut file_action: Option<crate::project_menu::Action> = None;
         #[cfg(not(target_os = "macos"))]
-        let mut file_action: Option<crate::project_menu::Action> = None;
+        let mut menu_action = None;
         let mut tabs = workspace_ui::navigation_region(ui, left, "main-navigation", &self.theme);
         tabs.horizontal_centered(|ui| {
             #[cfg(not(target_os = "macos"))]
-            ui.menu_button("File", |ui| {
-                for (label, action) in [
-                    ("New Project", crate::project_menu::Action::New),
-                    ("Open Project…", crate::project_menu::Action::Open),
-                    ("Save Project", crate::project_menu::Action::Save),
-                    ("Save Project As…", crate::project_menu::Action::SaveAs),
-                    ("Settings…", crate::project_menu::Action::Settings),
-                ] {
-                    if ui.button(label).clicked() {
-                        file_action = Some(action);
-                        ui.close();
-                    }
-                }
+            ui.menu_button("Menu", |ui| {
+                let ctx = ui.ctx().clone();
+                menu_action = crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
             });
-            let mut add = None;
-            let add_button = workspace_ui::add_component_button(ui, &self.theme);
-            egui::Popup::menu(&add_button)
-                .frame(
-                    egui::Frame::popup(ui.style())
-                        .corner_radius(12)
-                        .inner_margin(6),
-                )
-                .show(|ui| {
-                    for (heading, kinds) in [
-                        ("Instruments", &ModuleKind::ALL[..6]),
-                        ("Visualizers", &ModuleKind::ALL[6..]),
-                    ] {
-                        ui.weak(heading);
-                        for &kind in kinds {
-                            if ui
-                                .add_enabled(
-                                    self.open_panes().len() < MAX_PANES,
-                                    egui::Button::new(kind.label()),
-                                )
-                                .clicked()
-                            {
-                                add = Some(kind);
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                    }
-                });
-            if let Some(kind) = add {
-                self.add_component(kind, self.selected_pane, Edge::Right);
-                self.inspecting_signal = false;
-                self.inspecting_macro = None;
+            let toggle = icons::library_toggle(
+                ui,
+                self.manager.library_open,
+                workspace_ui::NAV_CONTROL_HEIGHT,
+                if self.manager.library_open {
+                    "Hide component browser"
+                } else {
+                    "Show component browser\nClick an instrument or visualizer to add it, or drag it into the workspace."
+                },
+            );
+            toggle.widget_info(|| egui::WidgetInfo::labeled(
+                egui::WidgetType::Button, true, "Toggle component browser",
+            ));
+            if toggle.clicked() {
+                self.manager.library_open = !self.manager.library_open;
             }
         });
-        if let Some(action) = file_action.take() {
-            self.project_action(ui.ctx(), action);
+        #[cfg(not(target_os = "macos"))]
+        if let Some(action) = menu_action {
+            self.menu_action(ui.ctx(), action);
         }
         let signals_open = self
             .signal_ui
@@ -1574,12 +1544,33 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 );
             });
         });
+        let inspector_open = self.sidebar_open
+            && (self.tiles.is_some() || self.inspecting_signal || self.inspecting_macro.is_some());
+        let browser_bounds =
+            Rect::from_min_max(Pos2::new(rect.left(), navigation.bottom()), rect.max);
+        if self.manager.library_open {
+            let width = library_width(browser_bounds, inspector_open, self.library_width);
+            let library = Rect::from_min_max(
+                browser_bounds.min,
+                Pos2::new(browser_bounds.left() + width, browser_bounds.bottom()),
+            );
+            let actions = self.manager.library(
+                ui,
+                library,
+                &self.theme,
+                self.open_panes().len() < MAX_PANES,
+            );
+            self.manager_actions(actions);
+            // Register the boundary after the list/scrollbar so it owns edge gestures.
+            resize_library(ui, browser_bounds, inspector_open, &mut self.library_width);
+        }
+        let browser_width = library_width(browser_bounds, inspector_open, self.library_width);
         let content_bounds = Rect::from_min_max(
             Pos2::new(
                 rect.left()
                     + 12.0
                     + if self.manager.library_open {
-                        workspace_ui::LIBRARY_WIDTH
+                        browser_width
                     } else {
                         0.0
                     },
@@ -1636,21 +1627,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if !signals_open || (macros_open && !macros_were_open) {
             self.inspecting_signal = false;
         }
-        let mut content = content_bounds;
-        if self.manager.library_open {
-            let library = Rect::from_min_max(
-                Pos2::new(rect.left(), content.top()),
-                Pos2::new(rect.left() + workspace_ui::LIBRARY_WIDTH, rect.bottom()),
-            );
-            let actions = self.manager.library(
-                ui,
-                library,
-                &self.theme,
-                self.open_panes().len() < MAX_PANES,
-            );
-            self.manager_actions(actions);
-            content.min.x = library.right() + 12.0;
-        }
+        let content = content_bounds;
         resize_settings(
             ui,
             content,
@@ -1768,6 +1745,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.sidebar(&mut sidebar, snapshot);
             }
         }
+        self.scene_library.canvas = Some(layout.dashboard);
         self.dashboard(ui, layout.dashboard, snapshot);
         if self.show_inspector {
             egui::Window::new("FFT inspector / diagnostics")
@@ -1811,6 +1789,16 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 }
 
 impl eframe::App for SymphosApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        while let Some(action) = crate::project_menu::take() {
+            if !self.menu_item_state(ctx, action).enabled {
+                continue;
+            }
+            if !action.append_text_events(&mut input.events) {
+                self.menu_action(ctx, action);
+            }
+        }
+    }
     fn on_exit(&mut self) {
         if let Some(ctx) = self.context.clone() {
             let state = self.workspace(&ctx);
@@ -1820,31 +1808,6 @@ impl eframe::App for SymphosApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.context = Some(ui.ctx().clone());
         crate::project_menu::install();
-        if let Some(action) = crate::project_menu::take() {
-            self.project_action(ui.ctx(), action);
-        }
-        #[cfg(not(target_os = "macos"))]
-        if !ui.ctx().egui_wants_keyboard_input() {
-            let action = ui.ctx().input_mut(|i| {
-                if i.consume_key(
-                    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-                    egui::Key::S,
-                ) {
-                    Some(crate::project_menu::Action::SaveAs)
-                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::N) {
-                    Some(crate::project_menu::Action::New)
-                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
-                    Some(crate::project_menu::Action::Open)
-                } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
-                    Some(crate::project_menu::Action::Save)
-                } else {
-                    None
-                }
-            });
-            if let Some(action) = action {
-                self.project_action(ui.ctx(), action);
-            }
-        }
         #[cfg(feature = "development")]
         if let Some(dev) = &mut self.development
             && let Some((theme, scale)) = dev.poll(ui.ctx())
@@ -1927,6 +1890,19 @@ impl eframe::App for SymphosApp {
             )
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::new("performance-analysis"), snapshot.clone()));
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Compute availability outside input_mut to avoid re-locking egui input.
+            let available: std::collections::BTreeSet<_> = crate::project_menu::commands()
+                .filter(|c| self.menu_item_state(ui.ctx(), c.action).enabled)
+                .map(|c| c.action.code())
+                .collect();
+            if let Some(action) =
+                crate::project_menu::take_shortcut(ui.ctx(), |a| available.contains(&a.code()))
+            {
+                self.menu_action(ui.ctx(), action);
+            }
+        }
         self.handle_shortcut(ui.ctx(), &snapshot, now);
         let rect = ui.available_rect_before_wrap();
         ui.painter().rect_filled(rect, 0.0, self.theme.background);
@@ -1948,6 +1924,7 @@ impl eframe::App for SymphosApp {
         for id in self.open_panes() {
             self.panes[id].ingest(&captures);
         }
+        self.receive_scene_preview(ui.ctx());
         self.workspace_view(ui, rect, &snapshot, now);
         self.show_settings(ui.ctx(), &snapshot);
         self.project_controls(ui.ctx());
@@ -1958,6 +1935,9 @@ impl eframe::App for SymphosApp {
         if let Some(action) = self.scene_browser.dialogs(ui.ctx(), &self.scenes) {
             self.pending_scene = Some(action);
         }
+        if let Some(command) = self.scene_library.dialogs(ui.ctx()) {
+            self.scene_library_command(command);
+        }
         if let Some(action) = self.pending_scene.take() {
             self.scene_action(action);
         }
@@ -1966,6 +1946,7 @@ impl eframe::App for SymphosApp {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
         }
+        crate::project_menu::update(|action| self.menu_item_state(ui.ctx(), action));
         // Display cadence is a local performance preference, independent of FFT cadence.
         let budget = Duration::from_secs_f32(1.0 / self.render_fps.max(1) as f32);
         // egui subtracts predicted_dt internally. Compensate so a 60 FPS
@@ -2008,6 +1989,7 @@ mod workspace_interaction_tests {
             scenes: Default::default(),
             saved_project: None,
             scene_browser: Default::default(),
+            scene_library: Default::default(),
             pending_scene: None,
             engine: AudioEngine::development_mode(true),
             development: None,
@@ -2050,6 +2032,7 @@ mod workspace_interaction_tests {
             selected_pane: 0,
             sidebar_open: false,
             sidebar_width: 236.0,
+            library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
             inspecting_signal: false,
             inspecting_macro: None,
@@ -2264,6 +2247,63 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn component_browser_resize_keeps_panes_and_inspector_and_resets_on_double_click() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.manager.library_open = true;
+        app.sidebar_open = true;
+        let panes = app.open_panes();
+        let frame = |app: &mut SymphosApp, events| workspace_frame(app, &ctx, now, events);
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        // Real browser edge, alongside the rows: resizing must not drag/add a component.
+        let start = Pos2::new(workspace_ui::LIBRARY_WIDTH + 2.0, 180.0);
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+        );
+        let end = Pos2::new(380.0, 180.0);
+        frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+        frame(&mut app, vec![button(end, false)]);
+        assert_eq!(app.library_width, 380.0);
+        assert_eq!(app.open_panes(), panes);
+        assert!(app.sidebar_open);
+        assert!(!egui::DragAndDrop::has_any_payload(&ctx));
+        let saved = app.workspace(&ctx);
+        assert_eq!(
+            Session::decode(&serde_json::to_vec(&saved).unwrap())
+                .unwrap()
+                .library_width,
+            380.0
+        );
+        let toggle = Pos2::new(29.0, 29.0);
+        for expected in [false, true] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerMoved(toggle), button(toggle, true)],
+            );
+            frame(&mut app, vec![button(toggle, false)]);
+            assert_eq!(app.manager.library_open, expected);
+            assert_eq!(app.library_width, 380.0);
+        }
+        // Separate the resize gesture from the rapid hide/show clicks so egui
+        // does not classify this sequence as a triple click.
+        for _ in 0..40 {
+            frame(&mut app, vec![]);
+        }
+        for _ in 0..2 {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerMoved(end), button(end, true)],
+            );
+            frame(&mut app, vec![button(end, false)]);
+        }
+        assert_eq!(app.library_width, workspace_ui::LIBRARY_WIDTH);
+        assert_eq!(app.open_panes(), panes);
+    }
+
+    #[test]
     fn clicking_scene_macros_opens_details_and_source_inspector() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -2452,8 +2492,9 @@ mod workspace_interaction_tests {
         click(&mut app, label(&out, "Macros"));
         assert!(!app.signal_ui.lock().unwrap().show_signals);
         assert!(app.scene_macros.open);
-        let out = workspace_frame(&mut app, &ctx, now, vec![]);
-        click(&mut app, label(&out, "Add New"));
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        click(&mut app, Pos2::new(29.0, 29.0));
+        assert!(app.manager.library_open);
         workspace_frame(&mut app, &ctx, now, vec![]);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
         click(&mut app, label(&out, "3D Rings"));
@@ -2735,7 +2776,7 @@ mod workspace_interaction_tests {
         let output = workspace_frame(&mut app, &ctx, now, vec![]);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(shape)
             if shape.fill == app.theme.background && shape.rect == Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0)))));
-        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "New component")));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Components")));
         app.show_shortcuts = true; // A hidden modal must never trap fullscreen.
         workspace_frame(
             &mut app,
@@ -2886,6 +2927,214 @@ mod workspace_interaction_tests {
         assert!(app.tiles.is_none());
         assert!(app.workspace(&ctx).validate());
     }
+    #[test]
+    fn scene_library_saves_full_setups_and_loads_without_overwriting_project_scenes() {
+        use crate::scenes::library::{Command, Selection};
+        let mut app = app();
+        let dir =
+            std::env::temp_dir().join(format!("symphos-scene-library-app-{}", std::process::id()));
+        app.storage.dir = dir.clone();
+        app.signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add(crate::signals::Method::Lfo)
+            .unwrap();
+        app.scene_macros.slots[0].name = Some("My macro".into());
+        app.scenes.store(app.capture_scene());
+        let original = app.scenes.active_scene;
+        let expected = serde_json::to_value(app.capture_scene()).unwrap();
+        app.scene_library_command(Command::Save("Performance".into()));
+        assert_eq!(app.scene_library.presets.entries.len(), 1);
+        assert_eq!(app.scenes.scenes.len(), 1);
+        assert_eq!(app.scenes.active_scene, original);
+        let preset = app.scene_library.presets.entries[0].id;
+        app.scene_library_command(Command::New);
+        assert_eq!(
+            app.scenes.active_scene, original,
+            "creating a library card does not load it"
+        );
+        let new = match app.scene_library.selection.unwrap() {
+            Selection::Scene(id) => id,
+            _ => panic!(),
+        };
+        app.scene_library.open = true;
+        app.scene_library_command(Command::Load(Selection::Scene(new)));
+        assert!(!app.scene_library.open, "loading closes Library");
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        assert!(app.tiles.is_none());
+        app.scene_library_command(Command::Load(Selection::Preset(preset)));
+        assert_eq!(app.scenes.scenes.len(), 3);
+        assert_eq!(serde_json::to_value(app.capture_scene()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(
+                &app.scenes
+                    .scenes
+                    .iter()
+                    .find(|s| s.id == original)
+                    .unwrap()
+                    .state
+            )
+            .unwrap(),
+            expected
+        );
+        let active = app.scenes.active_scene;
+        app.scene_library_command(Command::Duplicate(Selection::Scene(original)));
+        assert_eq!(
+            app.scenes.active_scene, active,
+            "duplicating doesn't switch the playing scene"
+        );
+        app.scene_library_command(Command::Rename(Selection::Preset(preset), "Renamed".into()));
+        assert_eq!(
+            crate::scenes::library::Presets::load(&dir).unwrap().entries[0].name,
+            "Renamed"
+        );
+        app.scene_library_command(Command::Delete(Selection::Preset(preset)));
+        assert!(
+            crate::scenes::library::Presets::load(&dir)
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        assert_eq!(
+            app.scenes.scenes.len(),
+            4,
+            "deleting a preset never deletes project scenes"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn scene_library_write_failure_retains_existing_presets() {
+        use crate::scenes::library::Command;
+        let mut app = app();
+        let path =
+            std::env::temp_dir().join(format!("symphos-scene-library-file-{}", std::process::id()));
+        std::fs::write(&path, b"not a directory").unwrap();
+        app.storage.dir = path.clone();
+        app.scene_library_command(Command::Save("Cannot save here".into()));
+        assert!(app.scene_library.presets.entries.is_empty());
+        assert!(
+            app.scene_library
+                .notice
+                .as_ref()
+                .unwrap()
+                .contains("Could not save")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a directory");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn menu_docks_have_checked_states_and_preserve_scene_and_component_selection() {
+        use crate::project_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let ids = app.open_panes();
+        let selected = app.selected_pane;
+        app.scene_macros.open = false;
+        app.menu_action(&ctx, A::Signals);
+        assert!(app.menu_item_state(&ctx, A::Signals).checked);
+        assert!(!app.menu_item_state(&ctx, A::Macros).checked);
+        app.menu_action(&ctx, A::Macros);
+        assert!(app.scene_macros.open);
+        assert!(!app.signal_ui.lock().unwrap().show_signals);
+        assert!(app.menu_item_state(&ctx, A::Macros).checked);
+        app.menu_action(&ctx, A::Components);
+        app.menu_action(&ctx, A::Inspector);
+        app.menu_action(&ctx, A::Info);
+        assert!(app.menu_item_state(&ctx, A::Components).checked);
+        assert!(app.menu_item_state(&ctx, A::Inspector).checked);
+        assert!(app.menu_item_state(&ctx, A::Info).checked);
+        assert_eq!(app.open_panes(), ids);
+        assert_eq!(app.selected_pane, selected);
+        app.menu_action(&ctx, A::PanelFullscreen);
+        assert!(app.menu_item_state(&ctx, A::PanelFullscreen).checked);
+        assert!(!app.menu_item_state(&ctx, A::Signals).enabled);
+        app.menu_action(&ctx, A::Signals); // stale commands must be ignored
+        assert!(!app.signal_ui.lock().unwrap().show_signals);
+        app.menu_action(&ctx, A::PanelFullscreen);
+        assert!(app.panel_fullscreen.is_none());
+        assert_eq!(app.open_panes(), ids);
+    }
+
+    #[test]
+    fn menu_creation_and_scene_commands_keep_signals_explicit_and_use_existing_dialogs() {
+        use crate::project_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.scenes.store(app.capture_scene());
+        assert!(!app.menu_item_state(&ctx, A::DeleteScene).enabled);
+        let count = app.open_panes().len();
+        app.menu_action(&ctx, A::Add(ModuleKind::Orbital));
+        assert_eq!(app.open_panes().len(), count + 1);
+        assert_eq!(app.panes[app.selected_pane].kind, ModuleKind::Orbital);
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        app.menu_action(&ctx, A::Signal(crate::signals::Method::Midi));
+        assert!(app.inspecting_signal && app.sidebar_open);
+        assert_eq!(
+            app.signal_ui.lock().unwrap().bank.channels[0].input,
+            crate::signals::Input::Midi
+        );
+        let source_id = app.signal_ui.lock().unwrap().selected.unwrap();
+        app.menu_action(&ctx, A::DuplicateScene);
+        assert_eq!(app.scenes.scenes.len(), 2);
+        assert_eq!(app.signal_ui.lock().unwrap().selected, Some(source_id));
+        let duplicate = app.scenes.active_scene;
+        app.menu_action(&ctx, A::PreviousScene);
+        assert_ne!(app.scenes.active_scene, duplicate);
+        app.menu_action(&ctx, A::NextScene);
+        assert_eq!(app.scenes.active_scene, duplicate);
+        app.menu_action(&ctx, A::DeleteScene);
+        assert!(app.scene_browser.dialog_open());
+        assert_eq!(
+            app.scenes.scenes.len(),
+            2,
+            "deletion still requires the existing dialog"
+        );
+        assert!(!app.menu_item_state(&ctx, A::DuplicateScene).enabled);
+    }
+
+    #[test]
+    fn menu_availability_respects_settings_text_entry_and_component_clipboard_type() {
+        use crate::project_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        assert!(!app.menu_item_state(&ctx, A::PasteSettings).enabled);
+        app.menu_action(&ctx, A::CopySettings);
+        assert!(app.menu_item_state(&ctx, A::PasteSettings).enabled);
+        app.selected_pane = 1;
+        assert!(!app.menu_item_state(&ctx, A::PasteSettings).enabled);
+        app.menu_action(&ctx, A::MidiSettings);
+        assert!(app.settings_window.open);
+        assert_eq!(app.settings_window.category, settings::Category::Midi);
+        assert!(!app.menu_item_state(&ctx, A::NewScene).enabled);
+        let count = app.open_panes().len();
+        app.menu_action(&ctx, A::Add(ModuleKind::Sphere));
+        assert_eq!(app.open_panes().len(), count);
+        app.menu_action(&ctx, A::AudioSettings);
+        assert_eq!(app.settings_window.category, settings::Category::Audio);
+        app.settings_window.open = false;
+        let mut text = String::from("test");
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+        });
+        output.textures_delta.clear();
+        assert!(app.menu_item_state(&ctx, A::Copy).enabled);
+        assert!(!app.menu_item_state(&ctx, A::CloseComponent).enabled);
+        app.menu_action(&ctx, A::CloseComponent);
+        assert_eq!(app.open_panes().len(), count);
+        ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap()));
+        for id in app.open_panes() {
+            app.close_pane(id);
+        }
+        assert!(!app.menu_item_state(&ctx, A::CopySettings).enabled);
+        assert!(!app.menu_item_state(&ctx, A::PanelFullscreen).enabled);
+        assert!(
+            app.menu_item_state(&ctx, A::Add(ModuleKind::Sphere))
+                .enabled
+        );
+    }
 }
 
 fn settings_header(ui: &mut egui::Ui, kind: ModuleKind, metadata: &str) -> egui::Response {
@@ -2921,28 +3170,15 @@ fn build_details(ui: &mut egui::Ui) {
     }
 }
 
-fn module_kind_picker(ui: &mut egui::Ui, kind: &mut ModuleKind) -> egui::Response {
-    // ComboBox::width is only a minimum. Constrain its parent so long names
-    // truncate before reaching the 24px action buttons.
+fn pane_title(ui: &mut egui::Ui, kind: ModuleKind) -> egui::Response {
+    // Reserve space for the pane actions and truncate long component names.
     let width =
         (ui.available_width() - 96.0 - 4.0 * ui.spacing().item_spacing.x).clamp(30.0, 180.0);
-    ui.scope(|ui| {
-        ui.set_width(width);
-        egui::ComboBox::from_id_salt("module-kind")
-            .width(width)
-            .truncate()
-            .selected_text(kind.label())
-            .show_ui(ui, |ui| {
-                ui.set_min_width(180.0);
-                for value in ModuleKind::ALL {
-                    ui.selectable_value(kind, value, value.label())
-                        .help_text(value.description());
-                }
-            })
-            .response
-    })
-    .inner
-    .help_text("Choose which visualization appears in this pane. Each module has its own settings.")
+    ui.add_sized(
+        [width, 24.0],
+        egui::Label::new(kind.label()).truncate().selectable(false),
+    )
+    .help_text(kind.description())
 }
 
 struct WorkspaceLayout {
@@ -3015,6 +3251,51 @@ fn default_output_source<'a>(
             (!speakers, &source.node_name)
         })
         .filter(|source| Some(source.node_name.as_str()) != selected_node)
+}
+
+fn library_width(bounds: Rect, inspector_open: bool, requested: f32) -> f32 {
+    // The inspector can compact itself as the browser grows. Reserve its minimum
+    // width plus useful canvas space before allowing the browser to expand.
+    let inspector = if inspector_open {
+        DEFAULT_SETTINGS_WIDTH + 10.0
+    } else {
+        12.0
+    };
+    let maximum =
+        (bounds.width() - 12.0 - inspector - 540.0).clamp(workspace_ui::LIBRARY_WIDTH, 440.0);
+    requested.clamp(workspace_ui::LIBRARY_WIDTH, maximum)
+}
+
+fn resize_library(ui: &mut egui::Ui, bounds: Rect, inspector_open: bool, width: &mut f32) {
+    let edge = bounds.left() + library_width(bounds, inspector_open, *width);
+    let handle = Rect::from_min_max(
+        Pos2::new(edge - 3.0, bounds.top()),
+        Pos2::new(edge + 5.0, bounds.bottom()),
+    );
+    let response = ui
+        .interact(
+            handle,
+            ui.id().with("library-resize"),
+            Sense::click_and_drag(),
+        )
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .help_text(
+            "Drag to resize the component browser. Double-click to restore the compact width.",
+        );
+    if response.double_clicked() {
+        *width = workspace_ui::LIBRARY_WIDTH;
+    } else if response.dragged()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        *width = library_width(bounds, inspector_open, pointer.x - bounds.left());
+    }
+    if response.hovered() || response.dragged() {
+        ui.painter().vline(
+            edge + 2.0,
+            bounds.y_range(),
+            Stroke::new(2.0, ui.visuals().selection.bg_fill),
+        );
+    }
 }
 
 fn settings_width(content: Rect, requested: f32) -> f32 {
@@ -3313,19 +3594,19 @@ mod layout_tests {
     use super::*;
 
     #[test]
-    fn narrow_pane_picker_reserves_space_for_both_action_buttons() {
+    fn narrow_pane_title_reserves_space_for_action_buttons() {
         for width in [120.0, 160.0, 240.0, 600.0] {
-            for mut kind in ModuleKind::ALL {
+            for kind in ModuleKind::ALL {
                 let context = egui::Context::default();
                 let mut output = context.run_ui(egui::RawInput::default(), |ui| {
                     ui.set_width(width);
                     ui.spacing_mut().item_spacing.x = 10.0;
                     ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
                     ui.horizontal(|ui| {
-                        let picker = module_kind_picker(ui, &mut kind);
+                        let title = pane_title(ui, kind);
                         let pause = icons::sized_button(ui, Icon::Pause, false, 24.0, "Pause");
                         let expand = icons::sized_button(ui, Icon::Eye, false, 24.0, "Inspect");
-                        assert!(picker.rect.right() < pause.rect.left());
+                        assert!(title.rect.right() < pause.rect.left());
                         assert!(pause.rect.right() < expand.rect.left());
                         assert!(expand.rect.right() <= ui.max_rect().right() + 0.1);
                     });

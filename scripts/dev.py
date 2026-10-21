@@ -24,7 +24,7 @@ def atomic_json(path, value):
 
 def fingerprint(root=ROOT):
     files = [root / name for name in ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml")]
-    for name in ("src", "crates", "assets/macos", "assets/development"):
+    for name in ("src", "crates", "vendor/projectm", "assets/milkdrop", "assets/macos", "assets/development"):
         directory = root / name
         if directory.exists():
             files.extend(path for path in directory.rglob("*") if path.is_file())
@@ -91,7 +91,15 @@ class Supervisor:
                 shutil.rmtree(staging)
             executable = staging / "Contents" / "MacOS" / "symphos"
             executable.parent.mkdir(parents=True)
-            (staging / "Contents" / "Resources").mkdir()
+            resources = staging / "Contents" / "Resources"
+            resources.mkdir()
+            shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", resources)
+            licenses = resources / "Licenses"
+            licenses.mkdir()
+            for notice in (ROOT / "vendor/projectm/licenses").glob("*.txt"):
+                shutil.copy2(notice, licenses)
+            for name in ("COPYING", "LICENSE.txt"):
+                shutil.copy2(ROOT / "vendor/projectm" / name, licenses)
             shutil.copy2(ROOT / "target/debug/symphos", executable)
             with (ROOT / "assets/macos/Info.plist").open("rb") as source:
                 info = plistlib.load(source)

@@ -2,6 +2,7 @@
 use crate::help::HoverHelp;
 use crate::project::SceneState;
 use serde::{Deserialize, Serialize};
+pub mod library;
 
 pub const MAX_SCENES: usize = 64;
 pub const MAX_DOCUMENT_BYTES: usize = 64_000_000;
@@ -9,6 +10,8 @@ pub const MAX_DOCUMENT_BYTES: usize = 64_000_000;
 pub struct Scene {
     pub id: u64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<library::Preview>,
     #[serde(flatten)]
     pub state: SceneState,
 }
@@ -24,6 +27,7 @@ impl Book {
             scenes: vec![Scene {
                 id: 1,
                 name: "Scene 1".into(),
+                preview: None,
                 state,
             }],
             active_scene: 1,
@@ -62,6 +66,7 @@ impl Book {
             Scene {
                 id,
                 name: name.trim().into(),
+                preview: None,
                 state,
             },
         );
@@ -116,6 +121,7 @@ impl Book {
                     && ids.insert(s.id)
                     && valid_name(&s.name)
                     && s.state.validate()
+                    && s.preview.as_ref().is_none_or(library::Preview::valid)
             })
     }
 }
@@ -131,6 +137,8 @@ pub enum Action {
     Move(u64, isize),
     Delete(u64),
     Presets,
+    Library,
+    SavePreset,
 }
 #[derive(Default)]
 pub struct Browser {
@@ -138,10 +146,24 @@ pub struct Browser {
     delete: Option<u64>,
 }
 impl Browser {
+    pub fn rename_current(&mut self, book: &Book) {
+        if let Some(scene) = book.current() {
+            self.rename = Some((scene.id, scene.name.clone()));
+        }
+    }
+    pub fn delete_current(&mut self, book: &Book) {
+        if book.scenes.len() > 1 {
+            self.delete = Some(book.active_scene);
+        }
+    }
+    pub fn dialog_open(&self) -> bool {
+        self.rename.is_some() || self.delete.is_some()
+    }
+
     pub fn toolbar(&mut self, ui: &mut egui::Ui, book: &Book) -> Option<Action> {
         use crate::workspace_ui::NAV_CONTROL_HEIGHT as H;
         let mut action = None;
-        let width = ui.available_width().min(470.0);
+        let width = ui.available_width().min(590.0);
         let rect = egui::Rect::from_center_size(ui.max_rect().center(), egui::vec2(width, H));
         let mut row = ui.new_child(
             egui::UiBuilder::new()
@@ -153,7 +175,7 @@ impl Browser {
             let current = book.current();
             let number = book.scenes.iter().position(|s| s.id == book.active_scene).unwrap_or(0)+1;
             let label = format!("{number:02} · {}", current.map_or("Scene 1", |s| s.name.as_str()));
-            let picker_width = (width - H*3.0 - ui.spacing().item_spacing.x*3.0).max(50.0);
+            let picker_width = (width - H*3.0 - 64.0 - ui.spacing().item_spacing.x*4.0).max(50.0);
             let button = ui.add_sized([picker_width,H],egui::Button::new(label).truncate()).help_text("Scenes include signals, mappings, components and macros. Switching keeps your edits; File → Save Project saves every scene.");
             let arrow = button.rect.right_center() - egui::vec2(11.0, 0.0);
             ui.painter().add(egui::Shape::convex_polygon(
@@ -185,7 +207,8 @@ impl Browser {
                 ui.small("Edits stay with each scene. Save the project to keep them on disk.");
             });
             if ui.add_enabled(book.scenes.len()>1,egui::Button::new("›").min_size(egui::Vec2::splat(H))).help_text("Next scene").clicked(){action=Some(Action::Switch(book.cycle(1)));}
-            if ui.add_enabled(book.scenes.len()<MAX_SCENES,egui::Button::new("+").min_size(egui::Vec2::splat(H))).help_text("Duplicate current setup into a new scene").clicked(){action=Some(Action::Duplicate);}
+            if ui.add_sized([64.0,H],egui::Button::new("Library")).help_text("Manage project scenes and reusable scene presets.").clicked(){action=Some(Action::Library);}
+            if crate::icons::sized_button(ui, crate::icons::Icon::Save, false, H, "Save the current scene as a named preset, including signals and macros.").clicked(){action=Some(Action::SavePreset);}
         });
         action
     }

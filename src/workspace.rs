@@ -347,7 +347,9 @@ fn valid_pane(pane: &PaneState) -> bool {
     if pane.instance_id.is_empty() || pane.instance_id.len() > 120 {
         return false;
     }
-    pane.settings.len() == ModuleKind::ALL.len()
+    pane.milkdrop_presets.len() <= crate::milkdrop::preset::MAX_PRESETS
+        && pane.milkdrop_presets.iter().all(|p| p.validate().is_ok())
+        && pane.settings.len() == ModuleKind::ALL.len()
         && ModuleKind::ALL.into_iter().all(|kind| {
             pane.settings
                 .iter()
@@ -383,6 +385,8 @@ pub struct Session {
     pub focused_pane: Option<usize>,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    #[serde(default = "default_library_width")]
+    pub library_width: f32,
     #[serde(default = "default_signals_height")]
     pub signals_height: f32,
     pub help_open: bool,
@@ -396,6 +400,9 @@ pub struct Session {
 }
 pub fn default_render_fps() -> u32 {
     60
+}
+pub const fn default_library_width() -> f32 {
+    236.0
 }
 pub fn default_signals_height() -> f32 {
     390.0
@@ -430,6 +437,7 @@ impl Session {
             && (ids.is_empty() || ids.contains(&self.selected_pane))
             && self.focused_pane.is_none_or(|id| ids.contains(&id))
             && (160.0..=640.0).contains(&self.sidebar_width)
+            && (default_library_width()..=440.0).contains(&self.library_width)
             && (180.0..=1000.0).contains(&self.signals_height)
             && FFT_SIZES.contains(&self.analysis.fft_size)
             && (1..=240).contains(&self.analysis.analysis_fps)
@@ -976,6 +984,7 @@ mod tests {
                     && entry.get("Rings").is_none()
                     && entry.get("Resonance").is_none()
                     && entry.get("Orbital").is_none()
+                    && entry.get("Milkdrop").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1011,6 +1020,7 @@ mod tests {
                     && entry.get("Rings").is_none()
                     && entry.get("Resonance").is_none()
                     && entry.get("Orbital").is_none()
+                    && entry.get("Milkdrop").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1040,6 +1050,7 @@ mod tests {
                     && entry.get("Rings").is_none()
                     && entry.get("Resonance").is_none()
                     && entry.get("Orbital").is_none()
+                    && entry.get("Milkdrop").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1062,6 +1073,7 @@ mod tests {
                     && s.get("Rings").is_none()
                     && s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
+                    && s.get("Milkdrop").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
             pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
@@ -1097,6 +1109,7 @@ mod tests {
                     && s.get("Rings").is_none()
                     && s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
+                    && s.get("Milkdrop").is_none()
             });
             for settings in pane["settings"].as_array_mut().unwrap() {
                 if let Some(sphere) = settings.get_mut("Sphere") {
@@ -1129,10 +1142,11 @@ mod tests {
         let mut legacy = serde_json::to_value(&original).unwrap();
         for pane in legacy["panes"].as_array_mut().unwrap() {
             pane["sections"].as_array_mut().unwrap().truncate(12);
-            pane["settings"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|s| s.get("Resonance").is_none() && s.get("Orbital").is_none());
+            pane["settings"].as_array_mut().unwrap().retain(|s| {
+                s.get("Resonance").is_none()
+                    && s.get("Orbital").is_none()
+                    && s.get("Milkdrop").is_none()
+            });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(12);
             pane["macros"]["banks"][11][0]["depth"] = 0.6.into();
         }
@@ -1169,6 +1183,7 @@ mod tests {
                 s.get("Rings").is_none()
                     && s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
+                    && s.get("Milkdrop").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(11);
             pane["macros"]["banks"][10][0]["depth"] = 0.7.into();
@@ -1228,6 +1243,7 @@ mod tests {
             focused_pane: None,
             sidebar_open: true,
             sidebar_width: 236.0,
+            library_width: default_library_width(),
             signals_height: default_signals_height(),
             help_open: false,
             render_fps: 60,
@@ -1289,6 +1305,27 @@ mod tests {
         let mut bad = original;
         bad.panes[0].settings.pop();
         assert!(!bad.validate());
+    }
+
+    #[test]
+    fn component_browser_width_defaults_for_old_sessions_and_stays_out_of_projects() {
+        let mut value = serde_json::to_value(session()).unwrap();
+        value.as_object_mut().unwrap().remove("library_width");
+        let mut state = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(state.library_width, default_library_width());
+        state.library_width = 380.0;
+        let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.library_width, 380.0);
+        let project = crate::project::Project::capture(state.clone());
+        assert!(
+            !serde_json::to_string(&project)
+                .unwrap()
+                .contains("library_width")
+        );
+        for width in [0.0, 2000.0, f32::NAN] {
+            state.library_width = width;
+            assert!(!state.validate());
+        }
     }
 
     #[test]

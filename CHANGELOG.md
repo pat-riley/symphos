@@ -5,7 +5,29 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+### MilkDrop-compatible visualizer
+
+- Add a native projectM-backed MilkDrop component with `.milk` file/folder import,
+  shader/equation playback, editable saved values, portable textures, and export.
+- Add live inspector adjustments for motion, feedback, waveform color, echo,
+  borders and native audio response, assignable to scene macros and Signals.
+- Add per-component favorites, shuffle, auto play, transitions and preset lock.
+- Preserve older projects with a fifteenth component slot and empty macro bank.
+- Build the pinned native library offline; CMake and Linux EGL are new build dependencies.
+
 ### Added
+
+- Add a full-screen scene Library with project/preset sections, saved previews,
+  search, explicit loading, scene creation, duplication, renaming, deletion, and
+  drag-to-reorder in grid and list views, plus double-click recall and contextual
+  actions. Remember the view preference locally. Replace the scene toolbar plus with a Save icon and naming
+  dialog; reusable scene presets capture complete setups and load as new scenes.
+
+- Expand the application menu with Edit, Create, Scene, Playback, View, Window,
+  and Help; expose component/source creation, scene management, playback,
+  dock visibility, zoom, diagnostics, and direct settings categories. Share a
+  command catalog with the shortcut reference and non-macOS menu; reflect live
+  checkmarks, selection compatibility, modal state, and native text editing.
 
 - Add Orbital, a native GPU orbital/flocking visualizer with configurable particles,
   attractor orbs, surface avoidance fields, world-space paths, arrow glyphs,
@@ -32,6 +54,12 @@ All notable changes to Symphos will be documented here. The project follows
   workspaces and view presets without losing their configuration.
 
 ### Changed
+
+- Make the component browser resizable from its right edge, with double-click reset
+  and a locally remembered width, matching the inspector’s resizing behavior.
+
+- Replace the Add New capsule/dropdown with a borderless plus button matching
+  the inspector icon’s styling. Browse, click to add, or drag all components from the left drawer.
 
 - Tighten the top bar to a 42-pixel height with equal 8-pixel outer padding,
   uniform 26-pixel controls, and a smaller logo aligned with the toolbar icons.

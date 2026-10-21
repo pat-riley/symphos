@@ -12,7 +12,7 @@ pub const NAV_CONTROL_HEIGHT: f32 = 26.0;
 pub const NAV_PADDING: f32 = 8.0;
 pub const NAV_HEIGHT: f32 = NAV_CONTROL_HEIGHT + 2.0 * NAV_PADDING;
 
-pub const LIBRARY_WIDTH: f32 = 236.0;
+pub const LIBRARY_WIDTH: f32 = workspace::default_library_width();
 
 fn sidebar_blend(a: Color32, b: Color32, amount: f32) -> Color32 {
     let channel = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * amount) as u8;
@@ -279,61 +279,6 @@ pub fn navigation_region(ui: &mut egui::Ui, rect: Rect, id: &str, theme: &AppThe
     child
 }
 
-/// A compact capsule with the restrained fill and icon spacing of a native toolbar.
-pub fn add_component_button(ui: &mut egui::Ui, theme: &AppTheme) -> egui::Response {
-    let response = ui
-        .scope(|ui| {
-            ui.spacing_mut().button_padding = Vec2::new(30.0, 0.0);
-            let visuals = ui.visuals_mut();
-            visuals.widgets.inactive.bg_fill =
-                sidebar_blend(theme.navigation, theme.foreground, 0.075);
-            visuals.widgets.inactive.weak_bg_fill = visuals.widgets.inactive.bg_fill;
-            visuals.widgets.inactive.bg_stroke =
-                Stroke::new(0.75, theme.foreground.gamma_multiply(0.09));
-            for (widget, amount) in [
-                (&mut visuals.widgets.hovered, 0.12),
-                (&mut visuals.widgets.active, 0.17),
-                (&mut visuals.widgets.open, 0.17),
-            ] {
-                widget.bg_fill = sidebar_blend(theme.navigation, theme.foreground, amount);
-                widget.weak_bg_fill = widget.bg_fill;
-                widget.bg_stroke = Stroke::new(0.75, theme.foreground.gamma_multiply(0.14));
-                widget.fg_stroke.color = theme.foreground;
-            }
-            ui.add(
-                egui::Button::new(RichText::new("Add New").size(13.0).color(theme.foreground))
-                    .min_size(Vec2::new(112.0, NAV_CONTROL_HEIGHT))
-                    .corner_radius(NAV_CONTROL_HEIGHT * 0.5),
-            )
-        })
-        .inner;
-    let rect = response.rect;
-    let stroke = Stroke::new(1.4, theme.foreground);
-    let plus = egui::pos2(rect.left() + 14.0, rect.center().y);
-    ui.painter().line_segment(
-        [plus - Vec2::new(5.0, 0.0), plus + Vec2::new(5.0, 0.0)],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [plus - Vec2::new(0.0, 5.0), plus + Vec2::new(0.0, 5.0)],
-        stroke,
-    );
-    let chevron = egui::pos2(rect.right() - 14.0, rect.center().y);
-    ui.painter().add(egui::Shape::line(
-        vec![
-            chevron + Vec2::new(-3.0, -1.5),
-            chevron + Vec2::new(0.0, 1.5),
-            chevron + Vec2::new(3.0, -1.5),
-        ],
-        Stroke::new(1.3, theme.foreground.gamma_multiply(0.7)),
-    ));
-    response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .help_text(
-            "Add a component\nChoose an instrument or visualizer to add beside the selected pane.",
-        )
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum DragPayload {
     Component(ModuleKind),
@@ -514,7 +459,7 @@ impl Manager {
         can_add: bool,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
-        ui.painter().rect_filled(rect, 0.0, theme.panel);
+        ui.painter().rect_filled(rect, 0.0, theme.navigation);
         ui.painter().vline(
             rect.right(),
             rect.y_range(),
@@ -525,15 +470,17 @@ impl Manager {
                 .id_salt("component-library")
                 .max_rect(rect),
         );
-        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        // Reserve the boundary for the resize handle so a row's click/drag hit
+        // area cannot add or drag a component when grabbing the drawer edge.
+        let mut body_clip = rect.intersect(ui.clip_rect());
+        body_clip.max.x -= 4.0;
+        child.set_clip_rect(body_clip);
         sidebar_style(&mut child, theme);
         let close = egui::Frame::new()
             .inner_margin(12)
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
-                    let (icon, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
-                    icons::paint(ui, icon, Icon::Plus, theme.foreground);
-                    ui.label(RichText::new("New component").strong());
+                    ui.label(RichText::new("Components").strong());
                     ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                         ui.visuals_mut().button_frame = false;
                         icons::sized_button(
@@ -554,7 +501,7 @@ impl Manager {
         }
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux, ModuleKind::Resonance, ModuleKind::Orbital] {
+            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux, ModuleKind::Resonance, ModuleKind::Orbital, ModuleKind::Milkdrop] {
                 if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
                     egui::Frame::new().inner_margin(12).show(ui, |ui| {
                         ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));
