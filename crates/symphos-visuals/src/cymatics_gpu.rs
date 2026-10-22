@@ -8,7 +8,8 @@ pub struct CymaticsFrame {
     pub geometry: [f32; 4],  // circle, aspect, mode, displacement
     pub motion: [f32; 4],    // migration, friction, agitation, artistic turbulence
     pub grains: [f32; 4],    // size px, variation, opacity, glow
-    pub recycling: [f32; 4], // enabled, edge threshold, central spawn radius, reserved
+    pub recycling: [f32; 4], // enabled, edge threshold, central spawn radius, renewal rate
+    pub lifecycle: [f32; 4], // maximum speed, reserved
     pub surface: [f32; 4],   // opacity, brightness, node width, contours
     pub light: [f32; 4],     // ambient, diffuse, specular, roughness
     pub direction: [f32; 4], // light xyz, grain style
@@ -476,6 +477,7 @@ mod tests {
             frame.geometry = [0.0, 1.0, 0.0, 0.0];
             frame.motion = [0.65, 7.0, 0.02, 0.0];
             frame.grains = [1.2, 0.5, 0.9, 0.2];
+            frame.lifecycle = [0.7, 0.0, 0.0, 0.0];
             frame.surface = [1.0, 1.0, 0.075, 10.0];
             frame.light = [0.35, 0.8, 0.3, 0.45];
             frame.direction = [0.4, 0.8, 0.4, 0.0];
@@ -601,6 +603,61 @@ mod tests {
                     }
                 }
             }
+            // Artistic renewal works independently of the edge switch, but
+            // cannot disturb a paused or silent plate.
+            for (energy, dt, expected) in [
+                (0.5, 1.0 / 120.0, true),
+                (0.0, 1.0 / 120.0, false),
+                (0.5, 0.0, false),
+            ] {
+                frame.geometry = [0.0, 1.0, 0.0, 0.0];
+                frame.motion = [0.0; 4];
+                frame.recycling = [0.0, 0.96, 0.2, 2.0];
+                frame.camera[3] = energy;
+                frame.clock = [0.0, 15.0, 1.0, 9.0];
+                let mut e = d.create_command_encoder(&Default::default());
+                gpu.prepare(&d, &mut e, &l, frame, &field, [960, 640]);
+                q.submit([e.finish()]);
+                let before = read(&d, &q, &gpu.particles, 32768 * 16);
+                let before: &[[f32; 4]] = bytemuck::cast_slice(&before);
+                frame.clock = [dt, 15.0, 0.0, 9.0];
+                let mut e = d.create_command_encoder(&Default::default());
+                gpu.prepare(&d, &mut e, &l, frame, &field, [960, 640]);
+                q.submit([e.finish()]);
+                let after = read(&d, &q, &gpu.particles, 32768 * 16);
+                let after: &[[f32; 4]] = bytemuck::cast_slice(&after);
+                let renewed: Vec<_> = before
+                    .iter()
+                    .zip(after)
+                    .filter(|(a, b)| a[0].abs() < 0.9 && a[1].abs() < 0.9 && a != b)
+                    .collect();
+                if expected {
+                    assert!(
+                        renewed.len() > 200 && renewed.len() < 1000,
+                        "renewal count: {}",
+                        renewed.len()
+                    );
+                    assert!(
+                        renewed.iter().all(|(_, b)| b[0].hypot(b[1]) <= 0.20001
+                            && b[2] == 0.0
+                            && b[3] == 0.0)
+                    );
+                } else {
+                    assert!(renewed.is_empty());
+                }
+            }
+            frame.lifecycle[0] = 0.1;
+            frame.motion = [4.0, 0.0, 0.5, 1.0];
+            frame.recycling = [0.0; 4];
+            frame.clock = [1.0 / 30.0, 16.0, 0.0, 9.0];
+            frame.camera[3] = 1.0;
+            let mut e = d.create_command_encoder(&Default::default());
+            gpu.prepare(&d, &mut e, &l, frame, &field, [960, 640]);
+            q.submit([e.finish()]);
+            let speeds = read(&d, &q, &gpu.particles, 32768 * 16);
+            let speeds: &[[f32; 4]] = bytemuck::cast_slice(&speeds);
+            assert!(speeds.iter().all(|p| p[2].hypot(p[3]) <= 0.10001));
+            assert!(speeds.iter().any(|p| p[2].hypot(p[3]) > 0.05));
             for mode in 0..4 {
                 frame.geometry = [1.0, 1.0, mode as f32, if mode == 0 { 0.0 } else { 0.1 }];
                 frame.clock[2] = 1.0;
