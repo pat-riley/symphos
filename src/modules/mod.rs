@@ -25,6 +25,7 @@ mod frequency;
 mod milkdrop;
 mod orbital;
 mod oscilloscope;
+mod particle_waves;
 pub(crate) mod performance;
 mod resonance;
 mod retro;
@@ -67,6 +68,7 @@ use flux::Flux;
 use milkdrop::Milkdrop;
 use orbital::Orbital;
 use oscilloscope::Oscilloscope;
+use particle_waves::ParticleWaves;
 use resonance::Resonance;
 use rings::Rings;
 use spectral_surface::SpectralSurface;
@@ -102,10 +104,12 @@ pub enum ModuleKind {
     Orbital,
     Milkdrop,
     Cymatics,
+    ParticleWaves,
+    SpectralBloom,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
@@ -122,10 +126,14 @@ impl ModuleKind {
         Self::Orbital,
         Self::Milkdrop,
         Self::Cymatics,
+        Self::ParticleWaves,
+        Self::SpectralBloom,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::SpectralBloom => "Spectral Bloom",
+            Self::ParticleWaves => "Particle Waves",
             Self::Cymatics => "Cymatics",
             Self::Milkdrop => "MilkDrop",
             Self::Orbital => "Orbital",
@@ -147,6 +155,8 @@ impl ModuleKind {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::SpectralBloom => Icon::Bars,
+            Self::ParticleWaves => Icon::Strata,
             Self::Cymatics => Icon::Resonance,
             Self::Milkdrop => Icon::Flux,
             Self::Orbital => Icon::Flux,
@@ -168,6 +178,8 @@ impl ModuleKind {
 
     pub fn subtitle(self) -> &'static str {
         match self {
+            Self::SpectralBloom => "Sculptural spectrum, strands and feedback",
+            Self::ParticleWaves => "Layered spectral particle ribbons",
             Self::Cymatics => "Audio-driven vibrating plates",
             Self::Milkdrop => "MilkDrop-compatible presets",
             Self::Orbital => "GPU orbital flocking",
@@ -189,6 +201,12 @@ impl ModuleKind {
 
     pub fn description(self) -> &'static str {
         match self {
+            Self::SpectralBloom => {
+                "Measured spectrum columns bend into luminous strands and dissolve into particles. Transform lingering light with image feedback; tune shape, color, motion and the 3D camera in the inspector."
+            }
+            Self::ParticleWaves => {
+                "Measured frequency spectra form layered ribbons, rings, spirals and tunnels of light. Audio scatters particles away from the surface and springs draw them back. Shape individual layers, bokeh, colors and glow; drag to rotate freely in 3D."
+            }
             Self::Cymatics => {
                 "Audio-driven Chladni plates: naturally settling GPU sand, shaded wave surfaces, nodal patterns and artistic interference. Explore plate dimensions, materials and boundaries; drag to rotate freely. Thin-plate modes with approximate grain transport."
             }
@@ -254,6 +272,8 @@ pub struct ModulePane {
     orbital: Orbital,
     milkdrop: Milkdrop,
     cymatics: Cymatics,
+    particle_waves: ParticleWaves,
+    spectral_bloom: ParticleWaves,
     spectrum: Spectrum,
     waveform: Waveform,
     spectrogram: Spectrogram,
@@ -262,7 +282,7 @@ pub struct ModulePane {
     veroni: Veroni,
     strata: Strata,
     flux: Flux,
-    active_sections: [usize; 16],
+    active_sections: [usize; 18],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -279,6 +299,8 @@ pub enum ModuleSettings {
     Orbital(Box<orbital::OrbitalSettings>),
     Milkdrop(Box<milkdrop::MilkdropSettings>),
     Cymatics(Box<cymatics::Settings>),
+    ParticleWaves(Box<particle_waves::Settings>),
+    SpectralBloom(Box<particle_waves::Settings>),
     Spectrum(spectrum::SpectrumSettings),
     Waveform(waveform::WaveformSettings),
     Spectrogram(spectrogram::SpectrogramSettings),
@@ -296,6 +318,7 @@ impl ModuleSettings {
             Self::Waterfall(s) => s.automatic_yaw(),
             Self::Sphere(s) | Self::Cylinder(s) => s.automatic_yaw(),
             Self::Orbital(s) => s.automatic_yaw(),
+            Self::ParticleWaves(s) | Self::SpectralBloom(s) => s.automatic_yaw(),
             _ => None,
         }
     }
@@ -313,6 +336,8 @@ impl ModuleSettings {
             Self::Orbital(_) => ModuleKind::Orbital,
             Self::Milkdrop(_) => ModuleKind::Milkdrop,
             Self::Cymatics(_) => ModuleKind::Cymatics,
+            Self::ParticleWaves(_) => ModuleKind::ParticleWaves,
+            Self::SpectralBloom(_) => ModuleKind::SpectralBloom,
             Self::Resonance(_) => ModuleKind::Resonance,
             Self::Rings(_) => ModuleKind::Rings,
             Self::Cylinder(_) => ModuleKind::Cylinder,
@@ -338,7 +363,7 @@ pub struct PaneState {
     pub instance_id: String,
     pub kind: ModuleKind,
     #[serde(deserialize_with = "decode_sections")]
-    pub sections: [usize; 16],
+    pub sections: [usize; 18],
     #[serde(default)]
     pub orbital_inspector_version: u8,
     #[serde(default)]
@@ -351,14 +376,14 @@ pub struct PaneState {
 // Only complete known legacy sets are upgraded; malformed sets still fail validation.
 fn decode_sections<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<[usize; 16], D::Error> {
+) -> Result<[usize; 18], D::Error> {
     let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
-    if !(6..=16).contains(&values.len()) {
+    if !(6..=18).contains(&values.len()) {
         return Err(serde::de::Error::custom(
-            "expected six to sixteen module sections",
+            "expected six to eighteen module sections",
         ));
     }
-    let mut sections = [0; 16];
+    let mut sections = [0; 18];
     sections[..values.len()].copy_from_slice(&values);
     Ok(sections)
 }
@@ -367,7 +392,7 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<ModuleSettings>, D::Error> {
     let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
     let legacy_len = settings.len();
-    if (6..=15).contains(&legacy_len)
+    if (6..=17).contains(&legacy_len)
         && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
             settings
                 .iter()
@@ -415,7 +440,15 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
         if legacy_len <= 14 {
             settings.push(ModuleSettings::Milkdrop(Box::default()));
         }
-        settings.push(ModuleSettings::Cymatics(Box::default()));
+        if legacy_len <= 15 {
+            settings.push(ModuleSettings::Cymatics(Box::default()));
+        }
+        if legacy_len <= 16 {
+            settings.push(ModuleSettings::ParticleWaves(Box::default()));
+        }
+        settings.push(ModuleSettings::SpectralBloom(Box::new(
+            particle_waves::Settings::spectral_bloom(),
+        )));
     }
     Ok(settings)
 }
@@ -446,6 +479,7 @@ pub enum SettingsSection {
     Orbs,
     Rendering,
     Presets,
+    Feedback,
 }
 
 impl SettingsSection {
@@ -469,6 +503,7 @@ impl SettingsSection {
             Self::Orbs => "Orbs",
             Self::Rendering => "Rendering",
             Self::Presets => "Presets",
+            Self::Feedback => "Feedback",
         }
     }
 }
@@ -491,6 +526,7 @@ impl SettingsSection {
             Self::Orbs => Icon::Sphere,
             Self::Rendering => Icon::Palette,
             Self::Presets => Icon::Surface,
+            Self::Feedback => Icon::Rings,
         }
     }
 }
@@ -536,6 +572,12 @@ impl ModulePane {
             ModuleKind::Milkdrop => {
                 ModuleSettings::Milkdrop(Box::new(self.milkdrop.settings_snapshot()))
             }
+            ModuleKind::SpectralBloom => {
+                ModuleSettings::SpectralBloom(Box::new(self.spectral_bloom.settings_snapshot()))
+            }
+            ModuleKind::ParticleWaves => {
+                ModuleSettings::ParticleWaves(Box::new(self.particle_waves.settings_snapshot()))
+            }
             ModuleKind::Cymatics => {
                 ModuleSettings::Cymatics(Box::new(self.cymatics.settings_snapshot()))
             }
@@ -570,6 +612,8 @@ impl ModulePane {
             ModuleSettings::Strata(settings) => self.strata.apply_settings(settings),
             ModuleSettings::Flux(settings) => self.flux.apply_settings(settings),
             ModuleSettings::Cymatics(settings) => self.cymatics.apply_settings(settings),
+            ModuleSettings::SpectralBloom(settings) => self.spectral_bloom.apply_settings(settings),
+            ModuleSettings::ParticleWaves(settings) => self.particle_waves.apply_settings(settings),
             ModuleSettings::Orbital(settings) => self.orbital.apply_settings(settings),
             ModuleSettings::Milkdrop(settings) => self.milkdrop.apply_settings(settings),
             ModuleSettings::Resonance(settings) => self.resonance.apply_settings(settings),
@@ -611,6 +655,8 @@ impl ModulePane {
                 ModuleSettings::Orbital(Box::new(self.orbital.settings_snapshot())),
                 ModuleSettings::Milkdrop(Box::new(self.milkdrop.settings_snapshot())),
                 ModuleSettings::Cymatics(Box::new(self.cymatics.settings_snapshot())),
+                ModuleSettings::ParticleWaves(Box::new(self.particle_waves.settings_snapshot())),
+                ModuleSettings::SpectralBloom(Box::new(self.spectral_bloom.settings_snapshot())),
             ],
         }
     }
@@ -682,6 +728,8 @@ impl ModulePane {
             orbital: Orbital::default(),
             milkdrop: Milkdrop::default(),
             cymatics: Cymatics::default(),
+            particle_waves: ParticleWaves::default(),
+            spectral_bloom: ParticleWaves::spectral_bloom(),
             spectrum: Spectrum::default(),
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
@@ -690,7 +738,7 @@ impl ModulePane {
             veroni: Veroni::default(),
             strata: Strata::default(),
             flux: Flux::default(),
-            active_sections: [0; 16],
+            active_sections: [0; 18],
             inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
@@ -706,6 +754,8 @@ impl ModulePane {
         self.rings.clear();
         self.resonance.clear();
         self.cymatics.clear();
+        self.particle_waves.clear();
+        self.spectral_bloom.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -722,6 +772,8 @@ impl ModulePane {
         self.rings.clear();
         self.resonance.clear();
         self.cymatics.clear();
+        self.particle_waves.clear();
+        self.spectral_bloom.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -757,6 +809,8 @@ impl ModulePane {
     pub(crate) fn reset_settings(&mut self) {
         match self.kind {
             ModuleKind::Cymatics => self.cymatics.reset_settings(),
+            ModuleKind::ParticleWaves => self.particle_waves.reset_settings(),
+            ModuleKind::SpectralBloom => self.spectral_bloom.reset_settings(),
             ModuleKind::Orbital => self.orbital.reset_settings(),
             ModuleKind::Milkdrop => self.milkdrop.reset_settings(),
             ModuleKind::Resonance => self.resonance.reset_settings(),
@@ -1005,6 +1059,8 @@ impl ModulePane {
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         match self.kind {
             ModuleKind::Cymatics => self.cymatics.controls(ui),
+            ModuleKind::ParticleWaves => self.particle_waves.controls(ui),
+            ModuleKind::SpectralBloom => self.spectral_bloom.controls(ui),
             ModuleKind::Orbital => self.orbital.controls(ui),
             ModuleKind::Milkdrop => self.milkdrop.controls(ui),
             ModuleKind::Resonance => self.resonance.controls(ui),
@@ -1058,6 +1114,10 @@ impl ModulePane {
                 &[Geometry, Frequency, Response, Appearance, Camera]
             }
             ModuleKind::Cymatics => &[Geometry, Particles, Response, Appearance, Flow, Camera],
+            ModuleKind::ParticleWaves => &[Geometry, Particles, Response, Flow, Appearance, Camera],
+            ModuleKind::SpectralBloom => &[
+                Geometry, Particles, Response, Flow, Feedback, Appearance, Camera,
+            ],
             ModuleKind::Orbital => &[Particles, Orbs, Response, Camera, Rendering],
             ModuleKind::Milkdrop => &[Presets, Flow, Appearance, Response, Rendering],
             ModuleKind::Resonance => &[Geometry, Flow, Frequency, Response, Appearance, Camera],
@@ -1103,6 +1163,8 @@ impl ModulePane {
                 ModuleKind::Sphere => self.sphere.ingest(frame, time),
                 ModuleKind::Waterfall => self.waterfall.ingest(frame, time),
                 ModuleKind::Spectrogram => self.spectrogram.ingest(frame, time),
+                ModuleKind::ParticleWaves => self.particle_waves.ingest(frame, time),
+                ModuleKind::SpectralBloom => self.spectral_bloom.ingest(frame, time),
                 _ => {}
             }
         }
@@ -1145,6 +1207,12 @@ impl ModulePane {
         if self.kind != ModuleKind::Cymatics {
             self.cymatics.release_if_inactive();
         }
+        if self.kind != ModuleKind::SpectralBloom {
+            self.spectral_bloom.release_if_inactive();
+        }
+        if self.kind != ModuleKind::ParticleWaves {
+            self.particle_waves.release_if_inactive();
+        }
         if self.kind != ModuleKind::Orbital {
             self.orbital.release_if_inactive();
         }
@@ -1155,6 +1223,12 @@ impl ModulePane {
         match self.kind {
             ModuleKind::Milkdrop => self.milkdrop.draw(ui, rect, frame, now, live, frozen),
             ModuleKind::Cymatics => self.cymatics.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::SpectralBloom => {
+                self.spectral_bloom.draw(ui, rect, frame, theme, now, live)
+            }
+            ModuleKind::ParticleWaves => {
+                self.particle_waves.draw(ui, rect, frame, theme, now, live)
+            }
             ModuleKind::Orbital => self.orbital.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Resonance => self.resonance.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Rings => self.rings.draw(ui, rect, frame, theme, now, live),
@@ -1199,7 +1273,11 @@ impl ModulePane {
         if !live
             && !matches!(
                 self.kind,
-                ModuleKind::Orbital | ModuleKind::Milkdrop | ModuleKind::Cymatics
+                ModuleKind::Orbital
+                    | ModuleKind::Milkdrop
+                    | ModuleKind::Cymatics
+                    | ModuleKind::ParticleWaves
+                    | ModuleKind::SpectralBloom
             )
         {
             ui.painter().text(

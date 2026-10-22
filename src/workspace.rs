@@ -1006,6 +1006,8 @@ mod tests {
                     && entry.get("Orbital").is_none()
                     && entry.get("Milkdrop").is_none()
                     && entry.get("Cymatics").is_none()
+                    && entry.get("ParticleWaves").is_none()
+                    && entry.get("SpectralBloom").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1043,6 +1045,8 @@ mod tests {
                     && entry.get("Orbital").is_none()
                     && entry.get("Milkdrop").is_none()
                     && entry.get("Cymatics").is_none()
+                    && entry.get("ParticleWaves").is_none()
+                    && entry.get("SpectralBloom").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1074,6 +1078,8 @@ mod tests {
                     && entry.get("Orbital").is_none()
                     && entry.get("Milkdrop").is_none()
                     && entry.get("Cymatics").is_none()
+                    && entry.get("ParticleWaves").is_none()
+                    && entry.get("SpectralBloom").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1098,6 +1104,8 @@ mod tests {
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
                     && s.get("Cymatics").is_none()
+                    && s.get("ParticleWaves").is_none()
+                    && s.get("SpectralBloom").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
             pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
@@ -1135,6 +1143,8 @@ mod tests {
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
                     && s.get("Cymatics").is_none()
+                    && s.get("ParticleWaves").is_none()
+                    && s.get("SpectralBloom").is_none()
             });
             for settings in pane["settings"].as_array_mut().unwrap() {
                 if let Some(sphere) = settings.get_mut("Sphere") {
@@ -1172,6 +1182,8 @@ mod tests {
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
                     && s.get("Cymatics").is_none()
+                    && s.get("ParticleWaves").is_none()
+                    && s.get("SpectralBloom").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(12);
             pane["macros"]["banks"][11][0]["depth"] = 0.6.into();
@@ -1211,6 +1223,8 @@ mod tests {
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
                     && s.get("Cymatics").is_none()
+                    && s.get("ParticleWaves").is_none()
+                    && s.get("SpectralBloom").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(11);
             pane["macros"]["banks"][10][0]["depth"] = 0.7.into();

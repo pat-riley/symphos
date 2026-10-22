@@ -549,10 +549,11 @@ mod tests {
         let mut json = serde_json::to_value(&old).unwrap();
         json["sections"].as_array_mut().unwrap().truncate(15);
         json["macros"]["banks"].as_array_mut().unwrap().truncate(15);
-        json["settings"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|v| v.get("Cymatics").is_none());
+        json["settings"].as_array_mut().unwrap().retain(|v| {
+            v.get("Cymatics").is_none()
+                && v.get("ParticleWaves").is_none()
+                && v.get("SpectralBloom").is_none()
+        });
         let upgraded: PaneState = serde_json::from_value(json).unwrap();
         assert_eq!(old, upgraded);
     }
