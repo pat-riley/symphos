@@ -46,7 +46,11 @@ fn thirteen_component_projects_upgrade_without_changing_existing_settings() {
     let original = ModulePane::new(ModuleKind::Resonance).snapshot();
     let mut value = serde_json::to_value(&original).unwrap();
     value["settings"].as_array_mut().unwrap().retain(|s| {
-        s.get("Orbital").is_none() && s.get("Milkdrop").is_none() && s.get("Cymatics").is_none()
+        s.get("Orbital").is_none()
+            && s.get("Milkdrop").is_none()
+            && s.get("Cymatics").is_none()
+            && s.get("ParticleWaves").is_none()
+            && s.get("SpectralBloom").is_none()
     });
     value["sections"].as_array_mut().unwrap().truncate(13);
     value["macros"]["banks"]

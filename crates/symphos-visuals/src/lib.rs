@@ -4,6 +4,7 @@
 pub mod cymatics;
 pub mod cymatics_gpu;
 mod gpu;
+pub mod particle_waves;
 pub use gpu::{Library, OrbitalGpu};
 
 /// Aligned shader ABI; each row is a WGSL vec4. Explicit rows avoid Rust/WGSL
@@ -81,6 +82,9 @@ mod tests {
     fn shaders_validate_without_a_gpu() {
         for code in [
             include_str!("cymatics.wgsl"),
+            include_str!("particle_waves.wgsl"),
+            include_str!("spectral_bloom_feedback.wgsl"),
+            include_str!("particle_waves_blit.wgsl"),
             include_str!("cymatics_blit.wgsl"),
             concat!(
                 include_str!("orbital.wgsl"),

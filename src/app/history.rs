@@ -17,7 +17,7 @@ impl PartialEq for Snapshot {
                 macros.open = false;
             }
             for pane in &mut state.panes {
-                pane.sections = [0; 16];
+                pane.sections.fill(0);
                 if let Some(macros) = &mut pane.macros {
                     macros.open = false;
                 }
@@ -100,7 +100,7 @@ impl SymphosApp {
             macros.open = false;
         }
         for pane in &mut current.panes {
-            pane.sections = [0; 16];
+            pane.sections.fill(0);
             if let Some(macros) = &mut pane.macros {
                 macros.open = false;
             }

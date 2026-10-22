@@ -58,14 +58,14 @@ impl Default for Slot {
 pub struct State {
     pub open: bool,
     #[serde(deserialize_with = "decode_banks")]
-    pub banks: [[Slot; 12]; 16],
+    pub banks: [[Slot; 12]; 18],
 }
 // Preserve older component banks when adding new primitives.
-fn decode_banks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[[Slot; 12]; 16], D::Error> {
+fn decode_banks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[[Slot; 12]; 18], D::Error> {
     let banks = Vec::<[Slot; 12]>::deserialize(d)?;
-    if !(9..=16).contains(&banks.len()) {
+    if !(9..=18).contains(&banks.len()) {
         return Err(serde::de::Error::custom(
-            "expected nine to sixteen macro banks",
+            "expected nine to eighteen macro banks",
         ));
     }
     let mut result = std::array::from_fn(|_| std::array::from_fn(|_| Slot::default()));
@@ -296,7 +296,11 @@ pub fn inspector_indicators(
 fn field<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut value = value.as_object()?.values().next()?;
     for key in path.split('.') {
-        value = value.get(key)?;
+        value = if value.is_array() {
+            value.get(key.parse::<usize>().ok()?)?
+        } else {
+            value.get(key)?
+        };
     }
     Some(value)
 }
@@ -334,7 +338,12 @@ fn edit_field(document: &mut serde_json::Value, path: &str, value: f64) -> bool 
         return false;
     };
     for key in path.split('.') {
-        let Some(next) = node.get_mut(key) else {
+        let next = if node.is_array() {
+            key.parse::<usize>().ok().and_then(|i| node.get_mut(i))
+        } else {
+            node.get_mut(key)
+        };
+        let Some(next) = next else {
             return false;
         };
         node = next;
