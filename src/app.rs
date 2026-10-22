@@ -1508,6 +1508,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             toggle.widget_info(|| egui::WidgetInfo::labeled(
                 egui::WidgetType::Button, true, "Toggle component browser",
             ));
+            #[cfg(test)]
+            ui.data_mut(|data| {
+                data.insert_temp(egui::Id::new("test-component-browser-toggle"), toggle.rect);
+            });
             if toggle.clicked() {
                 self.manager.library_open = !self.manager.library_open;
             }
@@ -2522,6 +2526,16 @@ mod workspace_interaction_tests {
         output
     }
 
+    fn component_browser_toggle(ctx: &egui::Context) -> Pos2 {
+        // Linux has an in-window Menu button before +; macOS uses its native
+        // menu bar. Read the actual response bounds instead of guessing a pixel.
+        ctx.data(|data| {
+            data.get_temp::<Rect>(egui::Id::new("test-component-browser-toggle"))
+                .expect("component browser toggle was rendered")
+                .center()
+        })
+    }
+
     #[test]
     fn component_browser_resize_keeps_panes_and_inspector_and_resets_on_double_click() {
         let mut app = app();
@@ -2553,7 +2567,7 @@ mod workspace_interaction_tests {
                 .library_width,
             380.0
         );
-        let toggle = Pos2::new(29.0, 29.0);
+        let toggle = component_browser_toggle(&ctx);
         for expected in [false, true] {
             frame(
                 &mut app,
@@ -2769,7 +2783,7 @@ mod workspace_interaction_tests {
         assert!(!app.signal_ui.lock().unwrap().show_signals);
         assert!(app.scene_macros.open);
         workspace_frame(&mut app, &ctx, now, vec![]);
-        click(&mut app, Pos2::new(29.0, 29.0));
+        click(&mut app, component_browser_toggle(&ctx));
         assert!(app.manager.library_open);
         workspace_frame(&mut app, &ctx, now, vec![]);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
