@@ -443,8 +443,8 @@ mod tests {
     #[test]
     fn audio_window_keeps_stereo_and_silences_disconnect() {
         let f = crate::analysis::AnalysisFrame {
-            waveform_left: vec![0.25; 2400],
-            waveform_right: vec![-0.5; 2400],
+            waveform_left: vec![0.25; 2400].into(),
+            waveform_right: vec![-0.5; 2400].into(),
             ..Default::default()
         };
         let pcm = audio_window(&f, true, 2.);

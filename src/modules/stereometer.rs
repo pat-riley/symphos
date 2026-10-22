@@ -894,8 +894,8 @@ mod tests {
                 assert!(vertices.iter().all(|vertex| vertex.pos.is_finite()));
             }
         }
-        frame.waveform_left.clear();
-        frame.waveform_right.clear();
+        frame.waveform_left = Default::default();
+        frame.waveform_right = Default::default();
         let meter = Stereometer::default();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             meter.draw(

@@ -75,7 +75,8 @@ mod tests {
             bins: vec![crate::analysis::FrequencyBin {
                 magnitude: 0.5,
                 ..Default::default()
-            }],
+            }]
+            .into(),
             ..Default::default()
         };
         for i in 0..1500 {
@@ -93,7 +94,7 @@ mod tests {
         let mut history = CaptureHistory::default();
         let frame = AnalysisFrame {
             sequence: 1,
-            bins: vec![Default::default()],
+            bins: vec![Default::default()].into(),
             ..Default::default()
         };
         history.reset(1);

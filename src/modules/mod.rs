@@ -1628,7 +1628,7 @@ mod tests {
         };
         pane.toggle_freeze(&frame, now);
         frame.sequence = 43;
-        frame.waveform_left.fill(1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_left).fill(1.0);
         assert_eq!(pane.frozen.as_ref().unwrap().frame.sequence, 42);
         assert_eq!(pane.frozen.as_ref().unwrap().frame.waveform_left[0], 0.0);
         assert!(!other.is_frozen());
@@ -1702,8 +1702,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let before = render(&mut pane, &frame, true);
-        frame.waveform_left.fill(1.0);
-        frame.waveform_right.fill(-1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_left).fill(1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_right).fill(-1.0);
         let after = render(&mut pane, &frame, false);
         assert_eq!(before, after);
     }

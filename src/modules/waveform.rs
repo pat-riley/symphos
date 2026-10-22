@@ -973,7 +973,7 @@ mod tests {
         let theme = AppTheme::default();
         let frame = AnalysisFrame {
             waveform_left: (0..24000).map(|i| (i as f32 * 0.01).sin() * 0.8).collect(),
-            waveform_right: vec![0.0; 24000],
+            waveform_right: vec![0.0; 24000].into(),
             ..Default::default()
         };
         for look in super::super::retro::Look::ALL {
@@ -1054,16 +1054,16 @@ mod tests {
             ..Waveform::default()
         };
         let mut frame = AnalysisFrame {
-            waveform_left: vec![0.1; 512],
-            waveform_right: vec![0.2; 512],
+            waveform_left: vec![0.1; 512].into(),
+            waveform_right: vec![0.2; 512].into(),
             ..AnalysisFrame::default()
         };
         assert!((waveform.display_gain(&frame, 0..512) - 4.75).abs() < 0.001);
         waveform.auto_scale = false;
         assert_eq!(waveform.display_gain(&frame, 0..512), 3.0);
         waveform.auto_scale = true;
-        frame.waveform_left.fill(0.0);
-        frame.waveform_right.fill(0.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_left).fill(0.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_right).fill(0.0);
         assert_eq!(waveform.display_gain(&frame, 0..512), 100.0);
     }
 
@@ -1072,7 +1072,7 @@ mod tests {
         let context = egui::Context::default();
         let frame = AnalysisFrame {
             waveform_left: (0..24_000).map(|i| (i as f32 * 0.2).sin()).collect(),
-            waveform_right: vec![0.0; 24_000],
+            waveform_right: vec![0.0; 24_000].into(),
             ..AnalysisFrame::default()
         };
         for style in [TraceStyle::Line, TraceStyle::Filled] {
@@ -1184,7 +1184,7 @@ mod tests {
             waveform_left: (0..24_000)
                 .map(|i| ((i as f32 - 0.5) * std::f32::consts::TAU / 48.0).sin())
                 .collect(),
-            waveform_right: vec![0.0; 24_000],
+            waveform_right: vec![0.0; 24_000].into(),
             ..AnalysisFrame::default()
         };
         let mut waveform = Waveform {
@@ -1225,7 +1225,7 @@ mod tests {
             ..Waveform::default()
         };
         assert!(!waveform.window(&frame).1);
-        frame.waveform_left.clear();
+        frame.waveform_left = Default::default();
         assert_eq!(waveform.window(&frame), (0..0, false));
     }
 
@@ -1265,8 +1265,8 @@ mod tests {
     #[test]
     fn channels_return_left_right_mid_and_side_with_standard_scaling() {
         let frame = AnalysisFrame {
-            waveform_left: vec![0.8],
-            waveform_right: vec![0.2],
+            waveform_left: vec![0.8].into(),
+            waveform_right: vec![0.2].into(),
             ..AnalysisFrame::default()
         };
         let mut waveform = Waveform {

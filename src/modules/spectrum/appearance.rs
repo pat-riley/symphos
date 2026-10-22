@@ -336,7 +336,8 @@ mod tests {
                     ..Default::default()
                 };
                 257
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         let mut spectrum = Spectrum::default();

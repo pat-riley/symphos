@@ -26,6 +26,20 @@ history, and virtual time are unchanged. One hundred requests for a dense
 the cached `Arc<Mesh>` after one initial build. This excludes tessellation and
 GPU drawing; it is not a whole-frame speedup of that magnitude.
 
+## Shared analysis snapshots
+
+Published PCM, FFT bins, and logarithmic bands now use immutable shared buffers.
+Cloning a snapshot for a pane no longer allocates/copies those arrays, and an
+unused second per-frame snapshot in UI memory was removed. A regression test
+checks shared buffer identity and that later analysis cannot alter old samples.
+
+For half-second stereo history and an 8192-point FFT, 20,000 snapshot clones
+averaged 6.446 → 0.029 microseconds at 48 kHz and 13.275 → 0.028 microseconds at
+192 kHz. Analysis plus publishing 1,000 fresh frames measured 121.799 → 127.404
+microseconds at 48 kHz and 188.304 → 195.848 at 192 kHz; publishing pays a small
+conversion cost once, while every consumer avoids another full copy. These are
+microbenchmarks, not a claim about overall frame rate.
+
 ## 1080p output paths
 
 The hardware test renders all 16 default components into the recording texture
@@ -92,6 +106,13 @@ GPU execution is explicitly excluded from those UI CPU counters.
   on the requested frame grid. A GPU regression test verifies the live scheduler
   at 60 and 120 FPS with late wakeups and skipped frames, including the hidden-pane
   fallback's protection against duplicate frames.
+- A second 53.54-second graphical capture verified the corrected timestamp grid:
+  all 3,092 frames landed on 60 FPS ticks within container timestamp precision.
+  Three pauses accounted for 121 missed ticks, exactly matching the recorder's
+  reported loss count; no audio samples were dropped. Video and audio end times
+  differed by less than 0.7 ms. The decoded Waterfall frame and non-silent stereo
+  audio were inspected. This validates synchronization and loss reporting, not
+  a claim that the live desktop never stalls.
 - The Cymatics GPU test passed modal response, audio reaction, edge recycling,
   and paused-state checks after adding configurable grain lifecycle parameters.
 

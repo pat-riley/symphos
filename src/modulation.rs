@@ -718,7 +718,8 @@ mod tests {
                 frequency_hz: hz,
                 magnitude,
                 dbfs: -10.0,
-            }],
+            }]
+            .into(),
             mix_rms: magnitude,
             rms: [magnitude; 2],
             ..Default::default()
@@ -793,7 +794,7 @@ mod tests {
         f.features = Some(std::sync::Arc::new(AudioFeatures::new(
             &f.bins, f.mix_rms, f.rms,
         )));
-        f.bins.clear(); // cached snapshot supplies identical controls without another spectrum scan
+        f.bins = Default::default(); // cached snapshot supplies identical controls without another spectrum scan
         settle(&mut m, &f, &s);
         assert!(m.value(Target::Brightness) > 0.8);
         for t in [
@@ -930,7 +931,7 @@ mod tests {
         settle(&mut m, &f, &s);
         assert!(m.value(Target::Brightness) > 0.9);
         f.capture_epoch += 1;
-        f.bins.clear();
+        f.bins = Default::default();
         f.mix_rms = 0.0;
         m.advance(&f, true, &s, 0.01, 7);
         assert_eq!(m.value(Target::Brightness), 0.0);

@@ -541,7 +541,7 @@ fn selected_signal(frame: &AnalysisFrame, channel: ScopeChannel) -> Vec<f32> {
     frame
         .waveform_left
         .iter()
-        .zip(&frame.waveform_right)
+        .zip(frame.waveform_right.iter())
         .map(|(&left, &right)| match channel {
             ScopeChannel::Left => left,
             ScopeChannel::Right => right,
@@ -930,8 +930,8 @@ mod tests {
     #[test]
     fn channels_use_standard_mid_side_scaling() {
         let frame = AnalysisFrame {
-            waveform_left: vec![1.0, -0.5],
-            waveform_right: vec![-1.0, 0.5],
+            waveform_left: vec![1.0, -0.5].into(),
+            waveform_right: vec![-1.0, 0.5].into(),
             ..AnalysisFrame::default()
         };
         assert_eq!(selected_signal(&frame, ScopeChannel::Left), [1.0, -0.5]);
@@ -971,8 +971,8 @@ mod tests {
         let wave = sine(220.0, 48_000, 0.5);
         let frame = AnalysisFrame {
             sequence: 1,
-            waveform_left: wave.clone(),
-            waveform_right: wave,
+            waveform_left: wave.clone().into(),
+            waveform_right: wave.into(),
             ..AnalysisFrame::default()
         };
         for sync_mode in SyncMode::ALL {

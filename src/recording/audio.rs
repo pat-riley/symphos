@@ -8,6 +8,8 @@ use std::{
     },
     time::Instant,
 };
+// The first encoder backend is native macOS; other platforms keep the tap API.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug)]
 pub struct Chunk {
     pub samples: Vec<[f32; 2]>,

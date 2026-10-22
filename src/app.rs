@@ -1974,7 +1974,6 @@ impl eframe::App for SymphosApp {
                 self.signal_ui.clone(),
             )
         });
-        ui.data_mut(|d| d.insert_temp(egui::Id::new("performance-analysis"), snapshot.clone()));
         #[cfg(not(target_os = "macos"))]
         {
             // Compute availability outside input_mut to avoid re-locking egui input.

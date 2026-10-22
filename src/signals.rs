@@ -912,7 +912,8 @@ mod tests {
                 frequency_hz: hz,
                 magnitude: amplitude,
                 dbfs: 20.0 * amplitude.max(1e-9).log10(),
-            }],
+            }]
+            .into(),
             mix_rms: amplitude,
             rms: [amplitude; 2],
             ..Default::default()
@@ -1357,15 +1358,19 @@ mod worker_tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        let wait_for = |predicate: &dyn Fn(&Snapshot) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !predicate(&runtime.snapshot.load()) {
+                assert!(Instant::now() < deadline, "signal worker did not advance");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
         let before = runtime.snapshot.load().time;
-        std::thread::sleep(Duration::from_millis(40));
-        assert!(runtime.snapshot.load().time > before);
+        wait_for(&|snapshot| snapshot.time > before);
         runtime.connected.store(false, Ordering::Relaxed);
-        std::thread::sleep(Duration::from_millis(100));
-        assert_ne!(runtime.snapshot.load().values[&1].status, Status::Live);
+        wait_for(&|snapshot| snapshot.values[&1].status != Status::Live);
         runtime.connected.store(true, Ordering::Relaxed);
-        std::thread::sleep(Duration::from_millis(40));
-        assert_eq!(runtime.snapshot.load().values[&1].status, Status::Live);
+        wait_for(&|snapshot| snapshot.values[&1].status == Status::Live);
     }
 }
 

@@ -3,7 +3,7 @@ use crate::analysis::AnalysisFrame;
 
 pub(super) fn energy(frame: &AnalysisFrame, sensitivity: f32, gate_db: f32) -> [f32; 4] {
     let mut powers = [0.0_f32; 3];
-    for bin in &frame.bins {
+    for bin in frame.bins.iter() {
         if !bin.magnitude.is_finite() || bin.frequency_hz < 20.0 || bin.frequency_hz > 20_000.0 {
             continue;
         }
