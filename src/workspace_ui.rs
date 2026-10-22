@@ -501,7 +501,9 @@ impl Manager {
         }
         egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for kind in [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings, ModuleKind::Spectrum, ModuleKind::Waveform, ModuleKind::Spectrogram, ModuleKind::Stereometer, ModuleKind::Oscilloscope, ModuleKind::Veroni, ModuleKind::Strata, ModuleKind::Flux, ModuleKind::Resonance, ModuleKind::Orbital, ModuleKind::Milkdrop] {
+            // Keep spatial instruments first, then include every registered component.
+            let spatial = [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings];
+            for kind in spatial.into_iter().chain(ModuleKind::ALL.into_iter().filter(|kind| !spatial.contains(kind))) {
                 if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
                     egui::Frame::new().inner_margin(12).show(ui, |ui| {
                         ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));
@@ -744,6 +746,25 @@ pub fn drop_hint(ui: &egui::Ui, rect: Rect, message: &str, accent: Color32) {
 mod tests {
     use super::*;
     use eframe::egui::Pos2;
+    #[test]
+    fn component_drawer_exposes_every_registered_visualizer() {
+        let ctx = egui::Context::default();
+        let mut manager = Manager::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 1800.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| {
+                manager.library(ui, rect, &AppTheme::default(), true);
+            },
+        );
+        for kind in ModuleKind::ALL {
+            assert_eq!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == kind.label())).count(), 1, "{} is available exactly once", kind.label());
+        }
+        output.textures_delta.clear();
+    }
     #[test]
     fn preset_navigation_wraps_within_the_filtered_category() {
         let presets = workspace::factory_presets();

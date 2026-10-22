@@ -1,6 +1,8 @@
 //! GPU-only visualizer library. The host owns audio capture, UI, signal mapping,
 //! persistence and clocks. Instances own simulation/history; pipelines are shared.
 //! No UI dependency and no CPU particle readback in the interactive render path.
+pub mod cymatics;
+pub mod cymatics_gpu;
 mod gpu;
 pub use gpu::{Library, OrbitalGpu};
 
@@ -78,6 +80,8 @@ mod tests {
     #[test]
     fn shaders_validate_without_a_gpu() {
         for code in [
+            include_str!("cymatics.wgsl"),
+            include_str!("cymatics_blit.wgsl"),
             concat!(
                 include_str!("orbital.wgsl"),
                 "\n",

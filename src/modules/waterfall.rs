@@ -99,6 +99,7 @@ pub struct Waterfall {
     axes: bool,
     show_gizmo: bool,
     surface_walls: bool,
+    surface_floor: bool,
     line_width: f32,
     line_spacing: usize,
     y_line_width: f32,
@@ -148,6 +149,8 @@ guides: bool => guides,
 axes: bool => axes,
 show_gizmo: bool => show_gizmo,
 surface_walls: bool => surface_walls,
+#[serde(default)]
+surface_floor: bool => surface_floor,
 line_width: f32 => line_width,
 line_spacing: usize => line_spacing,
 y_line_width: f32 => y_line_width,
@@ -187,8 +190,9 @@ impl Default for Waterfall {
             floor_grid: true,
             guides: true,
             axes: true,
-            show_gizmo: true,
+            show_gizmo: false,
             surface_walls: true,
+            surface_floor: false,
             line_width: 1.1,
             line_spacing: 1,
             y_line_width: 1.1,
@@ -515,6 +519,7 @@ impl Waterfall {
                     RenderMode::Surface => {
                         ui.checkbox(&mut self.grid, "Surface mesh").help_text("Draw subtle grid lines over the terrain. Also hidden when Show guides is off.");
                         ui.checkbox(&mut self.surface_walls, "Base walls").help_text("Close the terrain's perimeter down to the fixed floor. Turn off for a floating sheet.");
+                        ui.checkbox(&mut self.surface_floor, "Base floor").help_text("Fill the bottom of the terrain with a flat surface at zero height. Independent of Base walls and the reference Floor grid; visible from underneath or through an open perimeter.");
                     }
                     RenderMode::Lines => {
                         ui.push_id("x-line-width", |ui| {
@@ -815,6 +820,8 @@ impl Waterfall {
                     cell_view,
                     self.guides && self.grid,
                     self.surface_walls,
+                    self.surface_floor
+                        .then_some(self.view_direction()[1] >= 0.0),
                 ) {
                     let grid_color = mix(theme.background, theme.foreground, 0.22);
                     for (triangle, edge) in face.triangles() {
@@ -939,14 +946,6 @@ impl Waterfall {
                 format!("{:.0} dBFS", settings.ceiling),
                 theme.muted,
             );
-            if rect.width() > 380.0 {
-                label(
-                    &painter,
-                    rect.left_top() + Vec2::new(12.0, 10.0),
-                    "FREQUENCY × TIME · HEIGHT = LEVEL",
-                    theme.muted,
-                );
-            }
             label(
                 &painter,
                 rect.left_bottom() + Vec2::new(12.0, -18.0),
@@ -1060,13 +1059,20 @@ impl SurfaceFace {
 /// Within a non-planar cell, also order the two triangles by the ray's crossing
 /// direction through their shared diagonal. Grid edges travel with their own
 /// triangle, and each cell's facing walls come after its top, away walls before.
-fn surface_faces(valid: &[bool], cell_view: Vec2, grid: bool, walls: bool) -> Vec<SurfaceFace> {
+fn surface_faces(
+    valid: &[bool],
+    cell_view: Vec2,
+    grid: bool,
+    walls: bool,
+    floor_above: Option<bool>,
+) -> Vec<SurfaceFace> {
     let detail = valid.len();
     if detail < 2 {
         return Vec::new();
     }
     let floor = detail * BANDS;
-    let mut faces = Vec::with_capacity((detail - 1) * (BANDS - 1));
+    let mut faces =
+        Vec::with_capacity((detail - 1) * (BANDS - 1) * if floor_above.is_some() { 2 } else { 1 });
     let order = |row: usize, band: usize, phase| {
         [
             if cell_view.y >= 0.0 {
@@ -1102,6 +1108,22 @@ fn surface_faces(valid: &[bool], cell_view: Vec2, grid: bool, walls: bool) -> Ve
                 reverse_triangles: cell_view.x + cell_view.y > 0.0,
                 order: order(row, band, 1),
             });
+            if let Some(above) = floor_above {
+                // Keep the bottom in its own ground cell so it respects gaps
+                // and occlusion. From below it must cover the terrain and walls;
+                // from above those faces cover it instead.
+                faces.push(SurfaceFace {
+                    indices: [
+                        floor + a,
+                        floor + a + 1,
+                        floor + a + BANDS + 1,
+                        floor + a + BANDS,
+                    ],
+                    grid_edges: [false; 2],
+                    reverse_triangles: false,
+                    order: order(row, band, if above { 0 } else { 3 }),
+                });
+            }
             if walls && (row == 0 || !valid[row - 1]) {
                 wall(
                     &mut faces,
@@ -1274,12 +1296,13 @@ mod tests {
         let repeated = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
         assert!(std::sync::Arc::ptr_eq(&first, &repeated));
         let mut previous = repeated;
-        for edit in 0..5 {
+        for edit in 0..6 {
             match edit {
                 0 => waterfall.yaw += 0.5,
-                1 => waterfall.mode = RenderMode::Bars,
-                2 => waterfall.palette = Palette::Heatmap,
-                3 => plot = plot.translate(Vec2::new(10.0, 0.0)),
+                1 => waterfall.surface_floor = true,
+                2 => waterfall.mode = RenderMode::Bars,
+                3 => waterfall.palette = Palette::Heatmap,
+                4 => plot = plot.translate(Vec2::new(10.0, 0.0)),
                 _ => waterfall.history.rows[0].sequence = 2,
             }
             let next = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
@@ -1711,24 +1734,33 @@ mod tests {
                         yaw.cos() * elevation.cos() * (detail - 1) as f32 / (2.0 * length.y),
                     );
                     for walls in [false, true] {
-                        let faces = surface_faces(&vec![true; detail], view, false, walls);
-                        assert_eq!(
-                            depth_order_errors(&faces, &vertices),
-                            0,
-                            "corner {corner}, above {above}, length {length:?}, walls {walls}"
-                        );
-                        if length == Vec2::splat(1.0) && above && corner == 0 && !walls {
-                            let mut old = faces;
-                            for face in &mut old {
-                                face.reverse_triangles = false;
+                        for floor_above in [None, Some(above)] {
+                            let faces =
+                                surface_faces(&vec![true; detail], view, false, walls, floor_above);
+                            assert_eq!(
+                                depth_order_errors(&faces, &vertices),
+                                0,
+                                "corner {corner}, above {above}, length {length:?}, walls {walls}, floor {floor_above:?}"
+                            );
+                            if floor_above.is_none()
+                                && length == Vec2::splat(1.0)
+                                && above
+                                && corner == 0
+                                && !walls
+                            {
+                                let mut old = faces;
+                                for face in &mut old {
+                                    face.reverse_triangles = false;
+                                }
+                                old.sort_by(|a, b| {
+                                    let depth = |face: &SurfaceFace| {
+                                        face.indices.iter().map(|i| vertices[*i].1).sum::<f32>()
+                                            / 4.0
+                                    };
+                                    depth(a).total_cmp(&depth(b))
+                                });
+                                old_errors = depth_order_errors(&old, &vertices);
                             }
-                            old.sort_by(|a, b| {
-                                let depth = |face: &SurfaceFace| {
-                                    face.indices.iter().map(|i| vertices[*i].1).sum::<f32>() / 4.0
-                                };
-                                depth(a).total_cmp(&depth(b))
-                            });
-                            old_errors = depth_order_errors(&old, &vertices);
                         }
                     }
                 }
@@ -1741,10 +1773,73 @@ mod tests {
     }
 
     #[test]
+    fn base_floor_fills_only_valid_cells_without_requiring_walls() {
+        let valid = [true, true, false, true, true];
+        let floor_offset = valid.len() * BANDS;
+        for above in [false, true] {
+            let faces = surface_faces(&valid, Vec2::new(1.0, -1.0), false, false, Some(above));
+            let bottoms: Vec<_> = faces
+                .iter()
+                .filter(|f| f.indices.iter().all(|i| *i >= floor_offset))
+                .collect();
+            assert_eq!(bottoms.len(), 2 * (BANDS - 1));
+            assert_eq!(faces.len(), 2 * bottoms.len());
+            for face in bottoms {
+                assert_eq!(face.grid_edges, [false; 2]);
+                assert!(
+                    face.indices
+                        .iter()
+                        .all(|i| valid[(i - floor_offset) / BANDS])
+                );
+                assert_eq!(face.order[2], if above { 0 } else { 3 });
+            }
+        }
+    }
+
+    #[test]
+    fn base_floor_checkbox_roundtrips_and_older_settings_remain_open() {
+        use super::super::SettingsSection;
+        let context = egui::Context::default();
+        let now = Instant::now();
+        let mut waterfall = populated_waterfall(now);
+        let original_rows = waterfall.history.rows.len();
+        let mut old = serde_json::to_value(waterfall.settings_snapshot()).unwrap();
+        old.as_object_mut().unwrap().remove("surface_floor");
+        let old: WaterfallSettings = serde_json::from_value(old).unwrap();
+        assert!(!old.surface_floor);
+        controls_frame(
+            &mut waterfall,
+            &context,
+            SettingsSection::Appearance,
+            vec![],
+        );
+        let output = controls_frame(
+            &mut waterfall,
+            &context,
+            SettingsSection::Appearance,
+            vec![],
+        );
+        click_control(
+            &mut waterfall,
+            &context,
+            SettingsSection::Appearance,
+            text_position(&output, "Base floor"),
+        );
+        assert!(waterfall.surface_floor);
+        assert_eq!(waterfall.history.rows.len(), original_rows);
+        let settings: WaterfallSettings =
+            serde_json::from_slice(&serde_json::to_vec(&waterfall.settings_snapshot()).unwrap())
+                .unwrap();
+        let mut restored = Waterfall::default();
+        restored.apply_settings(&settings);
+        assert!(restored.surface_floor);
+    }
+
+    #[test]
     fn surface_order_retains_gaps_and_attaches_grid_edges_to_their_triangles() {
         let valid = [true, true, false, true, true];
         for view in [Vec2::new(1.0, 1.0), Vec2::new(-1.0, -1.0)] {
-            let faces = surface_faces(&valid, view, true, false);
+            let faces = surface_faces(&valid, view, true, false, None);
             assert_eq!(faces.len(), 2 * (BANDS - 1));
             for face in faces {
                 for (triangle, edge) in face.triangles() {
@@ -2456,6 +2551,7 @@ mod tests {
         let mut waterfall = Waterfall {
             pan: Vec2::new(0.2, -0.1),
             zoom: 1.5,
+            show_gizmo: true,
             ..Waterfall::default()
         };
         let render = |waterfall: &mut Waterfall, events| {
@@ -2692,6 +2788,7 @@ mod tests {
         let mut waterfall = Waterfall {
             detail: 128,
             palette: Palette::Heatmap,
+            show_gizmo: true,
             ..Waterfall::default()
         };
         let start = Instant::now();

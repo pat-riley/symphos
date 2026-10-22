@@ -13,6 +13,7 @@ use crate::{
 };
 use egui::{self, Rect};
 use std::sync::Mutex;
+mod history;
 mod midi_preview;
 
 pub type Shared = Arc<Mutex<Panel>>;
@@ -29,7 +30,7 @@ pub struct Panel {
     pub consumers: BTreeMap<u64, Vec<String>>,
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
-    history: BTreeMap<u64, std::collections::VecDeque<f32>>,
+    history: BTreeMap<u64, history::History>,
     midi_history: BTreeMap<u64, midi_preview::History>,
     last_history_time: f64,
     clipboard: Option<(Definition, bool)>,
@@ -165,10 +166,10 @@ impl Panel {
                 .retain(|id, _| self.bank.channels.iter().any(|d| d.id == *id));
             for d in &self.bank.channels {
                 let history = self.history.entry(d.id).or_default();
-                history.push_back(self.snapshot.values.get(&d.id).map_or(0.0, |s| s.value));
-                if history.len() > 96 {
-                    history.pop_front();
-                }
+                history.push(
+                    self.snapshot.time,
+                    self.snapshot.values.get(&d.id).map_or(0.0, |s| s.value),
+                );
             }
         }
         self.midi_history.retain(|id, _| {
@@ -1240,7 +1241,7 @@ fn channel_strip(
     d: &mut Definition,
     sample: &Sample,
     selected: bool,
-    history: Option<&std::collections::VecDeque<f32>>,
+    history: Option<&history::History>,
     midi: Option<(&crate::midi::Snapshot, Option<&midi_preview::History>, f64)>,
 ) -> Option<StripAction> {
     let color = channel_color(d);
@@ -1378,15 +1379,12 @@ fn channel_strip(
                 egui::Stroke::new(0.5, ui.visuals().weak_text_color().gamma_multiply(0.14)),
             );
         }
-        if let Some(history) = history
-            && history.len() > 1
-        {
+        if let Some(history) = history {
             let points: Vec<egui::Pos2> = history
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
+                .points()
+                .map(|[x, v]| {
                     egui::pos2(
-                        graph.left() + i as f32 / 95.0 * graph.width(),
+                        graph.left() + x * graph.width(),
                         if d.kind() == OutputKind::Bipolar {
                             graph.center().y - v.clamp(-2.0, 2.0) * 0.25 * graph.height()
                         } else {
@@ -1395,11 +1393,12 @@ fn channel_strip(
                     )
                 })
                 .collect();
-            ui.painter().add(egui::Shape::line(
+            ui.painter().with_clip_rect(graph).add(egui::Shape::line(
                 points.clone(),
                 egui::Stroke::new(4.0, color.gamma_multiply(0.14)),
             ));
             ui.painter()
+                .with_clip_rect(graph)
                 .add(egui::Shape::line(points, egui::Stroke::new(1.7, color)));
         }
     }
