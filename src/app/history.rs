@@ -1,11 +1,11 @@
 //! Creative undo transactions. Runtime audio, simulation and device connections
 //! never enter the journal; continuous drags and text edits form one transaction.
 use super::*;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 #[derive(Clone)]
 struct Snapshot {
-    scenes: crate::scenes::Book,
+    scenes: Arc<crate::scenes::Book>,
     current: crate::project::SceneState,
 }
 impl PartialEq for Snapshot {
@@ -32,20 +32,21 @@ impl PartialEq for Snapshot {
         // The active book entry is a cache, refreshed by Library/Save/scene
         // switching. Compare its live state instead, so refreshing that cache
         // cannot create an edit. Thumbnails and navigation are presentation.
-        self.scenes.active_scene == other.scenes.active_scene
-            && self.scenes.next_scene_id == other.scenes.next_scene_id
-            && self.scenes.scenes.len() == other.scenes.scenes.len()
-            && self
-                .scenes
-                .scenes
-                .iter()
-                .zip(&other.scenes.scenes)
-                .all(|(before, after)| {
-                    before.id == after.id
-                        && before.name == after.name
-                        && (before.id == self.scenes.active_scene
-                            || canonical(&before.state) == canonical(&after.state))
-                })
+        (Arc::ptr_eq(&self.scenes, &other.scenes)
+            || (self.scenes.active_scene == other.scenes.active_scene
+                && self.scenes.next_scene_id == other.scenes.next_scene_id
+                && self.scenes.scenes.len() == other.scenes.scenes.len()
+                && self
+                    .scenes
+                    .scenes
+                    .iter()
+                    .zip(&other.scenes.scenes)
+                    .all(|(before, after)| {
+                        before.id == after.id
+                            && before.name == after.name
+                            && (before.id == self.scenes.active_scene
+                                || canonical(&before.state) == canonical(&after.state))
+                    })))
             && canonical(&self.current) == canonical(&other.current)
     }
 }
@@ -59,8 +60,19 @@ pub(super) struct History {
     redo: Vec<Edit>,
     pending: Option<Snapshot>,
     last_input: Option<Instant>,
+    book_cache: Option<Arc<crate::scenes::Book>>,
 }
 impl History {
+    fn book_snapshot(&mut self, book: &crate::scenes::Book) -> Arc<crate::scenes::Book> {
+        if self
+            .book_cache
+            .as_ref()
+            .is_none_or(|saved| saved.as_ref() != book)
+        {
+            self.book_cache = Some(Arc::new(book.clone()));
+        }
+        self.book_cache.as_ref().unwrap().clone()
+    }
     fn finish(&mut self, after: Snapshot) {
         if let Some(before) = self.pending.take()
             && before != after
@@ -80,7 +92,7 @@ impl History {
     }
 }
 impl SymphosApp {
-    fn history_snapshot(&self) -> Snapshot {
+    fn history_snapshot(&mut self) -> Snapshot {
         let mut current = self.capture_scene();
         // Inspector navigation and dock visibility are not creative edits.
         current.selected_pane = 0;
@@ -94,7 +106,7 @@ impl SymphosApp {
             }
         }
         Snapshot {
-            scenes: self.scenes.clone(),
+            scenes: self.history.book_snapshot(&self.scenes),
             current,
         }
     }
@@ -153,7 +165,9 @@ impl SymphosApp {
     }
     fn restore_edit(&mut self, snapshot: Snapshot) {
         let scene_changed = self.scenes.active_scene != snapshot.scenes.active_scene;
-        self.scenes = snapshot.scenes;
+        if self.scenes != *snapshot.scenes {
+            self.scenes = Arc::unwrap_or_clone(snapshot.scenes);
+        }
         let mut state = snapshot.current;
         let open = self.scene_macros.open;
         if scene_changed {
@@ -224,7 +238,7 @@ mod tests {
             analysis: Default::default(),
         };
         let mut s = Snapshot {
-            scenes: crate::scenes::Book::new(state.clone()),
+            scenes: Arc::new(crate::scenes::Book::new(state.clone())),
             current: state,
         };
         s.current.analysis.gain_db = width;
@@ -246,5 +260,21 @@ mod tests {
         h.pending = Some(a);
         h.finish(b);
         assert!(!h.can_redo());
+    }
+
+    #[test]
+    fn parameter_history_shares_unchanged_books_and_preserves_renamed_history() {
+        let mut history = History::default();
+        let mut book = (*snapshot(-80.0).scenes).clone();
+        let original = history.book_snapshot(&book);
+        for _ in 0..64 {
+            assert!(Arc::ptr_eq(&original, &history.book_snapshot(&book)));
+        }
+        book.rename(book.active_scene, "Renamed scene");
+        let renamed = history.book_snapshot(&book);
+        assert!(!Arc::ptr_eq(&original, &renamed));
+        assert_eq!(original.current().unwrap().name, "Scene 1");
+        assert_eq!(renamed.current().unwrap().name, "Renamed scene");
+        assert!(Arc::ptr_eq(&renamed, &history.book_snapshot(&book)));
     }
 }

@@ -7,8 +7,9 @@ component parameters, scene changes, signal settings, macro assignments, and
 controller mappings. A continuous drag is one edit; nearby typing is grouped.
 Text fields retain their native local undo behavior while focused.
 
-The in-memory journal retains up to 64 transactions and is cleared on New/Open
-Project. It is separate from crash recovery and project saving. Device selection,
+The in-memory journal retains up to 64 transactions and shares unchanged scene
+library snapshots between edits. It is cleared on New/Open Project and is
+separate from crash recovery and project saving. Device selection,
 application preferences, pane selection, and inspector navigation are not
 creative transactions. Opening Library, refreshing scene thumbnails, and
 automatic camera rotation do not generate edits.
