@@ -10,7 +10,8 @@ Text fields retain their native local undo behavior while focused.
 The in-memory journal retains up to 64 transactions and is cleared on New/Open
 Project. It is separate from crash recovery and project saving. Device selection,
 application preferences, pane selection, and inspector navigation are not
-creative transactions. Automatic camera rotation does not generate edits.
+creative transactions. Opening Library, refreshing scene thumbnails, and
+automatic camera rotation do not generate edits.
 Restoring a parameter preserves surviving components' simulation and capture
 state. Deleting and recreating a component necessarily recreates that runtime.
 

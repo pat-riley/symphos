@@ -12,7 +12,15 @@ impl PartialEq for Snapshot {
     fn eq(&self, other: &Self) -> bool {
         let canonical = |state: &crate::project::SceneState| {
             let mut state = state.clone();
+            state.selected_pane = 0;
+            if let Some(macros) = &mut state.macros {
+                macros.open = false;
+            }
             for pane in &mut state.panes {
+                pane.sections = [0; 16];
+                if let Some(macros) = &mut pane.macros {
+                    macros.open = false;
+                }
                 for settings in &mut pane.settings {
                     if let Some(yaw) = settings.automatic_yaw() {
                         *yaw = 0.0;
@@ -21,7 +29,24 @@ impl PartialEq for Snapshot {
             }
             state
         };
-        self.scenes == other.scenes && canonical(&self.current) == canonical(&other.current)
+        // The active book entry is a cache, refreshed by Library/Save/scene
+        // switching. Compare its live state instead, so refreshing that cache
+        // cannot create an edit. Thumbnails and navigation are presentation.
+        self.scenes.active_scene == other.scenes.active_scene
+            && self.scenes.next_scene_id == other.scenes.next_scene_id
+            && self.scenes.scenes.len() == other.scenes.scenes.len()
+            && self
+                .scenes
+                .scenes
+                .iter()
+                .zip(&other.scenes.scenes)
+                .all(|(before, after)| {
+                    before.id == after.id
+                        && before.name == after.name
+                        && (before.id == self.scenes.active_scene
+                            || canonical(&before.state) == canonical(&after.state))
+                })
+            && canonical(&self.current) == canonical(&other.current)
     }
 }
 struct Edit {

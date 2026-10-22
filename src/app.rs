@@ -2257,6 +2257,38 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn library_refresh_and_inspector_navigation_do_not_consume_parameter_undo() {
+        let mut app = app();
+        app.scenes = crate::scenes::Book::new(app.capture_scene());
+        app.begin_edit(true);
+        let mut settings = app.panes[0].copy_settings();
+        crate::macros::set_many(&mut settings, &[("height".into(), 1.2)]);
+        app.panes[0].paste_settings(&settings);
+        app.finish_edit();
+
+        app.begin_edit(true);
+        app.selected_pane = 1;
+        app.scene_macros.open = false;
+        app.scene_action(crate::scenes::Action::Library);
+        app.finish_edit();
+
+        // One Undo reaches the actual parameter edit, not the Library's book cache.
+        app.undo_edit(false);
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(f64::from(0.85_f32))
+        );
+        assert_eq!(app.selected_pane, 1);
+        assert!(!app.scene_macros.open);
+        assert!(!app.history.can_undo());
+        app.undo_edit(true);
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(f64::from(1.2_f32))
+        );
+    }
+
+    #[test]
     fn automatic_camera_motion_does_not_make_edits_or_jump_on_parameter_undo() {
         let mut app = app();
         let mut settings = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
