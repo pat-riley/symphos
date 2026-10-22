@@ -23,6 +23,7 @@ unsafe extern "C" {
         w: u32,
         h: u32,
         time: f64,
+        fps: u32,
         pcm: *const f32,
         count: usize,
         controls: *const f32,
@@ -90,6 +91,7 @@ impl Engine {
                 r.size[0],
                 r.size[1],
                 r.time,
+                r.fps.clamp(1, 240),
                 r.pcm.as_ptr(),
                 r.pcm.len() / 2,
                 r.controls.as_ptr(),
@@ -120,6 +122,7 @@ pub struct Request {
     pub preset: Arc<Preset>,
     pub size: [u32; 2],
     pub time: f64,
+    pub fps: u32,
     pub pcm: Vec<f32>,
     pub controls: [f32; 32],
     pub sensitivity: f32,
@@ -285,6 +288,7 @@ mod tests {
             preset: Arc::new(preset),
             size: [640, 360],
             time: 0.,
+            fps: 60,
             pcm: (0..2048).map(|i| (i as f32 * 0.17).sin() * 0.3).collect(),
             controls: [0.; 32],
             sensitivity: 1.,
@@ -300,6 +304,41 @@ mod tests {
             .iter()
             .filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8)
             .count()
+    }
+    #[test]
+    #[ignore = "requires a real OpenGL GPU context"]
+    fn native_preset_fps_tracks_output_target() {
+        let dir = std::env::temp_dir().join(format!("symphos-milkdrop-fps-{}", std::process::id()));
+        let mut engine = Engine::new().unwrap();
+        let mut preset = super::super::preset::builtins().remove(0);
+        preset.set_scalar("fDecay", 0.);
+        preset.set_scalar("fVideoEchoAlpha", 0.);
+        preset.set_scalar("ob_a", 0.);
+        preset
+            .source
+            .push_str("\nper_frame_3=wave_a=above(fps,90);\n");
+        let mut r = request(preset);
+        engine.load(&r.preset, &dir, false, 0.).unwrap();
+        assert_eq!(
+            lit(&engine.render(&r).unwrap()),
+            0,
+            "60 FPS must reach preset equations"
+        );
+        r.fps = 120;
+        r.time += 1. / 120.;
+        assert!(
+            lit(&engine.render(&r).unwrap()) > 100,
+            "120 FPS must reach preset equations"
+        );
+        r.fps = 30;
+        r.time += 1. / 30.;
+        assert_eq!(
+            lit(&engine.render(&r).unwrap()),
+            0,
+            "changing target must update existing engines"
+        );
+        drop(engine);
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     #[ignore = "requires a real OpenGL GPU context"]
@@ -458,6 +497,7 @@ mod tests {
                 preset: Arc::new(p),
                 size: [640, 360],
                 time: 0.,
+                fps: 60,
                 pcm: (0..2048).map(|i| (i as f32 * 0.17).sin() * 0.3).collect(),
                 controls: [0.; 32],
                 sensitivity: 1.,

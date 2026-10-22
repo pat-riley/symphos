@@ -112,13 +112,14 @@ int symphos_milk_load(void* ptr,const char* source,const char* textures,int smoo
 void symphos_milk_warnings(void* ptr, char* out, size_t size) noexcept {
     message(out, size, static_cast<Instance*>(ptr)->warning);
 }
-int symphos_milk_render(void* ptr,unsigned w,unsigned h,double time,const float* pcm,size_t count,const float* controls,float sensitivity,unsigned mesh,unsigned char* rgba,char* error,size_t size) noexcept {
+int symphos_milk_render(void* ptr,unsigned w,unsigned h,double time,unsigned fps,const float* pcm,size_t count,const float* controls,float sensitivity,unsigned mesh,unsigned char* rgba,char* error,size_t size) noexcept {
     try {
         auto& p=*static_cast<Instance*>(ptr);
         p.resize(w,h);
         std::copy(controls,controls+32,p.engine->symphosControls.begin());
         p.engine->SetBeatSensitivity(sensitivity);
         p.engine->SetMeshSize(mesh,mesh*3/4);
+        p.engine->SetTargetFramesPerSecond(std::clamp(fps,1u,240u));
         p.engine->SetFrameTime(time);
         if(count) p.engine->PCM().Add(pcm,2,count);
         p.engine->RenderFrame(p.fbo);

@@ -66,7 +66,7 @@ impl ChannelMode {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnalysisSettings {
     pub fft_size: usize,
     pub window: WindowFunction,
@@ -538,12 +538,21 @@ fn run_analysis(
             analyzer = Analyzer::new(analyzer.size, analyzer.last_window);
         }
         let mut received = 0_usize;
+        let recording = crate::recording::audio::current();
+        let mut recorded = Vec::new();
         while let Ok(sample) = consumer.pop() {
+            if recording.is_some() {
+                recorded.push(sample);
+            }
             ring[write_cursor] = sample;
             write_cursor = (write_cursor + 1) % ring.len();
             available = (available + 1).min(ring.len());
             since_analysis += 1;
             received += 1;
+        }
+
+        if let Some(tap) = recording {
+            tap.submit(recorded, rate);
         }
 
         let current = settings.lock().unwrap_or_else(|e| e.into_inner()).clone();

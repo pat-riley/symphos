@@ -17,6 +17,7 @@ mod modules;
 mod parameter;
 mod project;
 mod project_menu;
+mod recording;
 mod scenes;
 mod shortcuts;
 mod signals;
