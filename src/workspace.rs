@@ -349,7 +349,8 @@ fn valid_pane(pane: &PaneState) -> bool {
     if pane.instance_id.is_empty() || pane.instance_id.len() > 120 {
         return false;
     }
-    pane.milkdrop_presets.len() <= crate::milkdrop::preset::MAX_PRESETS
+    pane.audio_input.valid()
+        && pane.milkdrop_presets.len() <= crate::milkdrop::preset::MAX_PRESETS
         && pane.milkdrop_presets.iter().all(|p| p.validate().is_ok())
         && pane.settings.len() == ModuleKind::ALL.len()
         && ModuleKind::ALL.into_iter().all(|kind| {
@@ -538,6 +539,8 @@ impl PresetContent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Preset {
     #[serde(default)]
+    pub audio_inputs: Vec<crate::signals::audio::InputBus>,
+    #[serde(default)]
     pub signals: Vec<crate::signals::Definition>,
     pub id: String,
     pub name: String,
@@ -552,6 +555,7 @@ impl Preset {
 pub fn factory_presets() -> Vec<Preset> {
     use Axis::{Horizontal as H, Vertical as V};
     let view = |id: &str, name: &str, layout: Tile, kinds: &[ModuleKind]| Preset {
+        audio_inputs: Vec::new(),
         signals: Vec::new(),
         id: format!("factory:{id}"),
         name: name.into(),
@@ -666,6 +670,7 @@ pub fn factory_presets() -> Vec<Preset> {
         ("default-layout", "Waterfall layout", Tile::default_view()),
     ] {
         presets.push(Preset {
+            audio_inputs: Vec::new(),
             signals: Vec::new(),
             id: format!("factory:{id}"),
             name: name.into(),
@@ -736,12 +741,14 @@ impl Storage {
                                 && valid_name(&p.name)
                                 && p.content.valid()
                                 && crate::signals::Bank {
+                                    audio_inputs: p.audio_inputs.clone(),
                                     slots: Vec::new(),
                                     channels: p.signals.clone(),
                                     next_id: p
                                         .signals
                                         .iter()
                                         .map(|d| d.id)
+                                        .chain(p.audio_inputs.iter().map(|b| b.id))
                                         .max()
                                         .unwrap_or(0)
                                         .saturating_add(1),
@@ -1540,6 +1547,7 @@ mod tests {
         ));
         let mut storage = Storage::new(dir.clone());
         storage.presets.push(Preset {
+            audio_inputs: Vec::new(),
             signals: Vec::new(),
             id: "user:test".into(),
             name: "My layout".into(),

@@ -233,7 +233,7 @@ impl Cymatics {
                     ui.colored_label(ui.visuals().warn_fg_color,"The input range misses the modeled resonances. Lower the cutoff or adjust plate dimensions for clearer patterns.");
                 }
             }
-            ui.label("Input: main audio · no generated sound").help_text("Uses the existing captured input spectrum. Signals may modulate inspector parameters through scene macros; Cymatics does not create source channels or produce audio.");
+            ui.label("Input: selected Signals connection · no generated sound").help_text("Uses the existing captured input spectrum. Signals may modulate inspector parameters through scene macros; Cymatics does not create source channels or produce audio.");
         });
         settings_panel(ui, "Appearance", |ui| {
             settings_group(ui, "Palette", |ui| {

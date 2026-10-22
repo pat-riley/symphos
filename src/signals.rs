@@ -13,6 +13,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+pub mod audio;
 pub mod shaping;
 pub mod ui;
 
@@ -236,6 +237,8 @@ impl Normalization {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Definition {
+    #[serde(default)]
+    pub audio_input: audio::Connection,
     pub id: u64,
     pub name: String,
     pub input: Input,
@@ -281,6 +284,7 @@ impl Definition {
             response.source = Source::Stereo;
         }
         Self {
+            audio_input: audio::Connection::Main,
             id,
             name: method.label().into(),
             input: if method == Method::Midi {
@@ -369,6 +373,7 @@ impl Definition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Bank {
+    pub audio_inputs: Vec<audio::InputBus>,
     pub slots: Vec<Option<u64>>,
     pub channels: Vec<Definition>,
     pub next_id: u64,
@@ -376,6 +381,7 @@ pub struct Bank {
 impl Default for Bank {
     fn default() -> Self {
         Self {
+            audio_inputs: Vec::new(),
             channels: Vec::new(),
             slots: Vec::new(),
             next_id: 1,
@@ -383,6 +389,18 @@ impl Default for Bank {
     }
 }
 impl Bank {
+    pub fn add_audio_input(&mut self) -> Option<u64> {
+        if self.audio_inputs.len() >= audio::MAX_INPUTS {
+            return None;
+        }
+        let id = self.allocate()?;
+        self.audio_inputs.push(audio::InputBus {
+            id,
+            name: format!("Audio input {}", self.audio_inputs.len() + 1),
+            ..Default::default()
+        });
+        Some(id)
+    }
     pub fn sync_slots(&mut self) {
         // Older projects contain vacant mixer slots. Preserve occupied order,
         // but show only actual channels and append newly created sources.
@@ -471,9 +489,15 @@ impl Bank {
                 .all(|id| slots.insert(*id) && self.channels.iter().any(|d| d.id == *id))
             && self.channels.len() <= MAX_SIGNALS
             && self.next_id > 0
+            && self.audio_inputs.len() <= audio::MAX_INPUTS
+            && self
+                .audio_inputs
+                .iter()
+                .all(|b| b.id > 0 && b.id < self.next_id && ids.insert(b.id) && b.valid())
             && self.channels.iter().all(|d| {
                 d.id > 0
                     && d.id < self.next_id
+                    && d.audio_input.valid()
                     && ids.insert(d.id)
                     && crate::workspace::valid_name(&d.name)
                     && (0.0..=2.0).contains(&d.influence)
@@ -550,6 +574,7 @@ impl Sample {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub audio: BTreeMap<u64, Arc<audio::Feed>>,
     pub time: f64,
     pub values: BTreeMap<u64, Sample>,
 }
@@ -574,6 +599,7 @@ impl OutputSmoother {
 }
 #[derive(Default)]
 struct ChannelState {
+    audio_input: audio::Connection,
     signature: Option<(Input, Method, Source, Response, u32, u32)>,
     voice: Voice,
     sample: Sample,
@@ -585,6 +611,7 @@ struct ChannelState {
 }
 #[derive(Default)]
 pub struct Processor {
+    inputs: audio::Inputs,
     states: BTreeMap<u64, ChannelState>,
     epoch: Option<(u64, u32, usize)>,
     sequence: Option<u64>,
@@ -646,7 +673,19 @@ impl Processor {
         self.states
             .retain(|id, _| bank.channels.iter().any(|d| d.id == *id));
         let any_solo = bank.channels.iter().any(|d| d.solo);
+        let audio = self.inputs.process(&bank.audio_inputs, frame);
         for d in &bank.channels {
+            let routed = match d.audio_input {
+                audio::Connection::Input(id) => audio.get(&id).map(|f| f.frame.as_ref()),
+                _ => None,
+            };
+            let routed_fallback = routed
+                .filter(|f| f.features.is_none())
+                .map(|f| AudioFeatures::new(&f.bins, f.mix_rms, f.rms));
+            let f = routed
+                .and_then(|f| f.features.as_deref())
+                .or(routed_fallback.as_ref())
+                .unwrap_or(f);
             let s = self.states.entry(d.id).or_default();
             let sig = (
                 d.input,
@@ -657,15 +696,23 @@ impl Processor {
                 d.response.high.to_bits(),
             );
             if s.signature != Some(sig)
+                || s.audio_input != d.audio_input
                 || (d.input == Input::Midi && s.midi_binding.as_ref() != Some(&d.midi))
             {
                 *s = ChannelState {
+                    audio_input: d.audio_input,
                     signature: Some(sig),
                     midi_binding: Some(d.midi.clone()),
                     ..Default::default()
                 };
             }
-            let status = if !d.enabled || (any_solo && !d.solo) {
+            let disconnected_input = d.input == Input::System
+                && match d.audio_input {
+                    audio::Connection::Main => false,
+                    audio::Connection::Off => true,
+                    audio::Connection::Input(_) => routed.is_none(),
+                };
+            let status = if !d.enabled || (any_solo && !d.solo) || disconnected_input {
                 Status::Muted
             } else if d.input == Input::Lfo {
                 Status::Live
@@ -800,6 +847,7 @@ impl Processor {
             s.sample.availability = 1.0;
         }
         Snapshot {
+            audio,
             time,
             values: self
                 .states
@@ -848,6 +896,7 @@ impl Runtime {
                     // Epoch and sequence numbers can repeat across different runtimes.
                     processor.epoch = None;
                     processor.sequence = None;
+                    processor.inputs.clear();
                     bound = next;
                 }
                 let time = start.elapsed().as_secs_f64();
@@ -921,6 +970,7 @@ mod tests {
     }
     fn bank(method: Method) -> Bank {
         Bank {
+            audio_inputs: Vec::new(),
             slots: Vec::new(),
             channels: vec![Definition::recipe(1, method)],
             next_id: 2,
@@ -1343,7 +1393,10 @@ mod worker_tests {
             engine.analysis().snapshot.clone(),
             Arc::new(ArcSwap::from_pointee(crate::midi::Snapshot::default())),
         );
-        runtime.publish(&Bank::test_sources());
+        let mut bank = Bank::test_sources();
+        let input = bank.add_audio_input().unwrap();
+        bank.audio_inputs[0].gain_db = 3.0;
+        runtime.publish(&bank);
         let deadline = Instant::now() + Duration::from_secs(3);
         while runtime
             .snapshot
@@ -1367,6 +1420,20 @@ mod worker_tests {
         };
         let before = runtime.snapshot.load().time;
         wait_for(&|snapshot| snapshot.time > before);
+        wait_for(&|snapshot| {
+            snapshot
+                .audio
+                .get(&input)
+                .is_some_and(|f| f.frame.mix_rms > 0.01)
+        });
+        assert!(
+            !runtime.snapshot.load().audio[&input]
+                .history
+                .lock()
+                .unwrap()
+                .since(0)
+                .is_empty()
+        );
         runtime.connected.store(false, Ordering::Relaxed);
         wait_for(&|snapshot| snapshot.values[&1].status != Status::Live);
         runtime.connected.store(true, Ordering::Relaxed);
@@ -1436,6 +1503,7 @@ mod session_rebinding_tests {
     fn centered_stereo_has_input_activity_with_a_zero_balance_output() {
         let mut processor = Processor::default();
         let bank = Bank {
+            audio_inputs: Vec::new(),
             slots: Vec::new(),
             channels: vec![Definition::recipe(1, Method::Balance)],
             next_id: 2,

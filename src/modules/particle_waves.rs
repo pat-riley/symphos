@@ -97,6 +97,10 @@ impl ParticleWaves {
         self.time = 0.0;
         self.envelope = 0.0;
     }
+    pub fn clear_input_history(&mut self) {
+        self.history.clear();
+        self.field = Arc::new(vec![0.0; BANDS * ROWS]);
+    }
     pub fn release_if_inactive(&mut self) {
         if self.last.is_some() {
             self.clear();

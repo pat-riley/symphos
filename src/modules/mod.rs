@@ -260,6 +260,9 @@ impl ModuleKind {
 }
 
 pub struct ModulePane {
+    pub audio_input: crate::signals::audio::Connection,
+    input_revision: Option<(crate::signals::audio::Connection, u64, u64)>,
+    silent_input: Option<AnalysisFrame>,
     instance_id: String,
     pub(crate) macros: crate::macros::State,
     scene_macros: Option<crate::macros::State>,
@@ -357,6 +360,8 @@ impl ModuleSettings {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PaneState {
+    #[serde(default)]
+    pub audio_input: crate::signals::audio::Connection,
     #[serde(default)]
     pub macros: Option<crate::macros::State>,
     #[serde(default = "new_instance_id")]
@@ -535,6 +540,11 @@ impl ModulePane {
     /// Source lifecycle is owned by Signals. Reconcile every retained visualizer,
     /// including inactive types, without creating or rebinding any channels.
     pub fn reconcile_signals(&mut self, bank: &crate::signals::Bank) {
+        if let crate::signals::audio::Connection::Input(id) = self.audio_input
+            && !bank.audio_inputs.iter().any(|b| b.id == id)
+        {
+            self.audio_input = crate::signals::audio::Connection::Off;
+        }
         self.import_legacy_macros();
         self.macros.reconcile(bank);
         for settings in [
@@ -632,6 +642,7 @@ impl ModulePane {
 
     pub fn snapshot(&self) -> PaneState {
         PaneState {
+            audio_input: self.audio_input,
             instance_id: self.instance_id.clone(),
             macros: Some(self.macros.clone()),
             kind: self.kind,
@@ -663,6 +674,11 @@ impl ModulePane {
 
     /// Restore an edit while preserving simulation/capture state and inspector navigation.
     pub fn restore_edit(&mut self, state: &PaneState) {
+        if self.audio_input != state.audio_input {
+            self.audio_input = state.audio_input;
+            self.input_revision = None;
+            self.clear_input_history();
+        }
         let before = self.snapshot();
         for saved in &state.settings {
             let mut settings = saved.clone();
@@ -686,6 +702,8 @@ impl ModulePane {
     }
 
     pub fn restore(&mut self, state: &PaneState) {
+        self.audio_input = state.audio_input;
+        self.input_revision = None;
         self.instance_id = state.instance_id.clone();
         self.milkdrop.presets = if state.milkdrop_presets.is_empty() {
             crate::milkdrop::preset::builtins()
@@ -716,6 +734,9 @@ impl ModulePane {
 
     pub fn new(kind: ModuleKind) -> Self {
         Self {
+            audio_input: Default::default(),
+            input_revision: None,
+            silent_input: None,
             instance_id: new_instance_id(),
             macros: crate::macros::State::default(),
             scene_macros: None,
@@ -1084,6 +1105,15 @@ impl ModulePane {
             self.select_section(section);
         }
         for &section in self.sections() {
+            if matches!(
+                section,
+                SettingsSection::Response
+                    | SettingsSection::Modulation
+                    | SettingsSection::Frequency
+                    | SettingsSection::Channels
+            ) {
+                continue;
+            }
             let selected = self.active_section() == section;
             let response =
                 crate::icons::sized_button(ui, section.icon(), selected, 28.0, section.title());
@@ -1097,6 +1127,29 @@ impl ModulePane {
     }
 
     pub fn inspector_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        if matches!(
+            self.active_section(),
+            SettingsSection::Response
+                | SettingsSection::Modulation
+                | SettingsSection::Frequency
+                | SettingsSection::Channels
+        ) {
+            let next = self
+                .sections()
+                .iter()
+                .copied()
+                .find(|s| {
+                    !matches!(
+                        s,
+                        SettingsSection::Response
+                            | SettingsSection::Modulation
+                            | SettingsSection::Frequency
+                            | SettingsSection::Channels
+                    )
+                })
+                .unwrap();
+            self.select_section(next);
+        }
         let section = self.active_section();
         ui.data_mut(|d| d.insert_temp(egui::Id::new("property-row-index"), 0_usize));
         ui.push_id(self.kind.label(), |ui| {
@@ -1170,6 +1223,105 @@ impl ModulePane {
         }
     }
 
+    pub fn ingest_input(
+        &mut self,
+        main: &[std::sync::Arc<crate::capture_history::SpectralFrame>],
+        frame: &AnalysisFrame,
+    ) {
+        use crate::signals::audio::Connection;
+        let feed = match self.audio_input {
+            Connection::Input(id) => frame
+                .signals
+                .as_ref()
+                .and_then(|s| s.audio.get(&id))
+                .cloned(),
+            _ => None,
+        };
+        let revision = (
+            self.audio_input,
+            frame.capture_epoch,
+            feed.as_ref().map_or(0, |f| f.revision),
+        );
+        if self.input_revision != Some(revision) {
+            self.clear_input_history();
+            self.input_revision = Some(revision);
+        }
+        match self.audio_input {
+            Connection::Main => self.ingest(main),
+            Connection::Input(_) => {
+                if let Some(feed) = feed {
+                    let frames = feed
+                        .history
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .since(self.last_capture);
+                    self.ingest(&frames);
+                }
+            }
+            Connection::Off => {}
+        }
+    }
+
+    fn clear_input_history(&mut self) {
+        self.last_capture = 0;
+        self.waterfall.clear();
+        self.sphere.clear();
+        self.cylinder.clear();
+        self.spectrogram.clear();
+        self.spectrum.clear();
+        self.particle_waves.clear_input_history();
+        self.spectral_bloom.clear_input_history();
+    }
+
+    pub fn routed_frame(&mut self, main: &AnalysisFrame) -> AnalysisFrame {
+        use crate::signals::audio::Connection;
+        let feed = match self.audio_input {
+            Connection::Main => return main.clone(),
+            Connection::Input(id) => main.signals.as_ref().and_then(|s| s.audio.get(&id)),
+            Connection::Off => None,
+        };
+        let mut frame = if let Some(feed) = feed {
+            (*feed.frame).clone()
+        } else {
+            if self.silent_input.as_ref().is_none_or(|s| {
+                s.capture_epoch != main.capture_epoch
+                    || s.fft_size != main.fft_size
+                    || s.waveform_left.len() != main.waveform_left.len()
+            }) {
+                self.silent_input = Some(crate::signals::audio::silence(main));
+            }
+            let mut silent = self.silent_input.as_ref().unwrap().clone();
+            silent.sequence = main.sequence;
+            silent
+        };
+        frame.signals = main.signals.clone();
+        frame
+    }
+
+    pub fn input_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
+        for section in [
+            SettingsSection::Frequency,
+            SettingsSection::Channels,
+            SettingsSection::Response,
+            SettingsSection::Modulation,
+        ] {
+            if !self.sections().contains(&section) {
+                continue;
+            }
+            inspector_section(ui, section.title(), |ui| {
+                ui.data_mut(|d| d.insert_temp(ui.id().with("active-module-section"), section));
+                self.section_controls(ui, frame);
+                ui.data_mut(|d| d.remove::<SettingsSection>(ui.id().with("active-module-section")));
+            });
+        }
+        ui.data_mut(|d| {
+            d.remove::<crate::macros::InspectorIndicators>(egui::Id::new(
+                crate::macros::INDICATORS,
+            ));
+            d.remove::<crate::macros::ParameterContext>(egui::Id::new(crate::macros::CONTEXT));
+        });
+    }
+
     pub fn draw(
         &mut self,
         ui: &mut egui::Ui,
@@ -1178,6 +1330,8 @@ impl ModulePane {
         theme: &AppTheme,
         live: bool,
     ) {
+        let routed = self.routed_frame(frame);
+        let frame = &routed;
         let now = self.frozen.as_ref().map_or_else(
             || Instant::now() - self.paused_duration,
             |frozen| frozen.time,
@@ -1829,7 +1983,20 @@ mod tests {
             render(&mut pane, vec![]);
             render(&mut pane, vec![]);
             let last = *pane.sections().last().unwrap();
-            let pos = egui::pos2(17.0, 18.0 + (pane.sections().len() - 1) as f32 * 31.0);
+            let visible = pane
+                .sections()
+                .iter()
+                .filter(|s| {
+                    !matches!(
+                        s,
+                        SettingsSection::Response
+                            | SettingsSection::Modulation
+                            | SettingsSection::Frequency
+                            | SettingsSection::Channels
+                    )
+                })
+                .count();
+            let pos = egui::pos2(17.0, 18.0 + (visible - 1) as f32 * 31.0);
             for pressed in [true, false] {
                 render(
                     &mut pane,
@@ -1850,6 +2017,15 @@ mod tests {
             other.restore(&restored);
             assert_eq!(other.active_section(), last);
             for &section in pane.sections() {
+                if matches!(
+                    section,
+                    SettingsSection::Response
+                        | SettingsSection::Modulation
+                        | SettingsSection::Frequency
+                        | SettingsSection::Channels
+                ) {
+                    continue;
+                }
                 pane.select_section(section);
                 let output = render(&mut pane, vec![]);
                 assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==section.title())));

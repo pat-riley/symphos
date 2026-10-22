@@ -738,6 +738,9 @@ impl Panel {
         let sample = self.snapshot.values.get(&id).cloned().unwrap_or_default();
         match section {
             SignalSection::Source => settings_group(ui, "Channel", |ui| {
+                if d.input == Input::System {
+                    audio::connection_picker(ui, &mut d.audio_input, &self.bank.audio_inputs);
+                }
                 property_row(ui, "Name", |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut d.name)
@@ -1901,6 +1904,7 @@ mod tests {
         panel.learning = Some(RangeLearning::new(id, 0.0));
         for (time, raw) in [(1.0, 0.50), (5.1, 0.55)] {
             panel.snapshot = Arc::new(Snapshot {
+                audio: Default::default(),
                 time,
                 values: [(
                     id,
@@ -1936,6 +1940,7 @@ mod tests {
     fn range_learning_uses_changing_live_raw_samples_and_ignores_disconnections() {
         let mut learning = RangeLearning::new(1, 0.0);
         let mut snapshot = Snapshot {
+            audio: Default::default(),
             time: 1.0,
             values: [(
                 1,

@@ -25,6 +25,15 @@ component runtimes when restoring them. Shared parameter descriptors supply
 macro dragging and direct MIDI Learn; bindings use stable component identities
 and are saved with scenes. See [workflow foundations](workflow-foundations.md).
 
+On the experimental input-routing branch, Signals also owns named audio
+processing branches. The Signals worker processes fresh PCM snapshots into
+shared waveform, spectrum and measurement feeds, and archives their frequency
+history. Components select Main audio, a named input or Unassigned; modulation
+detectors can select those same inputs. The visual inspector delegates input
+response controls to the Signals dock. No input processing runs in capture or
+render callbacks. See [signal input routing](signal-input-routing.md) for the
+experiment's behavior, compatibility and current limits.
+
 ## Analysis contract
 
 Each published frame contains source format and timing metadata, stereo

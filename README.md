@@ -622,6 +622,14 @@ compiler; Linux additionally requires EGL development libraries.
 The bundled projectM library has its own LGPL license. See
 [third-party notices](THIRD_PARTY_NOTICES.md), including source/relinking requirements.
 
+### Signal input routing (experimental)
+
+The Signals dock separates **Modulation**, **Audio inputs** and **Sketch
+connections**. Create named inputs for shared gain, channel selection and
+filtering; connect them to sketches or modulation detectors. Audio-response
+controls live with each sketch's connection in Signals. See
+[signal input routing](docs/signal-input-routing.md) for a testing walkthrough.
+
 ### Particle Waves
 
 Add **Particle Waves** for layered spectrum-driven ribbons, rings, spirals and

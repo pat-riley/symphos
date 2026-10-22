@@ -5,6 +5,17 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+### Experimental signal input routing
+
+- Add manually created named audio inputs in Signals, sharing processed stereo
+  waveform, spectrum and measurements across sketches and modulation detectors.
+- Add input gain, stereo/Mid/Side routing, high/low-pass filters, noise gate and
+  live previews, with explicit Main audio or Unassigned sketch connections.
+- Move sketch response, frequency and channel controls into Signals; retain
+  appearance, geometry, physics and cameras in the visual inspector.
+- Preserve old scene response settings and save routes with projects, presets
+  and Undo/Redo; deleting an input disconnects consumers without replacing it.
+
 ### Spectral Bloom
 
 - Add a sculptural spectrum component with connected frequency filaments,

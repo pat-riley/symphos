@@ -249,9 +249,48 @@ pub fn bind_preset_sources(content: &mut PresetContent, definitions: &[Definitio
     });
 }
 
+/// Reuse inputs only when their saved processing matches. Missing inputs stay
+/// disconnected; loading a visual preset never creates capture or control sources.
+pub fn bind_preset_inputs(
+    content: &mut PresetContent,
+    definitions: &mut Vec<Definition>,
+    saved: &[crate::signals::audio::InputBus],
+    bank: &Bank,
+) {
+    use crate::signals::audio::Connection;
+    let resolve = |connection| match connection {
+        Connection::Input(id) => saved.iter().find(|b| b.id == id).and_then(|input| {
+            let mut expected = input.clone();
+            expected.id = 0;
+            bank.audio_inputs
+                .iter()
+                .find(|candidate| {
+                    let mut candidate = (*candidate).clone();
+                    candidate.id = 0;
+                    candidate == expected
+                })
+                .map(|b| Connection::Input(b.id))
+        }),
+        other => Some(other),
+    };
+    if let PresetContent::View { panes, .. } = content {
+        for pane in panes {
+            pane.audio_input = resolve(pane.audio_input).unwrap_or(Connection::Off);
+        }
+    }
+    definitions.retain_mut(|d| {
+        if let Some(connection) = resolve(d.audio_input) {
+            d.audio_input = connection;
+            true
+        } else {
+            false
+        }
+    });
+}
+
 // Compare creative preset content by dependency value, not freshly imported IDs.
 pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
-    if preset.signals.is_empty() {
+    if preset.signals.is_empty() && preset.audio_inputs.is_empty() {
         return session.matches(&preset.content);
     }
     let current = match &preset.content {
@@ -287,10 +326,30 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
             }
         }
     };
-    fn resolve(value: &mut serde_json::Value, definitions: &[Definition]) {
+    fn resolve(
+        value: &mut serde_json::Value,
+        definitions: &[Definition],
+        inputs: &[crate::signals::audio::InputBus],
+    ) {
         match value {
             serde_json::Value::Object(map) => {
                 map.remove("instance_id");
+                if let Some(id) = map
+                    .get("audio_input")
+                    .and_then(|v| v.get("Input"))
+                    .and_then(|v| v.as_u64())
+                {
+                    let input = inputs
+                        .iter()
+                        .find(|b| b.id == id)
+                        .map(|b| {
+                            let mut value = serde_json::to_value(b).unwrap_or_default();
+                            value.as_object_mut().unwrap().remove("id");
+                            value
+                        })
+                        .unwrap_or(serde_json::Value::String("missing".into()));
+                    map.insert("audio_input".into(), input);
+                }
                 if let Some(id) = map.get("signal").and_then(|v| v.as_u64()) {
                     let resolved = definitions
                         .iter()
@@ -300,6 +359,7 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
                             definition.color = Some(d.color_rgb());
                             let mut value = serde_json::to_value(definition).unwrap_or_default();
                             value.as_object_mut().unwrap().remove("id");
+                            resolve(&mut value, definitions, inputs);
                             value
                         })
                         .unwrap_or(serde_json::Value::String("missing".into()));
@@ -307,13 +367,13 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
                 }
                 for (name, v) in map.iter_mut() {
                     if name != "signal" {
-                        resolve(v, definitions);
+                        resolve(v, definitions, inputs);
                     }
                 }
             }
             serde_json::Value::Array(a) => {
                 for v in a {
-                    resolve(v, definitions);
+                    resolve(v, definitions, inputs);
                 }
             }
             _ => {}
@@ -321,8 +381,12 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
     }
     let mut a = serde_json::to_value(current).unwrap_or_default();
     let mut b = serde_json::to_value(&preset.content).unwrap_or_default();
-    resolve(&mut a, &session.signals.channels);
-    resolve(&mut b, &preset.signals);
+    resolve(
+        &mut a,
+        &session.signals.channels,
+        &session.signals.audio_inputs,
+    );
+    resolve(&mut b, &preset.signals, &preset.audio_inputs);
     a == b
 }
 
@@ -333,6 +397,43 @@ mod tests {
         modulation::Target,
         modules::{ModuleKind, ModulePane},
     };
+    #[test]
+    fn typed_inputs_roundtrip_and_view_presets_reuse_only_matching_inputs() {
+        use crate::signals::audio::Connection;
+        let mut scene = example();
+        let id = scene.signals.add_audio_input().unwrap();
+        scene.signals.audio_inputs[0].high_pass = true;
+        scene.panes[0].audio_input = Connection::Input(id);
+        let saved = serde_json::to_vec(&scene).unwrap();
+        let restored: SceneState = serde_json::from_slice(&saved).unwrap();
+        assert!(scene == restored);
+        let mut content = PresetContent::View {
+            panes: scene.panes.clone(),
+            layout: Tile::Pane(0),
+            macros: None,
+        };
+        let buses = scene.signals.audio_inputs.clone();
+        let mut target = Bank::default();
+        target.add(crate::signals::Method::Lfo).unwrap();
+        let new_id = target.add_audio_input().unwrap();
+        let mut matching = buses[0].clone();
+        matching.id = new_id;
+        target.audio_inputs[0] = matching;
+        let mut definitions = scene.signals.channels.clone();
+        bind_preset_inputs(&mut content, &mut definitions, &buses, &target);
+        let PresetContent::View { panes, .. } = &content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Input(new_id));
+        assert_eq!(target.channels.len(), 1);
+        assert_eq!(target.audio_inputs.len(), 1);
+        target.audio_inputs[0].gain_db = 12.0;
+        bind_preset_inputs(&mut content, &mut definitions, &buses, &target);
+        let PresetContent::View { panes, .. } = &content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Off);
+    }
     fn example() -> SceneState {
         let mut pane = ModulePane::new(ModuleKind::Flux);
         let mut signals = Bank::default();
@@ -466,6 +567,7 @@ mod tests {
         let mut content = PresetContent::Component(Box::new(settings));
         let deps = dependencies(&content, &project.signals);
         let preset = crate::workspace::Preset {
+            audio_inputs: Vec::new(),
             id: "user:test".into(),
             name: "Test".into(),
             content: content.clone(),

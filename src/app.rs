@@ -13,6 +13,7 @@ use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::{AppTheme, AppearancePreferences};
 
 mod history;
+mod input_routing;
 mod menu;
 mod scene_library;
 mod settings;
@@ -76,6 +77,9 @@ pub struct SymphosApp {
     sidebar_width: f32,
     library_width: f32,
     signals_height: f32,
+    signals_page: usize,
+    selected_audio_input: Option<u64>,
+    selected_input_sketch: Option<usize>,
     inspecting_signal: bool,
     inspecting_macro: Option<usize>,
     help_open: bool,
@@ -150,6 +154,9 @@ impl SymphosApp {
             sidebar_width: DEFAULT_SETTINGS_WIDTH,
             library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
+            signals_page: 0,
+            selected_audio_input: None,
+            selected_input_sketch: None,
             inspecting_signal: false,
             inspecting_macro: None,
             help_open: false,
@@ -755,6 +762,19 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
+                if ui
+                    .button("Audio & modulation…")
+                    .help_text("Open this sketch's input and response settings in Signals.")
+                    .clicked()
+                {
+                    self.signals_page = 2;
+                    self.selected_input_sketch = Some(self.selected_pane);
+                    self.signal_ui
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .show_signals = true;
+                    self.inspecting_signal = false;
+                }
                 ui.menu_button("Component actions", |ui| {
                     if ui.button("Browse component presets…").clicked() {
                         self.manager.open_presets(Scope::Component);
@@ -1247,6 +1267,16 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         else {
             return;
         };
+        crate::project::bind_preset_inputs(
+            &mut preset.content,
+            &mut preset.signals,
+            &preset.audio_inputs,
+            &self
+                .signal_ui
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bank,
+        );
         crate::project::bind_preset_sources(
             &mut preset.content,
             &preset.signals,
@@ -1326,6 +1356,13 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                                 .bank,
                         );
                         self.storage.presets.push(workspace::Preset {
+                            audio_inputs: self
+                                .signal_ui
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .bank
+                                .audio_inputs
+                                .clone(),
                             signals,
                             id: id.clone(),
                             name,
@@ -1707,7 +1744,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 Pos2::new(layout.dashboard.right(), top + 3.0),
             );
             let response = ui
-                .interact(grip, ui.id().with("signals-resize"), Sense::drag())
+                .interact(grip, egui::Id::new("signals-resize"), Sense::drag())
                 .on_hover_cursor(egui::CursorIcon::ResizeVertical)
                 .help_text("Drag to resize Signals · double-click to reset");
             if response.double_clicked() {
@@ -1726,13 +1763,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 );
             }
             let dock = dock_performance(&mut layout, height);
-            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-            panel.show(ui, dock, snapshot, false, &self.theme);
-            if std::mem::take(&mut panel.inspect_requested) {
-                self.inspecting_signal = true;
-                self.inspecting_macro = None;
-                self.sidebar_open = true;
-            }
+            self.signals_dock(ui, dock, snapshot);
         } else if let Some(height) = self.scene_macros.height() {
             let performance_rect = dock_performance(&mut layout, height);
             self.scene_macro_bar(ui, performance_rect);
@@ -1999,9 +2030,10 @@ impl eframe::App for SymphosApp {
         let after = self
             .open_panes()
             .iter()
+            .filter(|id| self.panes[**id].audio_input == crate::signals::audio::Connection::Main)
             .map(|id| self.panes[*id].last_capture)
             .min()
-            .unwrap_or(0);
+            .unwrap_or(u64::MAX);
         let captures = self
             .engine
             .analysis()
@@ -2010,7 +2042,7 @@ impl eframe::App for SymphosApp {
             .unwrap_or_else(|e| e.into_inner())
             .since(after);
         for id in self.open_panes() {
-            self.panes[id].ingest(&captures);
+            self.panes[id].ingest_input(&captures, &snapshot);
         }
         self.receive_scene_preview(ui.ctx());
         self.workspace_view(ui, rect, &snapshot, now);
@@ -2192,6 +2224,9 @@ mod workspace_interaction_tests {
             sidebar_width: 236.0,
             library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
+            signals_page: 0,
+            selected_audio_input: None,
+            selected_input_sketch: None,
             inspecting_signal: false,
             inspecting_macro: None,
             help_open: false,
@@ -2225,6 +2260,57 @@ mod workspace_interaction_tests {
         app.undo_edit(true);
         assert!(!app.open_panes().contains(&0));
         assert_eq!(app.signal_ui.lock().unwrap().bank.channels.len(), 1);
+    }
+
+    #[test]
+    fn signals_routes_show_response_controls_and_create_inputs_only_on_request() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.signal_ui.lock().unwrap().show_signals = true;
+        app.signals_page = 2;
+        app.selected_input_sketch = Some(0);
+        let position = |out: &egui::FullOutput, name: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == name => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        position(&out, "Signal Response");
+        position(&out, "Frequency Range");
+        assert!(app.signal_ui.lock().unwrap().bank.audio_inputs.is_empty());
+        let p = position(&out, "Audio inputs");
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(p), button(p, true)],
+        );
+        workspace_frame(&mut app, &ctx, now, vec![button(p, false)]);
+        assert_eq!(app.signals_page, 1);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let p = position(&out, "+ Audio input");
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(p), button(p, true)],
+        );
+        workspace_frame(&mut app, &ctx, now, vec![button(p, false)]);
+        assert_eq!(app.signal_ui.lock().unwrap().bank.audio_inputs.len(), 1);
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        assert!(
+            app.panes
+                .iter()
+                .all(|p| p.audio_input == crate::signals::audio::Connection::Main)
+        );
     }
     #[test]
     fn undo_scene_creation_and_grouped_parameter_drag() {
@@ -2746,8 +2832,12 @@ mod workspace_interaction_tests {
         assert!(app.inspecting_signal && app.sidebar_open);
         assert_eq!(app.signal_ui.lock().unwrap().selected, Some(source));
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
-        let channel = label(&out, "1 Overall intensity");
-        let grip = Pos2::new(500.0, channel.y - 24.0);
+        let _channel = label(&out, "1 Overall intensity");
+        let grip = ctx
+            .read_response(egui::Id::new("signals-resize"))
+            .unwrap()
+            .rect
+            .center();
         let old_height = app.signals_height;
         workspace_frame(
             &mut app,
