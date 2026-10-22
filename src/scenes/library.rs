@@ -10,7 +10,7 @@ use std::{collections::HashMap, path::Path};
 pub struct Preview {
     width: usize,
     height: usize,
-    rgb: Vec<u8>,
+    rgb: std::sync::Arc<[u8]>,
 }
 impl Preview {
     pub fn valid(&self) -> bool {
@@ -40,7 +40,11 @@ impl Preview {
                 rgb.extend_from_slice(&[c.r(), c.g(), c.b()]);
             }
         }
-        Some(Self { width, height, rgb })
+        Some(Self {
+            width,
+            height,
+            rgb: rgb.into(),
+        })
     }
     fn image(&self) -> egui::ColorImage {
         egui::ColorImage::from_rgb([self.width, self.height], &self.rgb)

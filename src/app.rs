@@ -1942,9 +1942,13 @@ impl eframe::App for SymphosApp {
             self.scene_action(action);
         }
 
-        if self.storage.save_due() || ui.ctx().input(|input| input.viewport().close_requested()) {
+        self.storage.poll_checkpoint();
+        if ui.ctx().input(|input| input.viewport().close_requested()) {
             let state = self.workspace(ui.ctx());
             self.storage.checkpoint(&state);
+        } else if self.storage.save_due() {
+            let state = self.workspace(ui.ctx());
+            self.storage.checkpoint_async(state);
         }
         crate::project_menu::update(|action| self.menu_item_state(ui.ctx(), action));
         // Display cadence is a local performance preference, independent of FFT cadence.
@@ -3174,10 +3178,12 @@ fn pane_title(ui: &mut egui::Ui, kind: ModuleKind) -> egui::Response {
     // Reserve space for the pane actions and truncate long component names.
     let width =
         (ui.available_width() - 96.0 - 4.0 * ui.spacing().item_spacing.x).clamp(30.0, 180.0);
-    ui.add_sized(
-        [width, 24.0],
-        egui::Label::new(kind.label()).truncate().selectable(false),
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, 24.0),
+        Layout::left_to_right(Align::Center),
+        |ui| ui.add(egui::Label::new(kind.label()).truncate().selectable(false)),
     )
+    .inner
     .help_text(kind.description())
 }
 
@@ -3604,6 +3610,7 @@ mod layout_tests {
                     ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
                     ui.horizontal(|ui| {
                         let title = pane_title(ui, kind);
+                        assert!((title.rect.left() - ui.max_rect().left()).abs() < 0.1);
                         let pause = icons::sized_button(ui, Icon::Pause, false, 24.0, "Pause");
                         let expand = icons::sized_button(ui, Icon::Eye, false, 24.0, "Inspect");
                         assert!(title.rect.right() < pause.rect.left());

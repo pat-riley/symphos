@@ -705,6 +705,29 @@ fn estimate_bpm(flux: &VecDeque<f32>, fps: u32) -> (f32, f32) {
     (bpm, confidence)
 }
 
+/// Deterministic PCM through the production FFT, with no device or audio output.
+#[cfg(test)]
+pub(crate) fn test_audio_frame(tones: &[(f32, f32)]) -> AnalysisFrame {
+    let sample_rate = 48_000;
+    let size = 8192;
+    let ring: Vec<StereoSample> = (0..size)
+        .map(|i| {
+            let value = tones
+                .iter()
+                .map(|&(hz, amplitude)| {
+                    amplitude * (2.0 * PI * hz * i as f32 / sample_rate as f32).sin()
+                })
+                .sum();
+            [value, value]
+        })
+        .collect();
+    let settings = AnalysisSettings {
+        fft_size: size,
+        ..Default::default()
+    };
+    Analyzer::new(size, settings.window).analyze(&ring, 0, sample_rate, 2, &settings, 1, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

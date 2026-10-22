@@ -19,6 +19,7 @@ macro_rules! module_settings {
 }
 
 mod camera_gizmo;
+mod cymatics;
 mod flux;
 mod frequency;
 mod milkdrop;
@@ -61,6 +62,7 @@ pub(crate) use crate::colors::Palette;
 use crate::help::HoverHelp;
 use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
+use cymatics::Cymatics;
 use flux::Flux;
 use milkdrop::Milkdrop;
 use orbital::Orbital;
@@ -99,10 +101,11 @@ pub enum ModuleKind {
     Resonance,
     Orbital,
     Milkdrop,
+    Cymatics,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
@@ -118,10 +121,12 @@ impl ModuleKind {
         Self::Resonance,
         Self::Orbital,
         Self::Milkdrop,
+        Self::Cymatics,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Cymatics => "Cymatics",
             Self::Milkdrop => "MilkDrop",
             Self::Orbital => "Orbital",
             Self::Resonance => "3D Resonance",
@@ -142,6 +147,7 @@ impl ModuleKind {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Cymatics => Icon::Resonance,
             Self::Milkdrop => Icon::Flux,
             Self::Orbital => Icon::Flux,
             Self::Resonance => Icon::Resonance,
@@ -162,6 +168,7 @@ impl ModuleKind {
 
     pub fn subtitle(self) -> &'static str {
         match self {
+            Self::Cymatics => "Audio-driven vibrating plates",
             Self::Milkdrop => "MilkDrop-compatible presets",
             Self::Orbital => "GPU orbital flocking",
             Self::Resonance => "Layered petal wavefronts",
@@ -182,6 +189,9 @@ impl ModuleKind {
 
     pub fn description(self) -> &'static str {
         match self {
+            Self::Cymatics => {
+                "Audio-driven Chladni plates: naturally settling GPU sand, shaded wave surfaces, nodal patterns and artistic interference. Explore plate dimensions, materials and boundaries; drag to rotate freely. Thin-plate modes with approximate grain transport."
+            }
             Self::Milkdrop => {
                 "Import, edit and perform MilkDrop presets with native audio response, feedback, waves, shapes and shaders. Drag inspector adjustments to scene macros. Powered by projectM."
             }
@@ -243,6 +253,7 @@ pub struct ModulePane {
     resonance: Resonance,
     orbital: Orbital,
     milkdrop: Milkdrop,
+    cymatics: Cymatics,
     spectrum: Spectrum,
     waveform: Waveform,
     spectrogram: Spectrogram,
@@ -251,7 +262,7 @@ pub struct ModulePane {
     veroni: Veroni,
     strata: Strata,
     flux: Flux,
-    active_sections: [usize; 15],
+    active_sections: [usize; 16],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -267,6 +278,7 @@ pub enum ModuleSettings {
     Resonance(resonance::ResonanceSettings),
     Orbital(Box<orbital::OrbitalSettings>),
     Milkdrop(Box<milkdrop::MilkdropSettings>),
+    Cymatics(Box<cymatics::Settings>),
     Spectrum(spectrum::SpectrumSettings),
     Waveform(waveform::WaveformSettings),
     Spectrogram(spectrogram::SpectrogramSettings),
@@ -291,6 +303,7 @@ impl ModuleSettings {
         match self {
             Self::Orbital(_) => ModuleKind::Orbital,
             Self::Milkdrop(_) => ModuleKind::Milkdrop,
+            Self::Cymatics(_) => ModuleKind::Cymatics,
             Self::Resonance(_) => ModuleKind::Resonance,
             Self::Rings(_) => ModuleKind::Rings,
             Self::Cylinder(_) => ModuleKind::Cylinder,
@@ -316,7 +329,7 @@ pub struct PaneState {
     pub instance_id: String,
     pub kind: ModuleKind,
     #[serde(deserialize_with = "decode_sections")]
-    pub sections: [usize; 15],
+    pub sections: [usize; 16],
     #[serde(default)]
     pub orbital_inspector_version: u8,
     #[serde(default)]
@@ -329,14 +342,14 @@ pub struct PaneState {
 // Only complete known legacy sets are upgraded; malformed sets still fail validation.
 fn decode_sections<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<[usize; 15], D::Error> {
+) -> Result<[usize; 16], D::Error> {
     let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
-    if !(6..=15).contains(&values.len()) {
+    if !(6..=16).contains(&values.len()) {
         return Err(serde::de::Error::custom(
-            "expected six to fifteen module sections",
+            "expected six to sixteen module sections",
         ));
     }
-    let mut sections = [0; 15];
+    let mut sections = [0; 16];
     sections[..values.len()].copy_from_slice(&values);
     Ok(sections)
 }
@@ -345,7 +358,7 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<ModuleSettings>, D::Error> {
     let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
     let legacy_len = settings.len();
-    if (6..=14).contains(&legacy_len)
+    if (6..=15).contains(&legacy_len)
         && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
             settings
                 .iter()
@@ -390,7 +403,10 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
                 Orbital::default().settings_snapshot(),
             )));
         }
-        settings.push(ModuleSettings::Milkdrop(Box::default()));
+        if legacy_len <= 14 {
+            settings.push(ModuleSettings::Milkdrop(Box::default()));
+        }
+        settings.push(ModuleSettings::Cymatics(Box::default()));
     }
     Ok(settings)
 }
@@ -511,6 +527,9 @@ impl ModulePane {
             ModuleKind::Milkdrop => {
                 ModuleSettings::Milkdrop(Box::new(self.milkdrop.settings_snapshot()))
             }
+            ModuleKind::Cymatics => {
+                ModuleSettings::Cymatics(Box::new(self.cymatics.settings_snapshot()))
+            }
             ModuleKind::Orbital => {
                 ModuleSettings::Orbital(Box::new(self.orbital.settings_snapshot()))
             }
@@ -541,6 +560,7 @@ impl ModulePane {
             ModuleSettings::Veroni(settings) => self.veroni.apply_settings(settings),
             ModuleSettings::Strata(settings) => self.strata.apply_settings(settings),
             ModuleSettings::Flux(settings) => self.flux.apply_settings(settings),
+            ModuleSettings::Cymatics(settings) => self.cymatics.apply_settings(settings),
             ModuleSettings::Orbital(settings) => self.orbital.apply_settings(settings),
             ModuleSettings::Milkdrop(settings) => self.milkdrop.apply_settings(settings),
             ModuleSettings::Resonance(settings) => self.resonance.apply_settings(settings),
@@ -581,6 +601,7 @@ impl ModulePane {
                 ModuleSettings::Resonance(self.resonance.settings_snapshot()),
                 ModuleSettings::Orbital(Box::new(self.orbital.settings_snapshot())),
                 ModuleSettings::Milkdrop(Box::new(self.milkdrop.settings_snapshot())),
+                ModuleSettings::Cymatics(Box::new(self.cymatics.settings_snapshot())),
             ],
         }
     }
@@ -627,6 +648,7 @@ impl ModulePane {
             resonance: Resonance::default(),
             orbital: Orbital::default(),
             milkdrop: Milkdrop::default(),
+            cymatics: Cymatics::default(),
             spectrum: Spectrum::default(),
             waveform: Waveform::default(),
             spectrogram: Spectrogram::default(),
@@ -635,7 +657,7 @@ impl ModulePane {
             veroni: Veroni::default(),
             strata: Strata::default(),
             flux: Flux::default(),
-            active_sections: [0; 15],
+            active_sections: [0; 16],
             inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
@@ -650,6 +672,7 @@ impl ModulePane {
         self.cylinder.clear();
         self.rings.clear();
         self.resonance.clear();
+        self.cymatics.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -665,6 +688,7 @@ impl ModulePane {
         self.cylinder.clear();
         self.rings.clear();
         self.resonance.clear();
+        self.cymatics.clear();
         self.spectrum.clear();
         self.waveform.clear();
         self.spectrogram.clear();
@@ -699,6 +723,7 @@ impl ModulePane {
 
     pub(crate) fn reset_settings(&mut self) {
         match self.kind {
+            ModuleKind::Cymatics => self.cymatics.reset_settings(),
             ModuleKind::Orbital => self.orbital.reset_settings(),
             ModuleKind::Milkdrop => self.milkdrop.reset_settings(),
             ModuleKind::Resonance => self.resonance.reset_settings(),
@@ -946,6 +971,7 @@ impl ModulePane {
         });
         let frame = self.frozen.as_ref().map_or(frame, |frozen| &frozen.frame);
         match self.kind {
+            ModuleKind::Cymatics => self.cymatics.controls(ui),
             ModuleKind::Orbital => self.orbital.controls(ui),
             ModuleKind::Milkdrop => self.milkdrop.controls(ui),
             ModuleKind::Resonance => self.resonance.controls(ui),
@@ -998,6 +1024,7 @@ impl ModulePane {
             ModuleKind::Waterfall | ModuleKind::Sphere | ModuleKind::Cylinder => {
                 &[Geometry, Frequency, Response, Appearance, Camera]
             }
+            ModuleKind::Cymatics => &[Geometry, Particles, Response, Appearance, Flow, Camera],
             ModuleKind::Orbital => &[Particles, Orbs, Response, Camera, Rendering],
             ModuleKind::Milkdrop => &[Presets, Flow, Appearance, Response, Rendering],
             ModuleKind::Resonance => &[Geometry, Flow, Frequency, Response, Appearance, Camera],
@@ -1082,6 +1109,9 @@ impl ModulePane {
         if self.kind != ModuleKind::Milkdrop {
             self.milkdrop.release_if_inactive();
         }
+        if self.kind != ModuleKind::Cymatics {
+            self.cymatics.release_if_inactive();
+        }
         if self.kind != ModuleKind::Orbital {
             self.orbital.release_if_inactive();
         }
@@ -1091,6 +1121,7 @@ impl ModulePane {
             .help_text(self.kind.description());
         match self.kind {
             ModuleKind::Milkdrop => self.milkdrop.draw(ui, rect, frame, now, live, frozen),
+            ModuleKind::Cymatics => self.cymatics.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Orbital => self.orbital.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Resonance => self.resonance.draw(ui, rect, frame, theme, now, live),
             ModuleKind::Rings => self.rings.draw(ui, rect, frame, theme, now, live),
@@ -1132,7 +1163,12 @@ impl ModulePane {
                 theme.foreground,
             );
         }
-        if !live && !matches!(self.kind, ModuleKind::Orbital | ModuleKind::Milkdrop) {
+        if !live
+            && !matches!(
+                self.kind,
+                ModuleKind::Orbital | ModuleKind::Milkdrop | ModuleKind::Cymatics
+            )
+        {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,

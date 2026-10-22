@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod recovery;
+
 pub const MAX_PANES: usize = 16;
 const GAP: f32 = 8.0;
 
@@ -685,7 +687,7 @@ pub struct Storage {
     pub active: String,
     pub modified: bool,
     last_save: Instant,
-    last_session: Vec<u8>,
+    recovery: Option<recovery::Writer>,
 }
 pub fn normal_directory() -> PathBuf {
     #[cfg(target_os = "macos")]
@@ -768,35 +770,53 @@ impl Storage {
             active: default_preset(),
             modified: false,
             last_save: Instant::now(),
-            last_session: Vec::new(),
+            recovery: None,
         }
     }
     pub fn save_due(&self) -> bool {
         self.last_save.elapsed() >= Duration::from_millis(750)
+            && self.recovery.as_ref().is_none_or(|writer| !writer.busy())
     }
-    pub fn checkpoint(&mut self, session: &Session) {
-        if !session.validate() {
-            return;
-        }
-        self.last_save = Instant::now();
-        if let Some(preset) = self.presets.iter().find(|p| p.id == self.active) {
-            self.modified = !crate::project::matches(session, preset);
-        }
-        if let Ok(bytes) = serde_json::to_vec_pretty(session)
-            && bytes != self.last_session
+    fn checkpoint_result(&mut self, outcome: recovery::Outcome) {
+        if outcome.active == self.active
+            && let Some(modified) = outcome.modified
         {
-            if bytes.len() > crate::scenes::MAX_DOCUMENT_BYTES {
-                self.notice = Some(
-                    "Workspace exceeds the 64 MB document limit. Previous recovery file retained."
-                        .into(),
-                );
-                return;
-            }
-            match atomic_write(&self.dir.join("workspace.json"), &bytes) {
-                Ok(()) => self.last_session = bytes,
-                Err(error) => self.notice = Some(format!("Workspace save failed: {error}")),
-            }
+            self.modified = modified;
         }
+        if let Some(error) = outcome.error {
+            self.notice = Some(error);
+        }
+    }
+    pub fn poll_checkpoint(&mut self) {
+        if let Some(outcome) = self.recovery.as_mut().and_then(recovery::Writer::poll) {
+            self.checkpoint_result(outcome);
+        }
+    }
+    pub fn checkpoint_async(&mut self, session: Session) {
+        self.last_save = Instant::now();
+        let preset = self
+            .presets
+            .iter()
+            .find(|p| p.id == session.active_preset)
+            .cloned();
+        let writer = self
+            .recovery
+            .get_or_insert_with(|| recovery::Writer::new(self.dir.join("workspace.json")));
+        if let Err(error) = writer.submit(recovery::Job { session, preset }) {
+            self.notice = Some(error);
+        }
+    }
+    fn finish_checkpoint(&mut self) {
+        if let Some(outcome) = self.recovery.as_mut().and_then(recovery::Writer::finish) {
+            self.checkpoint_result(outcome);
+        }
+    }
+    /// Closing and explicit recovery checkpoints flush in order. An older
+    /// background save must never overwrite the final workspace on exit.
+    pub fn checkpoint(&mut self, session: &Session) {
+        self.finish_checkpoint();
+        self.checkpoint_async(session.clone());
+        self.finish_checkpoint();
     }
     pub fn save_library(&mut self) {
         let library = UserLibrary {
@@ -985,6 +1005,7 @@ mod tests {
                     && entry.get("Resonance").is_none()
                     && entry.get("Orbital").is_none()
                     && entry.get("Milkdrop").is_none()
+                    && entry.get("Cymatics").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1021,6 +1042,7 @@ mod tests {
                     && entry.get("Resonance").is_none()
                     && entry.get("Orbital").is_none()
                     && entry.get("Milkdrop").is_none()
+                    && entry.get("Cymatics").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1051,6 +1073,7 @@ mod tests {
                     && entry.get("Resonance").is_none()
                     && entry.get("Orbital").is_none()
                     && entry.get("Milkdrop").is_none()
+                    && entry.get("Cymatics").is_none()
             });
         }
         let decoded = Session::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -1074,6 +1097,7 @@ mod tests {
                     && s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
+                    && s.get("Cymatics").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(9);
             pane["macros"]["banks"][8][0]["depth"] = serde_json::json!(-0.75);
@@ -1110,6 +1134,7 @@ mod tests {
                     && s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
+                    && s.get("Cymatics").is_none()
             });
             for settings in pane["settings"].as_array_mut().unwrap() {
                 if let Some(sphere) = settings.get_mut("Sphere") {
@@ -1146,6 +1171,7 @@ mod tests {
                 s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
+                    && s.get("Cymatics").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(12);
             pane["macros"]["banks"][11][0]["depth"] = 0.6.into();
@@ -1184,6 +1210,7 @@ mod tests {
                     && s.get("Resonance").is_none()
                     && s.get("Orbital").is_none()
                     && s.get("Milkdrop").is_none()
+                    && s.get("Cymatics").is_none()
             });
             pane["macros"]["banks"].as_array_mut().unwrap().truncate(11);
             pane["macros"]["banks"][10][0]["depth"] = 0.7.into();
@@ -1372,6 +1399,119 @@ mod tests {
         );
         value["appearance"]["ui_scale"] = 10.into();
         assert!(Session::decode(&serde_json::to_vec(&value).unwrap()).is_none());
+    }
+
+    #[test]
+    #[ignore = "manual recovery checkpoint timing; SYMPHOS_PERF_WORKSPACE selects a read-only fixture"]
+    fn recovery_checkpoint_timing() {
+        let path = std::env::var("SYMPHOS_PERF_WORKSPACE").expect("workspace fixture path");
+        let session: Session = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let start = Instant::now();
+        for _ in 0..10 {
+            std::hint::black_box(session.clone());
+        }
+        eprintln!(
+            "session clone: {:.2} ms",
+            start.elapsed().as_secs_f64() * 100.0
+        );
+        let start = Instant::now();
+        for _ in 0..10 {
+            assert!(session.validate());
+        }
+        eprintln!(
+            "session validation: {:.2} ms",
+            start.elapsed().as_secs_f64() * 100.0
+        );
+        let start = Instant::now();
+        for _ in 0..10 {
+            std::hint::black_box(serde_json::to_vec_pretty(&session).unwrap());
+        }
+        eprintln!(
+            "session serialization: {:.2} ms",
+            start.elapsed().as_secs_f64() * 100.0
+        );
+        let dir =
+            std::env::temp_dir().join(format!("symphos-recovery-timing-{}", std::process::id()));
+        let mut storage = Storage::new(dir.clone());
+        let mut foreground = Duration::ZERO;
+        for _ in 0..10 {
+            let start = Instant::now();
+            storage.checkpoint_async(session.clone());
+            foreground += start.elapsed();
+            storage.finish_checkpoint();
+            assert!(storage.notice.is_none());
+        }
+        eprintln!(
+            "foreground clone + background handoff: {:.2} ms",
+            foreground.as_secs_f64() * 100.0
+        );
+        drop(storage);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn background_recovery_flushes_latest_state_and_retains_last_good_save() {
+        let dir = std::env::temp_dir().join(format!(
+            "symphos-recovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut storage = Storage::new(dir.clone());
+        let mut state = session();
+        state.sidebar_width = 280.0;
+        storage.checkpoint_async(state.clone());
+        storage.last_save = Instant::now() - Duration::from_secs(1);
+        assert!(
+            !storage.save_due(),
+            "do not build a backlog of recovery snapshots"
+        );
+        state.sidebar_width = 410.0;
+        storage.checkpoint(&state); // closing flushes older work before the final save
+        assert!(storage.notice.is_none());
+        assert_eq!(Session::load(&dir).unwrap().sidebar_width, 410.0);
+        state.sidebar_width = f32::NAN;
+        storage.checkpoint(&state);
+        assert!(
+            storage
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Invalid workspace")
+        );
+        assert_eq!(Session::load(&dir).unwrap().sidebar_width, 410.0);
+        storage.notice = None;
+        state.sidebar_width = 320.0;
+        storage.checkpoint_async(state.clone());
+        drop(storage); // outstanding recovery is joined even without explicit flush
+        assert_eq!(Session::load(&dir).unwrap().sidebar_width, 320.0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn background_recovery_reports_write_errors_and_can_retry() {
+        let dir =
+            std::env::temp_dir().join(format!("symphos-recovery-failure-{}", std::process::id()));
+        std::fs::write(&dir, b"a file cannot be a recovery directory").unwrap();
+        let mut storage = Storage::new(dir.clone());
+        let state = session();
+        storage.checkpoint(&state);
+        assert!(
+            storage
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Workspace save failed")
+        );
+        std::fs::remove_file(&dir).unwrap();
+        storage.notice = None;
+        storage.checkpoint(&state);
+        assert!(storage.notice.is_none());
+        assert!(Session::load(&dir).is_some());
+        drop(storage);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

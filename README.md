@@ -154,8 +154,9 @@ the grid. Right-drag, middle-drag, or Shift + left-drag pans the view. Rotation
 keeps the view's scale stable. Scroll to zoom (0.5×–10×, also adjustable under
 Camera) and double-click to reset the
 camera, including pan. **Center view** under Camera resets only the pan.
-The Camera panel has an XYZ orientation gizmo, with a compact version in the
-waterfall's upper-right corner. Drag either gizmo to orbit, click an axis to
+The Camera panel has an XYZ orientation gizmo. An optional compact version in the
+waterfall's upper-right corner is hidden by default; enable **Navigation gizmo**
+under Appearance → Viewport guides to show it. Drag either gizmo to orbit, click an axis to
 align, and click it again to flip to the opposite side. Explicit Front, Back,
 Left, Right, Top, and Bottom buttons always snap to the named orthographic view.
 **Snap isometric…** offers four corner views from above and four from below,
@@ -193,8 +194,11 @@ Wireframe connects both directions without filling the faces. Dots shows separat
 colored points for each frequency/time sample with no connecting edges. Stems
 draws a forest of colored pins from the floor to each signal level. Bars draws
 solid 3D columns, with shaded sides to make their volume readable from any angle.
+**Base floor** fills the underside of Surface mode at zero height, independently
+of **Base walls** and the reference **Floor grid**. It defaults off and is saved
+with the component. Missing history stays open instead of being bridged.
 Only the selected style's parameters are shown directly below the dropdown:
-surface mesh/base walls; line thickness and time-trace spacing; Y-line thickness
+surface mesh/base walls/base floor; line thickness and time-trace spacing; Y-line thickness
 and band spacing; wireframe thickness and mesh spacing; dot size and point spacing;
 stem thickness and spacing; or bar width/depth, bands per bar, and time spacing.
 Bars defaults to 75% width, 65% depth, four display bands per bar, and every third
@@ -608,3 +612,7 @@ compiler; Linux additionally requires EGL development libraries.
 
 The bundled projectM library has its own LGPL license. See
 [third-party notices](THIRD_PARTY_NOTICES.md), including source/relinking requirements.
+
+### Cymatics
+
+The Cymatics component adds incoming-audio Chladni sand, shaded wave surfaces, nodal patterns, and artistic interference on rotatable square, rectangular, or circular plates. Its inspector exposes plate physics, GPU grains, color/material controls, audio response, and camera navigation; numeric controls support scene macros and Signals. Sand transport is approximate, with natural settling by default. It follows the global display FPS preference and never generates sound. See [the model, controls, and validation notes](docs/cymatics.md).
