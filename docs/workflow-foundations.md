@@ -47,7 +47,9 @@ Signal processing follows:
 The Output inspector shows raw, normalized, and final values plus a transfer
 curve. For a detector moving only between 0.50 and 0.55, enable input-range
 normalization and set those limits, or use **Learn range · 5 s** while the audio
-plays. The range expands to 0–1 before influence and final smoothing.
+plays. The range expands to 0–1 before influence and final smoothing. Learning
+finishes even while the editor is hidden and retains a result message, including
+the measured limits or an explanation when no changing live input was detected.
 
 The optional curve stage adds exponent, dead zone, stepped output, and inversion.
 It defaults to bypass, preserving existing scenes. Bipolar sources retain their

@@ -40,6 +40,7 @@ pub struct Panel {
     clipboard: Option<(Definition, bool)>,
     rename: Option<(u64, String, bool)>,
     learning: Option<RangeLearning>,
+    learning_notice: Option<(u64, String)>,
     sections: BTreeMap<u64, SignalSection>,
     pub close_inspector: bool,
     pub inspector_width: f32,
@@ -78,6 +79,16 @@ impl RangeLearning {
             self.samples += 1;
         }
     }
+    fn finish(&self, normalization: &mut Normalization) -> String {
+        if self.apply(normalization) {
+            format!(
+                "Learned {:.3} – {:.3}; now mapped to 0–1.",
+                normalization.low, normalization.high
+            )
+        } else {
+            "No changing live signal detected; range retained.".into()
+        }
+    }
     fn apply(&self, normalization: &mut Normalization) -> bool {
         if self.samples < 2 || self.high - self.low < 0.0001 {
             return false;
@@ -111,6 +122,7 @@ impl Default for Panel {
             clipboard: None,
             rename: None,
             learning: None,
+            learning_notice: None,
             sections: BTreeMap::new(),
             close_inspector: false,
             inspector_width: 236.0,
@@ -126,7 +138,7 @@ impl Panel {
             capture.observe(&self.snapshot);
             if self.snapshot.time - capture.started >= 5.0 {
                 if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == capture.id) {
-                    capture.apply(&mut d.normalization);
+                    self.learning_notice = Some((capture.id, capture.finish(&mut d.normalization)));
                 }
                 self.learning = None;
             }
@@ -162,6 +174,7 @@ impl Panel {
         self.last_history_time = 0.0;
         self.rename = None;
         self.learning = None;
+        self.learning_notice = None;
         self.midi_learning = None;
         self.sections.clear();
         self.deleted = None;
@@ -861,7 +874,14 @@ impl Panel {
                 {
                     self.processor = Some(id);
                 }
-                normalization_editor(ui, d, &sample, &self.snapshot, &mut self.learning)
+                normalization_editor(
+                    ui,
+                    d,
+                    &sample,
+                    &self.snapshot,
+                    &mut self.learning,
+                    &mut self.learning_notice,
+                )
             }
             SignalSection::Routing => settings_group(ui, "Used by", |ui| {
                 if let Some(users) = self.consumers.get(&id) {
@@ -922,6 +942,7 @@ fn normalization_editor(
     sample: &Sample,
     snapshot: &Snapshot,
     learning: &mut Option<RangeLearning>,
+    notice: &mut Option<(u64, String)>,
 ) {
     ui.horizontal_wrapped(|ui| {
         for (label, value) in [
@@ -972,6 +993,7 @@ fn normalization_editor(
                 if running {
                     finish = true;
                 } else {
+                    *notice = None;
                     *learning = Some(RangeLearning::new(d.id, snapshot.time));
                 }
             }
@@ -984,11 +1006,10 @@ fn normalization_editor(
             }
         });
         if finish && let Some(capture) = learning.take() {
-            if capture.apply(&mut d.normalization) {
-                ui.weak("Range learned.");
-            } else {
-                ui.weak("No changing live signal detected; range retained.");
-            }
+            *notice = Some((d.id, capture.finish(&mut d.normalization)));
+        }
+        if let Some((_, message)) = notice.as_ref().filter(|(id, _)| *id == d.id) {
+            ui.weak(message);
         }
         if running && let Some(l) = learning {
             if l.samples > 0 {
@@ -1897,6 +1918,19 @@ mod tests {
         let range = &panel.bank.channels[0].normalization;
         assert!(range.enabled);
         assert_eq!((range.low, range.high), (0.50, 0.55));
+        assert_eq!(panel.learning_notice.as_ref().unwrap().0, id);
+        assert!(
+            panel
+                .learning_notice
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("0.500 – 0.550")
+        );
+        panel.advance_learning();
+        assert!(panel.learning_notice.is_some());
+        panel.replace_bank(Bank::default());
+        assert!(panel.learning_notice.is_none());
     }
     #[test]
     fn range_learning_uses_changing_live_raw_samples_and_ignores_disconnections() {
