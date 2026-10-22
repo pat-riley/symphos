@@ -6,7 +6,7 @@ pub mod library;
 
 pub const MAX_SCENES: usize = 64;
 pub const MAX_DOCUMENT_BYTES: usize = 64_000_000;
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
     pub id: u64,
     pub name: String,
@@ -15,7 +15,7 @@ pub struct Scene {
     #[serde(flatten)]
     pub state: SceneState,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Book {
     pub scenes: Vec<Scene>,
     pub active_scene: u64,

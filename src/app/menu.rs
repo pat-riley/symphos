@@ -5,7 +5,7 @@ use super::*;
 use crate::project_menu::{Action, ItemState};
 
 impl SymphosApp {
-    fn workspace_menu_blocked(&self, ctx: &egui::Context) -> bool {
+    pub(super) fn workspace_menu_blocked(&self, ctx: &egui::Context) -> bool {
         self.settings_window.open
             || self.project_dialog.open
             || self.project_dialog.pending_new
@@ -22,6 +22,17 @@ impl SymphosApp {
         use Action::*;
         let editing = crate::shortcuts::editing_text(ctx);
         let blocked = self.workspace_menu_blocked(ctx);
+        if matches!(action, Undo | Redo) {
+            return ItemState::enabled(
+                editing
+                    || (!blocked
+                        && if action == Undo {
+                            self.history.can_undo()
+                        } else {
+                            self.history.can_redo()
+                        }),
+            );
+        }
         if matches!(action, Cut | Copy | Paste | SelectAll) {
             return ItemState::enabled(editing);
         }
@@ -47,6 +58,10 @@ impl SymphosApp {
         let signals_open = signal_panel.show_signals && !panel_fullscreen;
         let mut checked = false;
         let available = match action {
+            Recording => {
+                checked = self.recording.active();
+                true
+            }
             CopySettings | ResetComponent | CloseComponent => selected,
             PasteSettings => {
                 selected
@@ -180,6 +195,21 @@ impl SymphosApp {
             return;
         }
         match action {
+            Undo | Redo if crate::shortcuts::editing_text(ctx) => {
+                ctx.input_mut(|i| action.append_text_events(&mut i.events));
+            }
+            Undo => self.undo_edit(false),
+            Redo => self.undo_edit(true),
+            Performance => self.performance.open = true,
+            Recording => self.recording.open = true,
+            DesignSystem => {
+                #[cfg(feature = "development")]
+                {
+                    if self.development.is_some() {
+                        self.design_system.open = true;
+                    }
+                }
+            }
             New | Open | Save | SaveAs | Settings => self.project_action(ctx, action),
             Cut => ctx.send_viewport_cmd(egui::ViewportCommand::RequestCut),
             Copy => ctx.send_viewport_cmd(egui::ViewportCommand::RequestCopy),

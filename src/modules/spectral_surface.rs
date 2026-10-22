@@ -148,6 +148,15 @@ pub struct SpectralSurface {
     guides: bool,
     show_gizmo: bool,
     last_draw: Option<Instant>,
+    mesh_cache: Option<(MeshKey, std::sync::Arc<egui::Mesh>)>,
+}
+#[derive(PartialEq)]
+struct MeshKey {
+    time: Instant,
+    settings: SurfaceSettings,
+    rect: Rect,
+    theme: AppTheme,
+    sequence: Option<u64>,
 }
 module_settings!(SpectralSurface, SurfaceSettings, {
     #[serde(default)] cylinder: CylinderGeometry => cylinder,
@@ -227,10 +236,47 @@ impl Default for SpectralSurface {
             guides: true,
             show_gizmo: true,
             last_draw: None,
+            mesh_cache: None,
         }
     }
 }
+impl SurfaceSettings {
+    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
+        self.auto_orbit.then_some(&mut self.yaw)
+    }
+}
+
 impl SpectralSurface {
+    fn cached_mesh(
+        &mut self,
+        rect: Rect,
+        now: Instant,
+        theme: &AppTheme,
+    ) -> std::sync::Arc<egui::Mesh> {
+        let settings = self.settings_snapshot();
+        let sequence = self.history.rows.back().map(|row| row.sequence);
+        if let Some((key, mesh)) = &self.mesh_cache
+            && key.time == now
+            && key.settings == settings
+            && key.rect == rect
+            && key.theme == *theme
+            && key.sequence == sequence
+        {
+            return mesh.clone();
+        }
+        let mesh = std::sync::Arc::new(self.build_mesh(rect, now, theme));
+        self.mesh_cache = Some((
+            MeshKey {
+                time: now,
+                settings,
+                rect,
+                theme: theme.clone(),
+                sequence,
+            },
+            mesh.clone(),
+        ));
+        mesh
+    }
     pub fn cylinder() -> Self {
         Self {
             shape: Shape::Cylinder,
@@ -246,6 +292,7 @@ impl SpectralSurface {
         self.history.ingest(frame, now);
     }
     pub fn clear(&mut self) {
+        self.mesh_cache = None;
         self.history.clear();
         self.last_draw = None;
         self.ripple_origin = None;
@@ -268,6 +315,7 @@ impl SpectralSurface {
         self.pan = Vec2::ZERO;
         self.auto_orbit = false;
     }
+
     #[cfg(test)]
     fn view_vector(&self, point: [f32; 3]) -> [f32; 3] {
         let (pos, depth) = camera_gizmo::project_direction(self.yaw, self.elevation, point);
@@ -1413,7 +1461,7 @@ impl SpectralSurface {
         }
         painter.set(
             scene,
-            egui::Shape::mesh(self.build_mesh(rect.shrink(24.0), now, theme)),
+            egui::Shape::Mesh(self.cached_mesh(rect.shrink(24.0), now, theme)),
         );
         if self.guides {
             if rect.width() > 450.0 {
@@ -1505,6 +1553,53 @@ mod tests {
             });
         }
         sphere
+    }
+    #[test]
+    fn paused_surface_reuses_mesh_and_invalidates_for_every_visible_change() {
+        use std::sync::Arc;
+        let now = Instant::now();
+        let mut surface = populated(now);
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let first = surface.cached_mesh(rect, now, &theme);
+        assert!(Arc::ptr_eq(&first, &surface.cached_mesh(rect, now, &theme)));
+        surface.yaw += 0.2;
+        let moved = surface.cached_mesh(rect, now, &theme);
+        assert!(!Arc::ptr_eq(&first, &moved));
+        surface.palette = Palette::Ember;
+        let colored = surface.cached_mesh(rect, now, &theme);
+        assert!(!Arc::ptr_eq(&moved, &colored));
+        assert!(!Arc::ptr_eq(
+            &colored,
+            &surface.cached_mesh(rect, now + Duration::from_millis(8), &theme)
+        ));
+        surface.clear();
+        assert!(surface.mesh_cache.is_none());
+    }
+    #[test]
+    #[ignore = "manual CPU timing for paused sphere/cylinder mesh reuse"]
+    fn benchmark_paused_spectral_surface() {
+        let now = Instant::now();
+        let mut surface = populated(now);
+        surface.latitudes = 128;
+        surface.longitudes = 256;
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 720.0));
+        let theme = AppTheme::default();
+        let start = Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(surface.build_mesh(rect, now, &theme));
+        }
+        let uncached = start.elapsed();
+        surface.cached_mesh(rect, now, &theme);
+        let start = Instant::now();
+        for _ in 0..100 {
+            std::hint::black_box(surface.cached_mesh(rect, now, &theme));
+        }
+        eprintln!(
+            "Paused spectral surface, 100 dense mesh requests: {:?} uncached → {:?} cached",
+            uncached,
+            start.elapsed()
+        );
     }
     #[test]
     fn cylinder_dimensions_taper_and_caps_define_a_cylinder_not_a_sphere() {

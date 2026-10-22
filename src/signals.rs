@@ -13,6 +13,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+pub mod shaping;
 pub mod ui;
 
 pub const CHANNEL_COLORS: [[u8; 3]; 8] = [
@@ -249,6 +250,8 @@ pub struct Definition {
     /// Final output lag, after calibration/influence. Zero bypasses smoothing.
     #[serde(default)]
     pub smoothing_ms: f32,
+    #[serde(default)]
+    pub shaping: shaping::Shaping,
     // The response is shared; mapping amount/range/target are not used here.
     pub response: Route,
     #[serde(default)]
@@ -294,6 +297,7 @@ impl Definition {
             adaptive: false,
             normalization: Normalization::default(),
             smoothing_ms: 0.0,
+            shaping: Default::default(),
             response,
             lfo: Lfo::default(),
             midi: Default::default(),
@@ -308,6 +312,7 @@ impl Definition {
             self.method = Method::Midi;
         }
         self.normalization.sanitize();
+        self.shaping.sanitize();
         if !self.smoothing_ms.is_finite() {
             self.smoothing_ms = 0.0;
         }
@@ -477,6 +482,7 @@ impl Bank {
                     && d.midi.valid()
                     && ((d.input == Input::Midi) == (d.method == Method::Midi))
                     && d.normalization.valid()
+                    && d.shaping.valid()
                     && d.smoothing_ms.is_finite()
                     && (0.0..=5000.0).contains(&d.smoothing_ms)
                     && ((d.input == Input::Lfo) == (d.method == Method::Lfo))
@@ -702,7 +708,10 @@ impl Processor {
                 s.sample.input = s.sample.raw.abs();
                 s.sample.level = s.sample.input;
                 s.sample.value = s.output_smoother.process(
-                    d.normalization.map(s.sample.raw) * d.influence,
+                    d.shaping.map(
+                        d.normalization.map(s.sample.raw),
+                        d.kind() == OutputKind::Bipolar,
+                    ) * d.influence,
                     d.smoothing_ms,
                     dt,
                 );
@@ -719,7 +728,10 @@ impl Processor {
                 };
                 s.sample.raw = value * d.lfo.depth;
                 s.sample.value = s.output_smoother.process(
-                    d.normalization.map(s.sample.raw) * d.influence,
+                    d.shaping.map(
+                        d.normalization.map(s.sample.raw),
+                        d.kind() == OutputKind::Bipolar,
+                    ) * d.influence,
                     d.smoothing_ms,
                     dt,
                 );
@@ -778,7 +790,10 @@ impl Processor {
             s.sample.input = s.voice.input;
             s.sample.raw = s.voice.output;
             s.sample.value = s.output_smoother.process(
-                d.normalization.map(s.sample.raw) * d.influence,
+                d.shaping.map(
+                    d.normalization.map(s.sample.raw),
+                    d.kind() == OutputKind::Bipolar,
+                ) * d.influence,
                 d.smoothing_ms,
                 dt,
             );
@@ -824,6 +839,8 @@ impl Runtime {
             let start = Instant::now();
             let mut processor = Processor::default();
             let mut bound = source.load_full();
+            let interval = Duration::from_secs_f64(1.0 / 120.0);
+            let mut deadline = Instant::now();
             while !quit.load(Ordering::Relaxed) {
                 let next = source.load_full();
                 if !Arc::ptr_eq(&bound, &next) {
@@ -841,7 +858,15 @@ impl Runtime {
                     live.load(Ordering::Relaxed),
                     &midi.load(),
                 )));
-                std::thread::sleep(Duration::from_micros(8333));
+                // Processing time is part of the 120 Hz budget, not added to it.
+                // Skip missed deadlines instead of issuing bursts after a stall.
+                deadline += interval;
+                let now = Instant::now();
+                if deadline > now {
+                    std::thread::sleep(deadline - now);
+                } else {
+                    deadline = now;
+                }
             }
         });
         Self {

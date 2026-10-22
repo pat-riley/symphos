@@ -6,7 +6,7 @@ mod view;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preview {
     width: usize,
     height: usize,

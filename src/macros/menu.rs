@@ -75,6 +75,10 @@ pub(super) fn macro_menu(
     can_undo: bool,
 ) -> Option<MacroAction> {
     ui.set_min_width(328.0);
+    if let (Some(target), Some(spec)) = (&bank[index].target, &bank[index].parameter) {
+        crate::midi::mapping::menu(ui, target, spec);
+        ui.separator();
+    }
     let mut action = None;
     let occupied = bank[index].parameter.is_some();
     let vacant = bank.iter().any(|s| s.parameter.is_none());

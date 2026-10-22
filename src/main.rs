@@ -15,6 +15,7 @@ mod milkdrop;
 mod modulation;
 mod modules;
 mod parameter;
+mod performance;
 mod project;
 mod project_menu;
 mod recording;

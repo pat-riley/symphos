@@ -7,7 +7,7 @@ impl Runtime {
         let snapshot = self.snapshot.load_full();
         ui.strong("MIDI inputs");
         ui.separator();
-        ui.label("Enable inputs here, then create a MIDI channel in Signals. Use Learn in its inspector to connect a fader, knob, pad, or note track.");
+        ui.label("Enable inputs here. Right-click an inspector parameter or assigned macro and choose Learn MIDI controller for direct control. Create a MIDI channel in Signals when you want to shape and smooth MIDI through the signal flow.");
         if let Some(error) = &snapshot.error {
             ui.colored_label(ui.visuals().warn_fg_color, error);
         }

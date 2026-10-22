@@ -14,6 +14,7 @@ use std::{
 mod native;
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
+pub mod mapping;
 pub mod ui;
 
 pub const VIRTUAL_PORT: i32 = i32::MIN;
@@ -187,6 +188,15 @@ impl Snapshot {
         self.ports
             .iter()
             .any(|p| self.enabled.contains(&p.id) && binding.port.is_none_or(|id| id == p.id))
+    }
+    pub fn changed_since(&self, binding: &Binding, serial: u64) -> bool {
+        self.values
+            .iter()
+            .any(|(&(port, ch, message, number), value)| {
+                value.serial > serial
+                    && self.enabled.contains(&port)
+                    && binding.matches(port, ch, message, number)
+            })
     }
     pub fn value(&self, binding: &Binding) -> f32 {
         let matches = self

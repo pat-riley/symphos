@@ -485,6 +485,12 @@ fn wrap_angle(v: f32) -> f32 {
 }
 
 impl OrbitalSettings {
+    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
+        self.auto_orbit.then_some(&mut self.yaw)
+    }
+}
+
+impl OrbitalSettings {
     fn apply_look(&mut self, solar: bool) {
         self.orb_style = if solar { 8 } else { 7 };
         self.orb_color_mode = 1;

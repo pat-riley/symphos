@@ -8,6 +8,8 @@ pub enum Action {
     Save,
     SaveAs,
     Settings,
+    Undo,
+    Redo,
     Cut,
     Copy,
     Paste,
@@ -47,6 +49,10 @@ pub enum Action {
     Issues,
     FftDiagnostics,
     About,
+    Performance,
+    Recording,
+    #[cfg_attr(not(feature = "development"), allow(dead_code))]
+    DesignSystem,
     Add(ModuleKind),
     Signal(Method),
 }
@@ -58,6 +64,8 @@ impl Action {
             Self::SaveAs => 3,
             Self::New => 4,
             Self::Settings => 5,
+            Self::Undo => 16,
+            Self::Redo => 17,
             Self::Cut => 10,
             Self::Copy => 11,
             Self::Paste => 12,
@@ -97,6 +105,9 @@ impl Action {
             Self::Issues => 71,
             Self::FftDiagnostics => 72,
             Self::About => 73,
+            Self::Performance => 74,
+            Self::Recording => 76,
+            Self::DesignSystem => 75,
             Self::Add(kind) => 100 + kind as i32,
             Self::Signal(method) => 200 + method as i32,
         }
@@ -122,6 +133,17 @@ impl Action {
     }
     fn text_event(self) -> Option<egui::Event> {
         match self {
+            Self::Undo | Self::Redo => Some(egui::Event::Key {
+                key: egui::Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: if self == Self::Redo {
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::COMMAND
+                },
+            }),
             Self::Cut => Some(egui::Event::Cut),
             Self::Copy => Some(egui::Event::Copy),
             Self::SelectAll => Some(egui::Event::Key {
@@ -167,7 +189,8 @@ pub fn menus() -> &'static [Entry] {
     MENUS.get_or_init(|| {
         use Action::*;
         use Entry::{Menu, Separator as Sep};
-        vec![
+        #[allow(unused_mut)]
+        let mut menus = vec![
             Menu(
                 "Application",
                 vec![
@@ -193,6 +216,7 @@ pub fn menus() -> &'static [Entry] {
                     Sep,
                     item(Save, "Save Project", "s", CMD),
                     item(SaveAs, "Save Project As…", "s", CMD | SHIFT),
+                    plain(Recording, "Record Visualizer…"),
                     Sep,
                     plain(Presets, "Scene Library…"),
                     Sep,
@@ -202,6 +226,9 @@ pub fn menus() -> &'static [Entry] {
             Menu(
                 "Edit",
                 vec![
+                    item(Undo, "Undo", "z", CMD),
+                    item(Redo, "Redo", "z", CMD | SHIFT),
+                    Sep,
                     item(Cut, "Cut", "x", CMD),
                     item(Copy, "Copy", "c", CMD),
                     item(Paste, "Paste", "v", CMD),
@@ -280,13 +307,29 @@ pub fn menus() -> &'static [Entry] {
                     item(Shortcuts, "Keyboard Shortcuts…", "k", CMD),
                     plain(Info, "Info View"),
                     Sep,
+                    plain(Performance, "Performance…"),
                     plain(FftDiagnostics, "FFT Diagnostics…"),
                     plain(Issues, "Issue Log…"),
                     Sep,
                     plain(About, "About Symphos…"),
                 ],
             ),
-        ]
+        ];
+        #[cfg(feature = "development")]
+        if crate::development::options().is_some() {
+            menus.insert(
+                menus.len() - 1,
+                Menu(
+                    "Dev",
+                    vec![
+                        plain(DesignSystem, "Design System & Release Readiness…"),
+                        plain(Performance, "Performance…"),
+                        plain(Issues, "Issue Log…"),
+                    ],
+                ),
+            );
+        }
+        menus
     })
 }
 fn entry_commands(entries: &[Entry]) -> impl Iterator<Item = &Command> {
@@ -521,7 +564,7 @@ pub fn take_shortcut(
         if !input.focused { return None; }
         for c in commands() {
             // The normal text widget handles its platform clipboard shortcuts.
-            if matches!(c.action, Action::Cut | Action::Copy | Action::Paste | Action::SelectAll) || !enabled(c.action) { continue; }
+            if matches!(c.action, Action::Cut | Action::Copy | Action::Paste | Action::SelectAll | Action::Undo | Action::Redo) || !enabled(c.action) { continue; }
             let key = match c.key {
                 " " => Some(Key::Space), "\u{f702}" => Some(Key::ArrowLeft), "\u{f703}" => Some(Key::ArrowRight),
                 "\u{f704}" => Some(Key::F1), "\u{f70e}" => Some(Key::F11), "=" => Some(Key::Equals),

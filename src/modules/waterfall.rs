@@ -219,10 +219,17 @@ impl Default for Waterfall {
     }
 }
 
+impl WaterfallSettings {
+    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
+        self.auto_orbit.then_some(&mut self.yaw)
+    }
+}
+
 impl Waterfall {
     pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
         self.history.ingest(frame, now);
     }
+
     #[cfg(test)]
     pub fn history_len(&self) -> usize {
         self.history.rows.len()

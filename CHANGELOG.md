@@ -5,6 +5,32 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+### Editing and live-performance foundations
+
+- Add creative Undo/Redo to the Edit menu, with grouped drags/typing, scene and
+  signal restoration, and preservation of surviving simulation runtimes.
+- Add scene-saved absolute MIDI Learn for numeric inspector parameters and
+  assigned macros, mapping badges, and a mapping list in MIDI settings.
+- Share parameter addressing, ranges, logarithmic behavior, and integer handling
+  between inspectors, macros, and direct MIDI controls.
+- Add optional signal transfer curves, dead zones, stepped output, inversion,
+  and a floating signal processor with before/after traces. Keep normalization,
+  envelope response, influence, and final smoothing in one visible workflow.
+- Group component preset/reset/copy/paste commands under Component actions and
+  add a development-only Design System gallery with release-asset placeholders.
+- Add macOS live visualizer recording with incoming stereo audio, exact output
+  dimensions, 30/60/120 FPS targets, asynchronous encoding, and explicit loss
+  counters. Offline export and full-scene composition remain follow-up work.
+- Add discreet frame-budget diagnostics, deadline-based display/signal pacing,
+  and propagation of the current FPS target into MilkDrop preset equations.
+- Reduce Resonance mesh construction cost and reuse paused Sphere/Cylinder meshes.
+- Add Cymatics grain speed, recycling boundary, respawn radius, and renewal-rate
+  controls; preserve existing scenes with backward-compatible defaults.
+
+See the [workflow guide](docs/workflow-foundations.md),
+[recording guide](docs/live-recording.md), and
+[measured performance report](docs/performance-2026-10-21.md).
+
 ### MilkDrop-compatible visualizer
 
 - Add a native projectM-backed MilkDrop component with `.milk` file/folder import,

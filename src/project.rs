@@ -7,7 +7,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneState {
     #[serde(default)]
     pub macros: Option<crate::macros::scene::SceneMacros>,

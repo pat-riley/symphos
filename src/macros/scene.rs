@@ -13,12 +13,14 @@ pub enum InspectAction {
 pub struct SceneMacros {
     pub open: bool,
     pub slots: [Slot; 12],
+    pub midi: Vec<crate::midi::mapping::Mapping>,
 }
 impl Default for SceneMacros {
     fn default() -> Self {
         Self {
             open: true,
             slots: std::array::from_fn(|_| Slot::default()),
+            midi: Vec::new(),
         }
     }
 }
@@ -84,24 +86,40 @@ impl SceneMacros {
         result
     }
     pub fn valid(&self, panes: &[PaneState]) -> bool {
-        self.slots.iter().all(|slot| {
-            if slot.parameter.is_some() != slot.target.is_some() {
-                return false;
-            }
-            let Some(target) = &slot.target else {
+        let mut targets = std::collections::HashSet::new();
+        self.midi.len() <= 256
+            && self.midi.iter().all(|m| {
+                targets.insert((&m.target.pane, m.target.kind as usize, &m.parameter.field))
+                    && m.input.valid()
+                    && m.parameter.valid()
+                    && panes.iter().any(|p| {
+                        p.instance_id == m.target.pane
+                            && p.settings.iter().any(|s| {
+                                s.kind() == m.target.kind
+                                    && crate::macros::get(s, &m.parameter.field).is_some()
+                            })
+                    })
+            })
+            && self.slots.iter().all(|slot| {
+                if slot.parameter.is_some() != slot.target.is_some() {
+                    return false;
+                }
+                let Some(target) = &slot.target else {
+                    let mut state = State::default();
+                    state.banks[0][0] = slot.clone();
+                    return state.valid(&[]);
+                };
+                let Some(pane) = panes.iter().find(|p| p.instance_id == target.pane) else {
+                    return false;
+                };
                 let mut state = State::default();
-                state.banks[0][0] = slot.clone();
-                return state.valid(&[]);
-            };
-            let Some(pane) = panes.iter().find(|p| p.instance_id == target.pane) else {
-                return false;
-            };
-            let mut state = State::default();
-            state.banks[target.kind as usize][0] = slot.clone();
-            state.valid(&pane.settings)
-        })
+                state.banks[target.kind as usize][0] = slot.clone();
+                state.valid(&pane.settings)
+            })
     }
     pub fn reconcile(&mut self, panes: &[ModulePane], bank: &signals::Bank) {
+        self.midi
+            .retain(|m| panes.iter().any(|p| p.instance_id() == m.target.pane));
         for slot in &mut self.slots {
             if slot
                 .signal
@@ -121,6 +139,9 @@ impl SceneMacros {
     }
     pub fn for_panes(&self, panes: &[PaneState]) -> Self {
         let mut macros = self.clone();
+        macros
+            .midi
+            .retain(|m| panes.iter().any(|p| p.instance_id == m.target.pane));
         for slot in &mut macros.slots {
             if slot
                 .target
@@ -134,6 +155,7 @@ impl SceneMacros {
         macros
     }
     pub fn remove_component(&mut self, id: &str) {
+        self.midi.retain(|m| m.target.pane != id);
         for slot in &mut self.slots {
             if slot.target.as_ref().is_some_and(|target| target.pane == id) {
                 slot.parameter = None;
