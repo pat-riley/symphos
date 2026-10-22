@@ -5,6 +5,23 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+### Spectral Bloom
+
+- Add a sculptural spectrum component with connected frequency filaments,
+  cascading layers, bent/curling tails and independently styled particle clouds.
+- Add floating-point image feedback with time-based fade, expansion, rotation,
+  drift, distortion and color separation; keep pause and resize behavior stable.
+- Integrate inspector mapping, scene persistence, recording and legacy upgrades.
+
+### Particle Waves
+
+- Add layered spectrum-driven particle ribbons, rings, spirals and tunnels,
+  with eight independently configurable layers and blue/lime/white defaults.
+- Add GPU audio-driven drift, spring return, illustrated resonance, particle
+  shapes, palettes, glow, depth of field and unrestricted 3D camera controls.
+- Integrate layer parameters with macros/MIDI, scene persistence, Undo/Redo,
+  pause and exact-resolution recording; upgrade older component banks safely.
+
 ### Editing and live-performance foundations
 
 - Add creative Undo/Redo to the Edit menu, with grouped drags/typing, scene and

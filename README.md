@@ -622,6 +622,19 @@ compiler; Linux additionally requires EGL development libraries.
 The bundled projectM library has its own LGPL license. See
 [third-party notices](THIRD_PARTY_NOTICES.md), including source/relinking requirements.
 
+### Particle Waves
+
+Add **Particle Waves** for layered spectrum-driven ribbons, rings, spirals and
+tunnels of luminous GPU particles. Configure up to eight layers, audio-driven
+drift and spring return, palettes, glow and depth of field. Drag to rotate freely
+or enable auto-rotation. Numeric controls support scene macros, Signals and MIDI;
+recording uses the requested output resolution. See the [controls and rendering
+notes](docs/particle-waves.md).
+
 ### Cymatics
 
 The Cymatics component adds incoming-audio Chladni sand, shaded wave surfaces, nodal patterns, and artistic interference on rotatable square, rectangular, or circular plates. Its inspector exposes plate physics, GPU grains, color/material controls, audio response, and camera navigation; numeric controls support scene macros and Signals. Sand transport is approximate, with natural settling by default. It follows the global display FPS preference and never generates sound. See [the model, controls, and validation notes](docs/cymatics.md).
+
+**Spectral Bloom** turns measured spectrum columns into cascading luminous strands
+and particle clouds, with configurable image feedback, layer palettes and a full
+3D camera. See [Spectral Bloom](docs/spectral-bloom.md) for controls and behavior.
