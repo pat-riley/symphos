@@ -584,7 +584,8 @@ mod tests {
                     ..Default::default()
                 };
                 257
-            ],
+            ]
+            .into(),
             ..AnalysisFrame::default()
         };
         let render = |spectrum: &mut Spectrum| {
@@ -730,7 +731,8 @@ mod tests {
                     ..Default::default()
                 };
                 257
-            ],
+            ]
+            .into(),
             ..AnalysisFrame::default()
         };
         let mut source = Spectrum::default();

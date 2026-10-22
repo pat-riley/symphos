@@ -1,4 +1,4 @@
-struct Frame {clock:vec4f,geometry:vec4f,motion:vec4f,grains:vec4f,recycling:vec4f,surface:vec4f,light:vec4f,direction:vec4f,view:vec4f,axis_x:vec4f,axis_y:vec4f,axis_z:vec4f,camera:vec4f,color_a:vec4f,color_b:vec4f,plate_color:vec4f,color:vec4f,output:vec4f}
+struct Frame {clock:vec4f,geometry:vec4f,motion:vec4f,grains:vec4f,recycling:vec4f,lifecycle:vec4f,surface:vec4f,light:vec4f,direction:vec4f,view:vec4f,axis_x:vec4f,axis_y:vec4f,axis_z:vec4f,camera:vec4f,color_a:vec4f,color_b:vec4f,plate_color:vec4f,color:vec4f,output:vec4f}
 @group(0) @binding(0) var<uniform> f:Frame;
 @group(0) @binding(1) var<storage,read> field:array<vec4f>;
 // Render pipeline uses the same binding as read-only; compute alone writes it.
@@ -20,11 +20,12 @@ fn sample_field(p:vec2f)->vec4f {let uv=clamp((p+1.0)*32.0,vec2f(0),vec2f(64));l
     force+=random*f.motion.z*activity*sqrt(120.0);
     force+=vec2f(sin(g.y*9.0+t),cos(g.x*7.0-t))*f.motion.w*activity;
     g=vec4f(g.xy,(g.zw+force*dt)*exp(-f.motion.y*dt));
-    let speed=length(g.zw);g=vec4f(g.xy,g.zw*min(1.0,0.7/max(speed,0.0001)));g=vec4f(g.xy+g.zw*dt,g.zw);
+    let speed=length(g.zw);g=vec4f(g.xy,g.zw*min(1.0,select(0.7,f.lifecycle.x,f.lifecycle.x>0.0)/max(speed,0.0001)));g=vec4f(g.xy+g.zw*dt,g.zw);
     // Recycle before grains settle on the low-energy rim. A central disk
     // avoids a single pile at the origin, and cleared velocity prevents jumps.
     let edge_distance=select(max(abs(g.x),abs(g.y)),length(g.xy),f.geometry.x>0.5);
-    if f.recycling.x>0.5 && f.camera.w>0.000001 && edge_distance>=f.recycling.y {
+    let renew=f.recycling.w>0.0 && hash(i*97u+u32(t*120.0)*619u)<1.0-exp(-f.recycling.w*dt);
+    if f.camera.w>0.000001 && ((f.recycling.x>0.5 && edge_distance>=f.recycling.y) || renew) {
         let seed=i*31u+u32(t*120.0)*7919u+u32(f.clock.w)*104729u+step;
         let radius=sqrt(hash(seed+41u))*f.recycling.z;
         let angle=hash(seed+67u)*6.283185;

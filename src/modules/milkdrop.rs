@@ -572,6 +572,7 @@ pub(crate) struct Milkdrop {
     settings: MilkdropSettings,
     worker: Option<Worker>,
     texture: Option<egui::TextureHandle>,
+    texture_context: Option<egui::Context>,
     last: Option<Instant>,
     time: f64,
     elapsed: f32,
@@ -590,6 +591,7 @@ impl Default for Milkdrop {
             settings: MilkdropSettings::default(),
             worker: None,
             texture: None,
+            texture_context: None,
             last: None,
             time: 0.,
             elapsed: 0.,
@@ -933,6 +935,10 @@ impl Milkdrop {
         live: bool,
         frozen: bool,
     ) {
+        if self.texture_context.as_ref() != Some(ui.ctx()) {
+            self.texture = None;
+            self.texture_context = Some(ui.ctx().clone());
+        }
         self.settings.sanitize();
         if self.presets.is_empty() {
             self.presets = preset::builtins().into_iter().map(Arc::new).collect();
@@ -981,7 +987,14 @@ impl Milkdrop {
             }
         }
         if !frozen || self.texture.is_none() {
-            let cap = [640., 960., 1280., 1920.][self.settings.quality as usize];
+            let cap = if ui
+                .data(|d| d.get_temp::<bool>(egui::Id::new("recording-output")))
+                .unwrap_or(false)
+            {
+                4096.0
+            } else {
+                [640., 960., 1280., 1920.][self.settings.quality as usize]
+            };
             let physical = rect.size() * ui.ctx().pixels_per_point();
             let scale = (cap / physical.max_elem().max(1.)).min(1.);
             let size = [
@@ -992,6 +1005,9 @@ impl Milkdrop {
                 preset: self.presets[self.settings.preset].clone(),
                 size,
                 time: self.time,
+                fps: ui
+                    .data(|d| d.get_temp::<u32>(egui::Id::new("visual-target-fps")))
+                    .unwrap_or(60),
                 pcm: runtime::audio_window(frame, live, self.settings.audio_gain),
                 controls: self.settings.adjustments(),
                 sensitivity: self.settings.sensitivity,

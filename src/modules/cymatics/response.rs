@@ -263,7 +263,8 @@ mod tests {
                 frequency_hz: 400.0,
                 magnitude: 0.0000001,
                 dbfs: -140.0,
-            }],
+            }]
+            .into(),
             ..Default::default()
         };
         assert!(peaks(&frame, &s, true).is_empty());

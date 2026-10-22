@@ -1,4 +1,5 @@
 //! Opt-in local development state. Compiled only with `--features development`.
+pub mod gallery;
 use crate::theme::AppTheme;
 pub use crate::workspace::Session as Workspace;
 use eframe::egui::{self, Color32};

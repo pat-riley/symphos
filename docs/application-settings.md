@@ -1,7 +1,7 @@
 # Application Settings
 
-Open Settings with the top navigation gear or **Cmd+,** on macOS / **Ctrl+,** on
-Linux. The footer settings button opens the same window at **Analysis & Meters**.
+Open Settings from the application menu or **Cmd+,** on macOS / **Ctrl+,** on
+Linux. The Preferences submenu opens a specific settings category directly.
 Drag the Settings title bar to move the window; its position is constrained to
 the app viewport. Close with the X, Escape, or a click outside. Settings blocks
 workspace interactions while open, but capture and visualization continue.
@@ -15,9 +15,10 @@ itself starts closed.
 
 | Category | Controls |
 | --- | --- |
-| Display & Layout | Interface zoom (60–200%), default zoom, application fullscreen, component inspector, Info View, balance pane sizes |
+| Display & Layout | Global display target up to 120 FPS, interface zoom (60–200%), default zoom, application fullscreen, component inspector, Info View, balance pane sizes |
 | Theme & Colors | App skin previews and selection |
 | Audio | Capture source, connection status, format, signal level, retry capture, platform capture guidance |
+| MIDI | Hardware/virtual inputs, held-value reset, direct controller mappings for the current scene |
 | Analysis & Meters | FFT size/window/channel, update rate, meter layout/channel, reset peak and clip hold, dropped samples, FFT diagnostics |
 | Help & About | Keyboard shortcuts, issue log, version/build, platform, current theme |
 
@@ -53,9 +54,9 @@ retain Automatic and their previous default scale.
 Changing FFT size, window, or analysis channel clears capture histories and resets
 module analysis state, preserving the existing interpretation rules. Changing the
 analysis update rate, meter layout/channel, theme, or zoom does not clear histories.
-Retry capture starts a new capture epoch. Selecting a source uses the same backend
-as the top navigation selector.
+Retry capture starts a new capture epoch. Audio source selection lives in Settings.
 
-Quick FFT size, update rate, and stereo-meter controls remain in the footer. The
-right-hand component inspector still handles each component's visual and audio
-mapping parameters; Settings handles shared application preferences.
+FFT size, update rate, and mono/stereo controls live in Settings. The right-hand
+component inspector handles each component's visual and audio mapping parameters;
+Settings handles shared application preferences. See [MIDI Learn and signal
+processing](workflow-foundations.md) and [live recording](live-recording.md).

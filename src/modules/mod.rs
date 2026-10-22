@@ -290,6 +290,15 @@ pub enum ModuleSettings {
 }
 
 impl ModuleSettings {
+    /// Auto-orbit advances presentation state without a user edit.
+    pub fn automatic_yaw(&mut self) -> Option<&mut f32> {
+        match self {
+            Self::Waterfall(s) => s.automatic_yaw(),
+            Self::Sphere(s) | Self::Cylinder(s) => s.automatic_yaw(),
+            Self::Orbital(s) => s.automatic_yaw(),
+            _ => None,
+        }
+    }
     pub fn modulation_mut(&mut self) -> Option<&mut crate::modulation::ModulationSettings> {
         match self {
             Self::Flux(s) => s.modulation.as_mut(),
@@ -604,6 +613,30 @@ impl ModulePane {
                 ModuleSettings::Cymatics(Box::new(self.cymatics.settings_snapshot())),
             ],
         }
+    }
+
+    /// Restore an edit while preserving simulation/capture state and inspector navigation.
+    pub fn restore_edit(&mut self, state: &PaneState) {
+        let before = self.snapshot();
+        for saved in &state.settings {
+            let mut settings = saved.clone();
+            if let Some(old) = before.settings.iter().find(|s| s.kind() == settings.kind()) {
+                let mut old = old.clone();
+                if let (Some(current), Some(restored)) =
+                    (old.automatic_yaw(), settings.automatic_yaw())
+                {
+                    *restored = *current;
+                }
+            }
+            if before.settings.iter().any(|s| s == &settings) {
+                continue;
+            }
+            self.kind = settings.kind();
+            self.paste_settings(&settings);
+        }
+        self.kind = state.kind;
+        self.macros = state.macros.clone().unwrap_or_default();
+        self.milkdrop.presets = state.milkdrop_presets.clone();
     }
 
     pub fn restore(&mut self, state: &PaneState) {
@@ -1595,7 +1628,7 @@ mod tests {
         };
         pane.toggle_freeze(&frame, now);
         frame.sequence = 43;
-        frame.waveform_left.fill(1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_left).fill(1.0);
         assert_eq!(pane.frozen.as_ref().unwrap().frame.sequence, 42);
         assert_eq!(pane.frozen.as_ref().unwrap().frame.waveform_left[0], 0.0);
         assert!(!other.is_frozen());
@@ -1669,8 +1702,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let before = render(&mut pane, &frame, true);
-        frame.waveform_left.fill(1.0);
-        frame.waveform_right.fill(-1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_left).fill(1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_right).fill(-1.0);
         let after = render(&mut pane, &frame, false);
         assert_eq!(before, after);
     }

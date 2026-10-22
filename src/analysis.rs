@@ -66,7 +66,7 @@ impl ChannelMode {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnalysisSettings {
     pub fft_size: usize,
     pub window: WindowFunction,
@@ -118,10 +118,11 @@ pub struct AnalysisFrame {
     pub channels: u32,
     pub fft_size: usize,
     pub latency_ms: f32,
-    pub waveform_left: Vec<f32>,
-    pub waveform_right: Vec<f32>,
-    pub bins: Vec<FrequencyBin>,
-    pub log_bands: Vec<SpectrumBand>,
+    // Published buffers are immutable; pane snapshots share them without copying PCM.
+    pub waveform_left: Arc<[f32]>,
+    pub waveform_right: Arc<[f32]>,
+    pub bins: Arc<[FrequencyBin]>,
+    pub log_bands: Arc<[SpectrumBand]>,
     pub peak: [f32; 2],
     pub rms: [f32; 2],
     pub mix_peak: f32,
@@ -149,10 +150,10 @@ impl Default for AnalysisFrame {
             channels: 2,
             fft_size: 4096,
             latency_ms: 0.0,
-            waveform_left: vec![0.0; 512],
-            waveform_right: vec![0.0; 512],
-            bins: Vec::new(),
-            log_bands: Vec::new(),
+            waveform_left: vec![0.0; 512].into(),
+            waveform_right: vec![0.0; 512].into(),
+            bins: Arc::from([]),
+            log_bands: Arc::from([]),
             peak: [0.0; 2],
             rms: [0.0; 2],
             mix_peak: 0.0,
@@ -473,10 +474,10 @@ impl Analyzer {
             channels,
             fft_size: self.size,
             latency_ms: self.size as f32 * 1000.0 / sample_rate.max(1) as f32,
-            waveform_left,
-            waveform_right,
-            bins,
-            log_bands,
+            waveform_left: waveform_left.into(),
+            waveform_right: waveform_right.into(),
+            bins: bins.into(),
+            log_bands: log_bands.into(),
             peak,
             rms,
             mix_peak,
@@ -538,12 +539,21 @@ fn run_analysis(
             analyzer = Analyzer::new(analyzer.size, analyzer.last_window);
         }
         let mut received = 0_usize;
+        let recording = crate::recording::audio::current();
+        let mut recorded = Vec::new();
         while let Ok(sample) = consumer.pop() {
+            if recording.is_some() {
+                recorded.push(sample);
+            }
             ring[write_cursor] = sample;
             write_cursor = (write_cursor + 1) % ring.len();
             available = (available + 1).min(ring.len());
             since_analysis += 1;
             received += 1;
+        }
+
+        if let Some(tap) = recording {
+            tap.submit(recorded, rate);
         }
 
         let current = settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -731,6 +741,62 @@ pub(crate) fn test_audio_frame(tones: &[(f32, f32)]) -> AnalysisFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_clones_share_buffers_and_later_analysis_preserves_old_samples() {
+        let settings = AnalysisSettings::default();
+        let mut analyzer = Analyzer::new(settings.fft_size, settings.window);
+        let ring = vec![[0.25, -0.5]; 24_000];
+        let frame = analyzer.analyze(&ring, 0, 48_000, 2, &settings, 1, 0);
+        let copy = frame.clone();
+        assert!(Arc::ptr_eq(&frame.waveform_left, &copy.waveform_left));
+        assert!(Arc::ptr_eq(&frame.waveform_right, &copy.waveform_right));
+        assert!(Arc::ptr_eq(&frame.bins, &copy.bins));
+        assert!(Arc::ptr_eq(&frame.log_bands, &copy.log_bands));
+        let next = analyzer.analyze(&vec![[0.0; 2]; 24_000], 0, 48_000, 2, &settings, 2, 0);
+        assert!(copy.waveform_left.iter().all(|value| *value == 0.25));
+        assert!(copy.waveform_right.iter().all(|value| *value == -0.5));
+        assert!(next.waveform_left.iter().all(|value| *value == 0.0));
+        assert!(!Arc::ptr_eq(&frame.bins, &next.bins));
+    }
+
+    #[test]
+    #[ignore = "manual analysis snapshot clone benchmark"]
+    fn benchmark_analysis_snapshot_clones() {
+        for rate in [48_000, 192_000] {
+            let mut frame = test_audio_frame(&[(440.0, 0.2)]);
+            frame.sample_rate = rate;
+            frame.waveform_left = (0..rate / 2).map(|i| (i as f32 * 0.01).sin()).collect();
+            frame.waveform_right = frame.waveform_left.clone();
+            let start = std::time::Instant::now();
+            for _ in 0..20_000 {
+                std::hint::black_box(frame.clone());
+            }
+            eprintln!(
+                "Snapshot at {rate} Hz: {:.3} microseconds/clone",
+                start.elapsed().as_secs_f64() * 1e6 / 20_000.0
+            );
+            let settings = AnalysisSettings {
+                fft_size: 8192,
+                ..Default::default()
+            };
+            let ring: Vec<_> = frame
+                .waveform_left
+                .iter()
+                .zip(frame.waveform_right.iter())
+                .map(|(left, right)| [*left, *right])
+                .collect();
+            let mut analyzer = Analyzer::new(settings.fft_size, settings.window);
+            let start = std::time::Instant::now();
+            for sequence in 1..=1000 {
+                std::hint::black_box(analyzer.analyze(&ring, 0, rate, 2, &settings, sequence, 0));
+            }
+            eprintln!(
+                "Analysis/publish at {rate} Hz: {:.3} microseconds/frame",
+                start.elapsed().as_secs_f64() * 1e6 / 1000.0
+            );
+        }
+    }
 
     #[test]
     fn analysis_worker_captures_without_a_renderer_and_rejects_reset_epochs() {

@@ -7,17 +7,37 @@ struct Vertex {
     view: [f32; 3],
     color: Color32,
 }
-enum Primitive {
-    Face([Vertex; 3]),
-    Line(Vertex, Vertex),
-    Point(Vertex),
+#[derive(Clone, Copy)]
+enum Kind {
+    Face([u32; 3]),
+    Line(u32, u32),
+    Point(u32),
+}
+struct Primitive {
+    depth: f32,
+    kind: Kind,
 }
 impl Primitive {
-    fn depth(&self) -> f32 {
-        match self {
-            Self::Face(v) => (v[0].view[2] + v[1].view[2] + v[2].view[2]) / 3.0,
-            Self::Line(a, b) => (a.view[2] + b.view[2]) * 0.5,
-            Self::Point(v) => v.view[2],
+    fn face(indices: [u32; 3], vertices: &[Vertex]) -> Self {
+        Self {
+            depth: indices
+                .iter()
+                .map(|i| vertices[*i as usize].view[2])
+                .sum::<f32>()
+                / 3.0,
+            kind: Kind::Face(indices),
+        }
+    }
+    fn line(a: u32, b: u32, vertices: &[Vertex]) -> Self {
+        Self {
+            depth: (vertices[a as usize].view[2] + vertices[b as usize].view[2]) * 0.5,
+            kind: Kind::Line(a, b),
+        }
+    }
+    fn point(i: u32, vertices: &[Vertex]) -> Self {
+        Self {
+            depth: vertices[i as usize].view[2],
+            kind: Kind::Point(i),
         }
     }
 }
@@ -43,6 +63,23 @@ impl Resonance {
             std::array::from_fn(|i| axes[0][i] * p[0] + axes[1][i] * p[1] + axes[2][i] * p[2])
         };
         let mut primitives = Vec::with_capacity(s.layers * rows * cols * 2);
+        let mut all_vertices = Vec::with_capacity(s.layers * (rows + 1) * cols);
+        let profiles: Vec<_> = (0..cols)
+            .map(|x| {
+                let angle = x as f32 / cols as f32 * TAU;
+                let petal = (0.5 + 0.5 * (angle * s.petals as f32).cos())
+                    .max(0.0)
+                    .powf(s.sharpness);
+                (angle, s.waist + (1.0 - s.waist) * petal)
+            })
+            .collect();
+        let row_data: Vec<_> = (0..=rows)
+            .map(|y| {
+                let v = y as f32 / rows as f32;
+                let (sin, cos) = (PI * v * s.opening).sin_cos();
+                (v, sin, cos, self.band(v))
+            })
+            .collect();
         for layer in 0..s.layers {
             let t = self.layer_fraction(layer);
             let fade = if s.flow.abs() > 0.0001 {
@@ -50,18 +87,42 @@ impl Resonance {
             } else {
                 1.0
             };
-            let mut vertices: Vec<_> = (0..=rows)
-                .flat_map(|y| (0..cols).map(move |x| (x, y)))
-                .map(|(x, y)| {
-                    let view =
-                        project(self.point(layer, x as f32 / cols as f32, y as f32 / rows as f32));
-                    Vertex {
+            let radius = (s.radius + t * s.spacing * s.layers.saturating_sub(1) as f32)
+                * (1.0 + self.energy * s.audio_expand);
+            let turn = self.spin_phase
+                * if s.alternate && layer % 2 == 1 {
+                    -1.0
+                } else {
+                    1.0
+                }
+                + t * s.layers.saturating_sub(1) as f32 * s.twist.to_radians();
+            let columns: Vec<_> = profiles
+                .iter()
+                .map(|(angle, profile)| {
+                    let (sin, cos) = (angle + turn).sin_cos();
+                    (*profile, sin, cos)
+                })
+                .collect();
+            let mut vertices = Vec::with_capacity((rows + 1) * cols);
+            for &(v, sin_phi, cos_phi, band) in &row_data {
+                let ripple =
+                    (v * PI * s.ripple_count - self.ripple_phase + t * TAU * s.phase_spread).sin()
+                        * (s.ripple_amount + s.audio_ripple * band);
+                let radial = radius * sin_phi * (1.0 + ripple);
+                let depth = radius * cos_phi * s.flattening + (t - 0.5) * s.layer_depth;
+                for &(profile, sin_theta, cos_theta) in &columns {
+                    let view = project([
+                        radial * profile * cos_theta,
+                        radial * profile * sin_theta,
+                        depth,
+                    ]);
+                    vertices.push(Vertex {
                         screen: center + Vec2::new(view[0], view[1]) * scale,
                         view,
                         color: Color32::TRANSPARENT,
-                    }
-                })
-                .collect();
+                    });
+                }
+            }
             for y in 0..=rows {
                 for x in 0..cols {
                     let subtract = |a: [f32; 3], b: [f32; 3]| -> [f32; 3] {
@@ -116,50 +177,55 @@ impl Resonance {
                     );
                 }
             }
+            let offset = all_vertices.len() as u32;
+            all_vertices.extend(vertices);
             for y in 0..rows {
                 for x in 0..cols {
-                    let a = vertices[y * cols + x];
-                    let b = vertices[y * cols + (x + 1) % cols];
-                    let c = vertices[(y + 1) * cols + (x + 1) % cols];
-                    let d = vertices[(y + 1) * cols + x];
+                    let a = offset + (y * cols + x) as u32;
+                    let b = offset + (y * cols + (x + 1) % cols) as u32;
+                    let c = offset + ((y + 1) * cols + (x + 1) % cols) as u32;
+                    let d = offset + ((y + 1) * cols + x) as u32;
                     if s.style == Style::Membranes {
                         if y > 0 {
-                            primitives.push(Primitive::Face([a, b, d]));
+                            primitives.push(Primitive::face([a, b, d], &all_vertices));
                         }
                         if y + 1 < rows || s.opening < 1.0 {
-                            primitives.push(Primitive::Face([b, c, d]));
+                            primitives.push(Primitive::face([b, c, d], &all_vertices));
                         }
                     }
                     let lines = s.style == Style::Wireframe
                         || (s.style == Style::Membranes && s.wire_opacity > 0.0);
                     if (lines || s.style == Style::Contours) && y % s.grid_stride == 0 && y > 0 {
-                        primitives.push(Primitive::Line(a, b));
+                        primitives.push(Primitive::line(a, b, &all_vertices));
                     }
                     if lines && x % s.grid_stride == 0 {
-                        primitives.push(Primitive::Line(a, d));
+                        primitives.push(Primitive::line(a, d, &all_vertices));
                     }
                     if s.style == Style::Points {
-                        primitives.push(Primitive::Point(a));
+                        primitives.push(Primitive::point(a, &all_vertices));
                     }
                     if y + 1 == rows && s.opening < 1.0 && s.style != Style::Points {
-                        primitives.push(Primitive::Line(c, d));
+                        primitives.push(Primitive::line(c, d, &all_vertices));
                     }
                 }
             }
         }
         // Sorting all layers together keeps intersecting translucent petals coherent.
-        primitives.sort_unstable_by(|a, b| a.depth().total_cmp(&b.depth()));
+        primitives.sort_unstable_by(|a, b| a.depth.total_cmp(&b.depth));
         let mut mesh = egui::Mesh::default();
+        if s.style == Style::Membranes {
+            mesh.vertices.reserve(all_vertices.len());
+            for v in &all_vertices {
+                mesh.colored_vertex(v.screen, v.color);
+            }
+        }
+        mesh.indices.reserve(primitives.len() * 3);
         for primitive in primitives {
-            match primitive {
-                Primitive::Face(v) => {
-                    let base = mesh.vertices.len() as u32;
-                    for p in v {
-                        mesh.colored_vertex(p.screen, p.color);
-                    }
-                    mesh.add_triangle(base, base + 1, base + 2);
-                }
-                Primitive::Line(a, b) => {
+            match primitive.kind {
+                Kind::Face(indices) => mesh.indices.extend(indices),
+                Kind::Line(a, b) => {
+                    let a = all_vertices[a as usize];
+                    let b = all_vertices[b as usize];
                     let opacity = if s.style == Style::Membranes {
                         s.wire_opacity
                     } else {
@@ -174,7 +240,8 @@ impl Resonance {
                         s.line_width,
                     );
                 }
-                Primitive::Point(v) => {
+                Kind::Point(i) => {
+                    let v = all_vertices[i as usize];
                     super::super::retro::cell(
                         &mut mesh,
                         Rect::from_center_size(v.screen, Vec2::splat(s.point_size * 2.0)),

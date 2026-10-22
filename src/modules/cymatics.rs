@@ -196,7 +196,11 @@ impl Cymatics {
                     "Use soft glowing sprites instead of crisp sand grains. Appearance only.",
                 );
             ui.checkbox(&mut s.recycle_edges, "Recycle grains at edges").help_text("Return grains that reach the outer edge to a scattered area near the center, with no leftover velocity. Enabled by default for continuous audio-driven flow. Turn off for natural settling at the boundary. Recycling stops when paused or the vibration has faded.");
-            s.numeric_controls(ui, "Particles");
+            settings_group(ui, "Grain appearance", |ui| {
+                s.numeric_controls(ui, "Particles")
+            });
+            settings_group(ui, "Motion", |ui| s.numeric_controls(ui, "Motion"));
+            settings_group(ui, "Lifecycle", |ui| s.numeric_controls(ui, "Lifecycle"));
             if ui.button("Scatter grains").help_text("Redistribute grains across the current plate with zero velocity. Keeps plate settings, audio response, camera, and mappings.").clicked(){self.reset=true;self.seed=self.seed.wrapping_add(1);}
         });
         settings_panel(ui, "Signal Response", |ui| {
@@ -390,7 +394,13 @@ impl Cymatics {
                 if s.artistic { s.turbulence } else { 0.0 },
             ],
             grains: [s.grain_size, s.size_variation, s.grain_opacity, s.glow],
-            recycling: [if s.recycle_edges { 1.0 } else { 0.0 }, 0.96, 0.35, 0.0],
+            recycling: [
+                if s.recycle_edges { 1.0 } else { 0.0 },
+                s.recycle_threshold,
+                s.spawn_radius.min(s.recycle_threshold * 0.95),
+                s.refresh_rate,
+            ],
+            lifecycle: [s.max_speed, 0.0, 0.0, 0.0],
             surface: [s.plate_opacity, s.brightness, s.node_width, s.contours],
             light: [s.ambient, s.diffuse, s.specular, s.roughness],
             direction: [

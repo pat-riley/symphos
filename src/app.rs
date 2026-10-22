@@ -12,6 +12,7 @@ use crate::icons::{self, Icon};
 use crate::modules::{ModuleKind, ModulePane, ModuleSettings};
 use crate::theme::{AppTheme, AppearancePreferences};
 
+mod history;
 mod menu;
 mod scene_library;
 mod settings;
@@ -22,7 +23,14 @@ const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
 
 pub struct SymphosApp {
+    history: history::History,
+    performance: crate::performance::Monitor,
+    frame_pacer: crate::performance::Pacer,
+    recording: crate::recording::Recorder,
+    #[cfg(feature = "development")]
+    design_system: crate::development::gallery::Gallery,
     midi_runtime: Option<crate::midi::Runtime>,
+    midi_controller: crate::midi::mapping::Controller,
     signal_runtime: Option<crate::signals::Runtime>,
     signal_ui: crate::signals::ui::Shared,
     project_dialog: crate::project::Dialog,
@@ -91,11 +99,18 @@ impl SymphosApp {
         let mut app = Self {
             midi_runtime: Some(midi_runtime),
             signal_runtime,
+            midi_controller: Default::default(),
             signal_ui: Default::default(),
             scene_macros: Default::default(),
             project_dialog: Default::default(),
             scenes: Default::default(),
             saved_project: None,
+            history: Default::default(),
+            performance: Default::default(),
+            frame_pacer: Default::default(),
+            recording: crate::recording::Recorder::new(context.wgpu_render_state.clone()),
+            #[cfg(feature = "development")]
+            design_system: Default::default(),
             scene_browser: Default::default(),
             scene_library: Default::default(),
             pending_scene: None,
@@ -283,6 +298,10 @@ impl SymphosApp {
     }
 
     fn apply_scene(&mut self, state: crate::project::SceneState) {
+        self.recording.stop();
+        if let Some(midi) = &self.midi_runtime {
+            self.midi_controller.reset(&midi.snapshot.load());
+        }
         self.inspecting_macro = None;
         self.scene_macros = state.macros.clone().unwrap_or_else(|| {
             crate::macros::scene::SceneMacros::from_legacy(&state.panes, state.selected_pane)
@@ -391,6 +410,7 @@ impl SymphosApp {
             .is_none_or(|saved| serde_json::to_vec(&current).as_ref().ok() != Some(saved))
     }
     fn new_project(&mut self, ctx: &egui::Context) {
+        self.history = Default::default();
         let state = crate::project::SceneState {
             macros: Some(Default::default()),
             signals: Default::default(),
@@ -529,6 +549,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     fn open_project(&mut self, path: &std::path::Path) {
         match crate::project::Project::open(path) {
             Ok(project) => {
+                self.history = Default::default();
                 self.saved_project = serde_json::to_vec(&project).ok();
                 self.scene_library.reset_project();
                 self.scenes = project.scenes;
@@ -734,36 +755,38 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Component presets…").clicked() {
+                ui.menu_button("Component actions", |ui| {
+                    if ui.button("Browse component presets…").clicked() {
                         self.manager.open_presets(Scope::Component);
+                        ui.close();
                     }
-                    if ui.small_button("Reset component")
-                        .help_text("Reset all parameters of this component; keep captured history.")
-                        .clicked()
-                    {
-                        self.panes[self.selected_pane].reset_settings();
+                    ui.separator();
+                    if ui.button("Copy settings").clicked() {
+                        self.settings_clipboard =
+                            Some(self.panes[self.selected_pane].export_settings());
+                        ui.close();
                     }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Copy settings")
-                        .help_text("Copy this module's settings only, including its appearance and camera if present. Does not copy audio, history, pause state, or global settings.")
-                        .clicked()
-                    {
-                        self.settings_clipboard = Some(self.panes[self.selected_pane].export_settings());
-                    }
-                    let compatible = self.settings_clipboard.as_ref()
-                        .is_some_and(|settings| settings.kind() == self.panes[self.selected_pane].kind);
-                    if ui.add_enabled(compatible, egui::Button::new("Paste settings").small())
-                        .help_text("Apply copied settings to another pane using the same module type. Keeps that pane's captured history and global channel selection. Clipboard is session-only.")
+                    let compatible = self
+                        .settings_clipboard
+                        .as_ref()
+                        .is_some_and(|s| s.kind() == self.panes[self.selected_pane].kind);
+                    if ui
+                        .add_enabled(compatible, egui::Button::new("Paste settings"))
                         .clicked()
                     {
                         self.paste_module_settings();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Reset component")
+                        .help_text("Restore component defaults. Undo is available from Edit.")
+                        .clicked()
+                    {
+                        self.panes[self.selected_pane].reset_settings();
+                        ui.close();
                     }
                 });
-                if let Some(settings) = &self.settings_clipboard {
-                    ui.weak(format!("Clipboard: {}", settings.kind().label()));
-                }
             });
         let bounds = ui.available_rect_before_wrap();
         let content_rect = workspace_ui::inspector_rail(
@@ -927,6 +950,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     }
 
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
+        let pane_started = self.performance.open.then(Instant::now);
         let live = matches!(self.status, AudioStatus::Streaming)
             && self.selected_node.is_some()
             && frame.sequence > 0
@@ -1005,8 +1029,24 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
             rect.max - Vec2::splat(8.0),
         );
-        if canvas.width() >= 24.0 && canvas.height() >= 24.0 {
+        if canvas.width() >= 24.0
+            && canvas.height() >= 24.0
+            && !self.recording.draw(
+                &mut child,
+                canvas,
+                &mut self.panes[index],
+                frame,
+                &self.automatic_theme,
+                live,
+            )
+        {
             self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
+        }
+        if let Some(started) = pane_started {
+            self.performance.pane(
+                format!("{} · {}", index + 1, self.panes[index].kind.label()),
+                started.elapsed(),
+            );
         }
     }
 
@@ -1326,14 +1366,14 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         now: Instant,
     ) {
+        for pane in &mut self.panes {
+            pane.set_scene_macros(&self.scene_macros);
+        }
         if self.scene_library.open {
             if let Some(command) = self.scene_library.show(ui, rect, &self.scenes) {
                 self.scene_library_command(command);
             }
             return;
-        }
-        for pane in &mut self.panes {
-            pane.set_scene_macros(&self.scene_macros);
         }
         if let Some(index) = self.panel_fullscreen {
             let mut panel_rect = rect;
@@ -1468,6 +1508,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             toggle.widget_info(|| egui::WidgetInfo::labeled(
                 egui::WidgetType::Button, true, "Toggle component browser",
             ));
+            #[cfg(test)]
+            ui.data_mut(|data| {
+                data.insert_temp(egui::Id::new("test-component-browser-toggle"), toggle.rect);
+            });
             if toggle.clicked() {
                 self.manager.library_open = !self.manager.library_open;
             }
@@ -1790,11 +1834,38 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 
 impl eframe::App for SymphosApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        let pressed = input
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. }));
+        let activity = input.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::PointerButton { .. }
+                    | egui::Event::Key { pressed: true, .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::MouseWheel { .. }
+            )
+        }) || (ctx.input(|i| i.pointer.any_down()) && !input.events.is_empty());
+        if activity {
+            self.begin_edit(pressed);
+        }
         while let Some(action) = crate::project_menu::take() {
             if !self.menu_item_state(ctx, action).enabled {
                 continue;
             }
-            if !action.append_text_events(&mut input.events) {
+            if matches!(
+                action,
+                crate::project_menu::Action::Undo | crate::project_menu::Action::Redo
+            ) {
+                if crate::shortcuts::editing_text(ctx) {
+                    action.append_text_events(&mut input.events);
+                } else {
+                    self.menu_action(ctx, action);
+                }
+            } else if !action.append_text_events(&mut input.events) {
+                self.begin_edit(true);
                 self.menu_action(ctx, action);
             }
         }
@@ -1807,6 +1878,18 @@ impl eframe::App for SymphosApp {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.context = Some(ui.ctx().clone());
+        if !crate::shortcuts::editing_text(ui.ctx()) && !self.workspace_menu_blocked(ui.ctx()) {
+            if ui.input_mut(|i| {
+                i.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                )
+            }) {
+                self.undo_edit(true);
+            } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+                self.undo_edit(false);
+            }
+        }
         crate::project_menu::install();
         #[cfg(feature = "development")]
         if let Some(dev) = &mut self.development
@@ -1818,6 +1901,10 @@ impl eframe::App for SymphosApp {
         self.refresh_theme(ui.ctx());
         self.apply_appearance(ui.ctx());
         ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("visual-target-fps"),
+                self.render_fps.max(self.recording.target_fps()),
+            );
             d.insert_temp(
                 egui::Id::new("component-color-theme"),
                 self.automatic_theme.clone(),
@@ -1831,6 +1918,7 @@ impl eframe::App for SymphosApp {
             .as_secs_f32()
             .max(1.0e-4);
         self.last_frame = now;
+        self.performance.begin(Duration::from_secs_f32(elapsed));
         self.display_fps += (elapsed.recip() - self.display_fps) * 0.08;
         let captured = self.engine.analysis().snapshot.load_full();
         let mut snapshot = (*captured).clone();
@@ -1882,6 +1970,7 @@ impl eframe::App for SymphosApp {
                 panel.snapshot = runtime.snapshot.load_full();
                 snapshot.signals = Some(panel.snapshot.clone());
             }
+            panel.advance_learning();
         }
         ui.data_mut(|d| {
             d.insert_temp(
@@ -1889,7 +1978,6 @@ impl eframe::App for SymphosApp {
                 self.signal_ui.clone(),
             )
         });
-        ui.data_mut(|d| d.insert_temp(egui::Id::new("performance-analysis"), snapshot.clone()));
         #[cfg(not(target_os = "macos"))]
         {
             // Compute availability outside input_mut to avoid re-locking egui input.
@@ -1926,7 +2014,24 @@ impl eframe::App for SymphosApp {
         }
         self.receive_scene_preview(ui.ctx());
         self.workspace_view(ui, rect, &snapshot, now);
+        if let Some(index) = self.recording.target().and_then(|target| {
+            self.open_panes()
+                .into_iter()
+                .find(|i| self.panes[*i].instance_id() == target)
+        }) {
+            self.recording.render_hidden(
+                ui.ctx(),
+                &mut self.panes[index],
+                &snapshot,
+                &self.automatic_theme,
+                matches!(self.status, AudioStatus::Streaming),
+            );
+        }
         self.show_settings(ui.ctx(), &snapshot);
+        self.signal_ui
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .show_processor(ui.ctx(), &snapshot);
         self.project_controls(ui.ctx());
         let actions =
             self.manager
@@ -1942,6 +2047,44 @@ impl eframe::App for SymphosApp {
             self.scene_action(action);
         }
 
+        if let Some(snapshot) = self.midi_runtime.as_ref().map(|m| m.snapshot.load_full()) {
+            let binding_edit = self.midi_controller.pending_change(ui.ctx(), &snapshot);
+            if binding_edit {
+                self.begin_edit(true);
+            }
+            if self.midi_controller.update(
+                ui.ctx(),
+                &snapshot,
+                &mut self.scene_macros.midi,
+                &mut self.panes,
+            ) {
+                self.finish_edit();
+            }
+        }
+        if self.recording.target().is_some_and(|id| {
+            !self
+                .open_panes()
+                .iter()
+                .any(|i| self.panes[*i].instance_id() == id)
+        }) {
+            self.recording.stop();
+        }
+        let selected = self.open_panes().contains(&self.selected_pane).then(|| {
+            (
+                self.panes[self.selected_pane].instance_id(),
+                self.panes[self.selected_pane].kind.label(),
+            )
+        });
+        self.recording.show(
+            ui.ctx(),
+            selected,
+            self.engine.analysis().snapshot.load().sample_rate,
+        );
+        self.performance
+            .show(ui.ctx(), self.render_fps.max(self.recording.target_fps()));
+        #[cfg(feature = "development")]
+        self.design_system.show(ui.ctx(), &self.theme);
+        self.settle_edit(ui.ctx());
         self.storage.poll_checkpoint();
         if ui.ctx().input(|input| input.viewport().close_requested()) {
             let state = self.workspace(ui.ctx());
@@ -1952,12 +2095,16 @@ impl eframe::App for SymphosApp {
         }
         crate::project_menu::update(|action| self.menu_item_state(ui.ctx(), action));
         // Display cadence is a local performance preference, independent of FFT cadence.
-        let budget = Duration::from_secs_f32(1.0 / self.render_fps.max(1) as f32);
+        self.performance.finish(now.elapsed());
+        let delay = self.frame_pacer.delay(
+            now,
+            Instant::now(),
+            self.render_fps.max(self.recording.target_fps()),
+        );
         // egui subtracts predicted_dt internally. Compensate so a 60 FPS
         // target does not become an immediate repaint on a 120 Hz display.
         let predicted = Duration::from_secs_f32(ui.input(|i| i.predicted_dt).max(0.0));
-        ui.ctx()
-            .request_repaint_after(budget.saturating_sub(now.elapsed()) + predicted);
+        ui.ctx().request_repaint_after(delay + predicted);
     }
 }
 
@@ -1986,12 +2133,19 @@ mod workspace_interaction_tests {
     fn app() -> SymphosApp {
         SymphosApp {
             midi_runtime: None,
+            midi_controller: Default::default(),
             signal_runtime: None,
             signal_ui: Default::default(),
             scene_macros: Default::default(),
             project_dialog: Default::default(),
             scenes: Default::default(),
             saved_project: None,
+            history: Default::default(),
+            performance: Default::default(),
+            frame_pacer: Default::default(),
+            recording: Default::default(),
+            #[cfg(feature = "development")]
+            design_system: Default::default(),
             scene_browser: Default::default(),
             scene_library: Default::default(),
             pending_scene: None,
@@ -2044,6 +2198,128 @@ mod workspace_interaction_tests {
             global_bar: GlobalBar::default(),
         }
     }
+    #[test]
+    fn undo_redo_restores_components_signals_and_keeps_audio_runtime() {
+        let mut app = app();
+        app.scenes = crate::scenes::Book::new(app.capture_scene());
+        let audio = app.engine.analysis().snapshot.clone();
+        let id = app.panes[0].instance_id().to_owned();
+        app.begin_edit(true);
+        app.signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add(crate::signals::Method::Lfo)
+            .unwrap();
+        app.close_pane(0);
+        app.finish_edit();
+        assert!(!app.open_panes().contains(&0));
+        app.undo_edit(false);
+        assert!(app.open_panes().contains(&0));
+        assert_eq!(app.panes[0].instance_id(), id);
+        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
+        assert!(std::sync::Arc::ptr_eq(
+            &audio,
+            &app.engine.analysis().snapshot
+        ));
+        app.undo_edit(true);
+        assert!(!app.open_panes().contains(&0));
+        assert_eq!(app.signal_ui.lock().unwrap().bank.channels.len(), 1);
+    }
+    #[test]
+    fn undo_scene_creation_and_grouped_parameter_drag() {
+        let mut app = app();
+        app.scenes = crate::scenes::Book::new(app.capture_scene());
+        let original = app.scenes.active_scene;
+        app.begin_edit(true);
+        app.scene_action(crate::scenes::Action::Duplicate);
+        app.finish_edit();
+        assert_eq!(app.scenes.scenes.len(), 2);
+        app.undo_edit(false);
+        assert_eq!(app.scenes.scenes.len(), 1);
+        assert_eq!(app.scenes.active_scene, original);
+        app.undo_edit(true);
+        assert_eq!(app.scenes.scenes.len(), 2);
+        app.begin_edit(true);
+        for value in [0.2, 0.4, 0.6] {
+            app.begin_edit(false);
+            let mut settings = app.panes[0].copy_settings();
+            crate::macros::set_many(&mut settings, &[("height".into(), value)]);
+            app.panes[0].paste_settings(&settings);
+        }
+        app.finish_edit();
+        app.undo_edit(false);
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(f64::from(0.85_f32))
+        );
+        app.undo_edit(true);
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(f64::from(0.6_f32))
+        );
+    }
+
+    #[test]
+    fn library_refresh_and_inspector_navigation_do_not_consume_parameter_undo() {
+        let mut app = app();
+        app.scenes = crate::scenes::Book::new(app.capture_scene());
+        app.begin_edit(true);
+        let mut settings = app.panes[0].copy_settings();
+        crate::macros::set_many(&mut settings, &[("height".into(), 1.2)]);
+        app.panes[0].paste_settings(&settings);
+        app.finish_edit();
+
+        app.begin_edit(true);
+        app.selected_pane = 1;
+        app.scene_macros.open = false;
+        app.scene_action(crate::scenes::Action::Library);
+        app.finish_edit();
+
+        // One Undo reaches the actual parameter edit, not the Library's book cache.
+        app.undo_edit(false);
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(f64::from(0.85_f32))
+        );
+        assert_eq!(app.selected_pane, 1);
+        assert!(!app.scene_macros.open);
+        assert!(!app.history.can_undo());
+        app.undo_edit(true);
+        assert_eq!(
+            crate::macros::get(&app.panes[0].copy_settings(), "height"),
+            Some(f64::from(1.2_f32))
+        );
+    }
+
+    #[test]
+    fn automatic_camera_motion_does_not_make_edits_or_jump_on_parameter_undo() {
+        let mut app = app();
+        let mut settings = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
+        settings["Waterfall"]["auto_orbit"] = true.into();
+        app.panes[0].paste_settings(&serde_json::from_value(settings).unwrap());
+        app.scenes = crate::scenes::Book::new(app.capture_scene());
+        app.begin_edit(true);
+        let mut settings = app.panes[0].copy_settings();
+        *settings.automatic_yaw().unwrap() = 1.5;
+        app.panes[0].paste_settings(&settings);
+        app.finish_edit();
+        assert!(!app.history.can_undo());
+        app.begin_edit(true);
+        crate::macros::set_many(&mut settings, &[("height".into(), 1.4)]);
+        app.panes[0].paste_settings(&settings);
+        app.finish_edit();
+        *settings.automatic_yaw().unwrap() = 2.0;
+        app.panes[0].paste_settings(&settings);
+        app.undo_edit(false);
+        let mut restored = app.panes[0].copy_settings();
+        assert_eq!(*restored.automatic_yaw().unwrap(), 2.0);
+        assert_eq!(
+            crate::macros::get(&restored, "height"),
+            Some(f64::from(0.85_f32))
+        );
+    }
+
     #[test]
     fn scenes_recall_both_tabs_keep_edits_and_do_not_restart_audio() {
         let mut app = app();
@@ -2250,6 +2526,16 @@ mod workspace_interaction_tests {
         output
     }
 
+    fn component_browser_toggle(ctx: &egui::Context) -> Pos2 {
+        // Linux has an in-window Menu button before +; macOS uses its native
+        // menu bar. Read the actual response bounds instead of guessing a pixel.
+        ctx.data(|data| {
+            data.get_temp::<Rect>(egui::Id::new("test-component-browser-toggle"))
+                .expect("component browser toggle was rendered")
+                .center()
+        })
+    }
+
     #[test]
     fn component_browser_resize_keeps_panes_and_inspector_and_resets_on_double_click() {
         let mut app = app();
@@ -2281,7 +2567,7 @@ mod workspace_interaction_tests {
                 .library_width,
             380.0
         );
-        let toggle = Pos2::new(29.0, 29.0);
+        let toggle = component_browser_toggle(&ctx);
         for expected in [false, true] {
             frame(
                 &mut app,
@@ -2497,7 +2783,7 @@ mod workspace_interaction_tests {
         assert!(!app.signal_ui.lock().unwrap().show_signals);
         assert!(app.scene_macros.open);
         workspace_frame(&mut app, &ctx, now, vec![]);
-        click(&mut app, Pos2::new(29.0, 29.0));
+        click(&mut app, component_browser_toggle(&ctx));
         assert!(app.manager.library_open);
         workspace_frame(&mut app, &ctx, now, vec![]);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);

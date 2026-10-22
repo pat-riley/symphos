@@ -26,6 +26,7 @@ pub struct Spectrogram {
     grid: bool,
     labels: bool,
     texture: Option<egui::TextureHandle>,
+    texture_context: Option<egui::Context>,
     raster_key: Option<RasterKey>,
     pinned: Option<SpectrogramPin>,
 }
@@ -83,6 +84,7 @@ impl Default for Spectrogram {
             grid: false,
             labels: true,
             texture: None,
+            texture_context: None,
             raster_key: None,
             pinned: None,
         }
@@ -255,6 +257,11 @@ impl Spectrogram {
         now: Instant,
         render_state: ModuleRenderState,
     ) {
+        if self.texture_context.as_ref() != Some(ui.ctx()) {
+            self.texture = None;
+            self.raster_key = None;
+            self.texture_context = Some(ui.ctx().clone());
+        }
         let ModuleRenderState { live, frozen } = render_state;
         self.history.update(frame, now, live);
         let key = RasterKey {

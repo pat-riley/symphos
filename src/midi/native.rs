@@ -121,3 +121,7 @@ impl Drop for Backend {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

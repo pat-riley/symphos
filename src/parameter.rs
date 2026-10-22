@@ -1,4 +1,5 @@
 //! Consistent numeric editing with separate everyday slider and safe input ranges.
+pub mod schema;
 use crate::{help::HoverHelp, issues};
 use eframe::egui::{self, Response, Widget, emath::Numeric};
 use std::ops::RangeInclusive;
@@ -79,6 +80,29 @@ impl<T: Numeric + Display> Parameter<'_, T> {
         let before = self.value.to_f64();
         let low = self.range.start().to_f64();
         let high = self.range.end().to_f64();
+        let descriptor = self.key.as_ref().and_then(|key| {
+            let target = ui.data(|d| {
+                d.get_temp::<schema::ParameterContext>(egui::Id::new(crate::macros::CONTEXT))
+            })?;
+            Some((
+                target,
+                schema::ParameterSpec {
+                    field: key.clone(),
+                    label: self.text.to_string(),
+                    min: low,
+                    max: high,
+                    safe_min: *self.safe.start(),
+                    safe_max: *self.safe.end(),
+                    default: self.default.to_f64(),
+                    integer: T::INTEGRAL,
+                    logarithmic: self.logarithmic,
+                    scale: self.scale,
+                },
+            ))
+        });
+        let midi_mapped = descriptor.as_ref().is_some_and(|(target, spec)| {
+            crate::midi::mapping::mapped(ui.ctx(), target, &spec.field)
+        });
         let mut value = before;
         let inspector = crate::modules::inspector_bounds(ui).is_some();
         let modulation = self.key.as_ref().and_then(|key| {
@@ -118,9 +142,12 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                 response.help_text(format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}",
                     m.macro_index,m.source,if m.enabled {"Modulating"} else {"Bypassed"},m.depth*100.0,before,m.current));
             }
+            if midi_mapped {
+                label_ui.add(egui::Label::new(egui::RichText::new("M").small().color(ui.visuals().selection.stroke.color)))
+                    .help_text("MIDI controller assigned. Right-click to relearn or remove; Settings → MIDI lists all scene mappings.");
+            }
             label_ui.add(egui::Label::new(self.text.as_ref()).truncate());
-            if let Some(key)=&self.key
-                && let Some(context)=ui.data(|d|d.get_temp::<crate::macros::ParameterContext>(egui::Id::new(crate::macros::CONTEXT))) {
+            if let Some((context, spec)) = &descriptor {
                 let drag=label_ui.interact(label_rect,label_ui.id().with("macro-parameter-drag"),egui::Sense::drag())
                     .on_hover_cursor(egui::CursorIcon::Grab)
                     .help_text(modulation.as_ref().map_or_else(|| "Drag this parameter label onto a macro slot".into(), |m| {
@@ -129,12 +156,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                     }));
                 if drag.drag_started() {
                     drag.dnd_set_drag_payload(crate::macros::ParameterDrag {
-                        context,
-                        spec: crate::macros::ParameterSpec {
-                            field:key.clone(),label:self.text.to_string(),min:low,max:high,
-                            safe_min:*self.safe.start(),safe_max:*self.safe.end(),default:self.default.to_f64(),
-                            integer:T::INTEGRAL,logarithmic:self.logarithmic,scale:self.scale,
-                        }
+                        context: context.clone(), spec: spec.clone()
                     });
                 }
             }
@@ -293,6 +315,21 @@ impl<T: Numeric + Display> Parameter<'_, T> {
         value = value.clamp(*self.safe.start(), *self.safe.end());
         *self.value = T::from_f64(value);
         let mut response = inner.inner.union(inner.response);
+        if let Some((target, spec)) = &descriptor {
+            response.context_menu(|ui| {
+                ui.strong(&spec.label);
+                ui.weak(format!(
+                    "Range {}–{} · default {}",
+                    spec.min, spec.max, spec.default
+                ));
+                if ui.button("Reset to default").clicked() {
+                    *self.value = self.default;
+                    ui.close();
+                }
+                ui.separator();
+                crate::midi::mapping::menu(ui, target, spec);
+            });
+        }
         if self.value.to_f64() != before {
             response.mark_changed();
             ui.data_mut(|d| d.remove::<String>(response.id.with("error")));
@@ -310,6 +347,80 @@ impl<T: Numeric + Display> Parameter<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameter_context_menu_can_begin_midi_learn_without_editing_value() {
+        let ctx = egui::Context::default();
+        let mut value = 0.85_f32;
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new(crate::macros::CONTEXT),
+                schema::ParameterContext {
+                    pane: "test-component".into(),
+                    kind: crate::modules::ModuleKind::Waterfall,
+                },
+            )
+        });
+        let mut render = |events| {
+            let mut bounds = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    bounds = ui
+                        .add(
+                            Parameter::new(&mut value, 0.0..=2.0, 0.85)
+                                .key("height")
+                                .text("Height"),
+                        )
+                        .rect;
+                },
+            );
+            out.textures_delta.clear();
+            (bounds, out)
+        };
+        let (bounds, _) = render(vec![]);
+        render(vec![egui::Event::PointerMoved(bounds.center())]);
+        for pressed in [true, false] {
+            render(vec![egui::Event::PointerButton {
+                pos: bounds.center(),
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Default::default(),
+            }]);
+        }
+        let (_, out) = render(vec![]);
+        let learn = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Learn MIDI controller…" => {
+                    Some(t.pos + t.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+            .expect("MIDI Learn in parameter context menu");
+        render(vec![egui::Event::PointerMoved(learn)]);
+        for pressed in [true, false] {
+            render(vec![egui::Event::PointerButton {
+                pos: learn,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]);
+        }
+        assert_eq!(value, 0.85);
+        assert!(
+            crate::midi::mapping::Controller::default()
+                .pending_change(&ctx, &crate::midi::Snapshot::default())
+        );
+    }
 
     fn frame(ctx: &egui::Context, value: &mut f32, input: egui::RawInput) -> Response {
         frame_with_cursor(ctx, value, input).0

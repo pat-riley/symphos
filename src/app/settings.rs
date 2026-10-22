@@ -450,6 +450,70 @@ impl SymphosApp {
                 if let Some(midi) = &mut self.midi_runtime {
                     midi.settings(ui);
                 }
+                section(ui, "Controller mappings · current scene");
+                ui.label("Right-click a parameter or assigned macro and choose Learn MIDI controller. Move an absolute knob, fader, or pad to assign it.");
+                if self.scene_macros.midi.is_empty() {
+                    ui.weak("No direct controller mappings in this scene.");
+                }
+                let snapshot = self.midi_runtime.as_ref().map(|m| m.snapshot.load_full());
+                for (index, mapping) in self.scene_macros.midi.iter().enumerate() {
+                    ui.push_id(("midi-mapping", index), |ui| {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.strong(&mapping.parameter.label);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button("Remove").clicked() {
+                                            crate::midi::mapping::remove(ui.ctx(), mapping);
+                                        }
+                                    },
+                                );
+                            });
+                            let pane = self
+                                .panes
+                                .iter()
+                                .position(|p| p.instance_id() == mapping.target.pane);
+                            ui.label(format!(
+                                "{} · {}",
+                                pane.map_or_else(
+                                    || "Missing component".into(),
+                                    |i| format!("Component {}", i + 1)
+                                ),
+                                mapping.target.kind.label()
+                            ));
+                            let port = snapshot
+                                .as_ref()
+                                .and_then(|s| {
+                                    s.ports.iter().find(|p| Some(p.id) == mapping.input.port)
+                                })
+                                .map(|p| p.name.as_str())
+                                .unwrap_or("Input unavailable");
+                            ui.weak(format!(
+                                "{port} · Ch {} · {} {}",
+                                mapping.input.channel.unwrap_or(1),
+                                mapping.input.message.label(),
+                                mapping
+                                    .input
+                                    .number
+                                    .map_or(String::new(), |n| n.to_string())
+                            ));
+                            ui.small(format!(
+                                "{}–{} · {}",
+                                mapping.parameter.min,
+                                mapping.parameter.max,
+                                if snapshot
+                                    .as_ref()
+                                    .is_some_and(|s| s.available(&mapping.input))
+                                {
+                                    "Ready"
+                                } else {
+                                    "Input disconnected or disabled"
+                                }
+                            ));
+                        });
+                    });
+                }
             }
             Category::Analysis => {
                 let mut settings = self

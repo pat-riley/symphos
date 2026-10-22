@@ -572,10 +572,10 @@ mod tests {
         let mut history = History::default();
         history.data.settings.smoothing = 0.0;
         let mut tone = frame(1);
-        for bin in &mut tone.bins {
+        for bin in std::sync::Arc::make_mut(&mut tone.bins) {
             bin.magnitude = 1.0e-7;
         }
-        tone.bins[85].magnitude = 1.0;
+        std::sync::Arc::make_mut(&mut tone.bins)[85].magnitude = 1.0;
         let now = Instant::now();
         history.update(&tone, now, true);
         let original = history.rows[0].levels;
@@ -652,7 +652,7 @@ mod tests {
         let start = Instant::now();
         let first = frame(1);
         let mut second = frame(2);
-        for bin in &mut second.bins {
+        for bin in std::sync::Arc::make_mut(&mut second.bins) {
             bin.magnitude = 0.1;
         }
         let second_time = start + Duration::from_millis(50);
@@ -685,10 +685,10 @@ mod tests {
         history.data.settings.smoothing = 0.0;
         history.data.settings.max_hz = 2000.0;
         let mut tone = frame(1);
-        for bin in &mut tone.bins {
+        for bin in std::sync::Arc::make_mut(&mut tone.bins) {
             bin.magnitude = 1.0e-7;
         }
-        tone.bins[853].magnitude = 1.0; // Approximately 10 kHz.
+        std::sync::Arc::make_mut(&mut tone.bins)[853].magnitude = 1.0; // Approximately 10 kHz.
         let now = Instant::now();
         history.update(&tone, now, true);
         assert!(history.rows[0].levels.iter().all(|db| *db <= -119.0));

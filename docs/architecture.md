@@ -14,6 +14,17 @@
 Dropping stale samples or visual frames is preferable to blocking a real-time
 audio callback.
 
+Live recording adds a bounded encoder lane on macOS. The analysis worker taps
+raw stereo PCM before analysis gain; GPU readbacks feed a three-frame queue.
+Neither capture callbacks nor ordinary UI rendering wait for compression.
+The selected component renders once at its requested output resolution and that
+texture also supplies the workspace preview. See [live recording](live-recording.md).
+
+Creative undo stores bounded scene/settings transactions and reuses surviving
+component runtimes when restoring them. Shared parameter descriptors supply
+macro dragging and direct MIDI Learn; bindings use stable component identities
+and are saved with scenes. See [workflow foundations](workflow-foundations.md).
+
 ## Analysis contract
 
 Each published frame contains source format and timing metadata, stereo

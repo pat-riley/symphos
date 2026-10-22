@@ -908,8 +908,8 @@ mod tests {
     #[test]
     fn signed_stereo_mid_and_side_match_waveform_channels() {
         let frame = AnalysisFrame {
-            waveform_left: vec![0.6; 4800],
-            waveform_right: vec![-0.2; 4800],
+            waveform_left: vec![0.6; 4800].into(),
+            waveform_right: vec![-0.2; 4800].into(),
             ..Default::default()
         };
         let mut rings = direct();
@@ -935,23 +935,23 @@ mod tests {
     #[test]
     fn resampling_keeps_short_signed_transients_and_rejects_invalid_audio() {
         let mut frame = AnalysisFrame {
-            waveform_left: vec![0.0; 4800],
-            waveform_right: vec![0.0; 4800],
+            waveform_left: vec![0.0; 4800].into(),
+            waveform_right: vec![0.0; 4800].into(),
             ..Default::default()
         };
-        frame.waveform_left[2000] = -0.9;
-        frame.waveform_left[2001] = f32::NAN;
-        frame.waveform_right[2500] = 0.8;
-        frame.waveform_right[2501] = f32::INFINITY;
+        std::sync::Arc::make_mut(&mut frame.waveform_left)[2000] = -0.9;
+        std::sync::Arc::make_mut(&mut frame.waveform_left)[2001] = f32::NAN;
+        std::sync::Arc::make_mut(&mut frame.waveform_right)[2500] = 0.8;
+        std::sync::Arc::make_mut(&mut frame.waveform_right)[2501] = f32::INFINITY;
         let mut rings = direct();
         rings.settings.resolution = 128;
         rings.update(&frame, Instant::now(), true);
         assert!(rings.waves[0].contains(&-0.9));
         assert!(rings.waves[1].contains(&0.8));
         assert!(rings.waves.iter().flatten().all(|v| v.is_finite()));
-        frame.waveform_left.truncate(3);
+        frame.waveform_left = frame.waveform_left[..3].into();
         rings.update(&frame, Instant::now(), true);
-        frame.waveform_right.clear();
+        frame.waveform_right = Default::default();
         rings.update(&frame, Instant::now(), true);
         assert!(rings.waves.iter().flatten().all(|v| *v == 0.0));
     }
@@ -963,8 +963,8 @@ mod tests {
         rings.settings.smoothing_ms = 100.0;
         let mut frame = AnalysisFrame::default();
         rings.update(&frame, now, true);
-        frame.waveform_left.fill(1.0);
-        frame.waveform_right.fill(1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_left).fill(1.0);
+        std::sync::Arc::make_mut(&mut frame.waveform_right).fill(1.0);
         rings.update(&frame, now + Duration::from_millis(100), true);
         assert!((rings.waves[0][32] - (1.0 - (-1.0_f32).exp())).abs() < 1e-6);
         let frozen = rings.waves.clone();

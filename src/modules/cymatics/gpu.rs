@@ -25,7 +25,17 @@ impl View {
             return;
         };
         let pixels = rect.size() * ui.ctx().pixels_per_point();
-        let size = symphos_visuals::target_size(pixels.x, pixels.y, 1.0);
+        let size = if ui
+            .data(|d| d.get_temp::<bool>(egui::Id::new("recording-output")))
+            .unwrap_or(false)
+        {
+            [
+                pixels.x.round().clamp(1.0, 4096.0) as u32,
+                pixels.y.round().clamp(1.0, 4096.0) as u32,
+            ]
+        } else {
+            symphos_visuals::target_size(pixels.x, pixels.y, 1.0)
+        };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             rect,
             Draw {

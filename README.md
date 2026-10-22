@@ -35,7 +35,13 @@ scenes for quick recall of signals and visuals together.
   a settings-only snapshot to a matching module. Audio/history, pause state, and
   global FFT and footer-meter choices stay outside the destination pane. The
   clipboard is session-only; reusable component presets are available in the
-  inspector’s **Component presets…** menu.
+  inspector’s **Component actions** menu.
+- [Creative Undo/Redo, MIDI Learn, and visual signal processing](docs/workflow-foundations.md)
+  support grouped edits, absolute controller mappings, and a floating signal editor.
+- [Live visualizer recording](docs/live-recording.md) captures one component with
+  incoming audio on macOS at a chosen resolution and 30, 60, or 120 FPS target.
+- [Performance diagnostics](docs/performance-2026-10-21.md) under Help show frame
+  timing and component CPU preparation without adding persistent workspace UI.
 - [Application Settings](docs/application-settings.md): movable, categorized window
   with eight GUI theme choices, including Resolve- and Ableton-inspired skins,
   and saved interface zoom. Open from the application menu or Ctrl+,
@@ -105,7 +111,8 @@ Window, and Help**. Other desktops expose the same app commands under **Menu**.
 - **Symphos → Settings…** opens preferences (Cmd+,). The **Preferences** submenu
   jumps directly to Audio, MIDI, Analysis & Meters, Display & Layout, or Theme & Colors.
 - **File** creates, opens, and saves complete projects, opens the scene
-  library, and closes the selected component. **Edit** provides text clipboard
+  library, records a selected visualizer, and closes the selected component.
+  **Edit** provides creative Undo/Redo (Cmd+Z / Cmd+Shift+Z), text clipboard
   commands, compatible component settings copy/paste, and component reset.
 - **Create** adds any component or detector/LFO/MIDI signal channel, creates an
   empty scene (Cmd+Shift+N), or duplicates the current scene (Cmd+Shift+D).
@@ -117,7 +124,8 @@ Window, and Help**. Other desktops expose the same app commands under **Menu**.
   Macros (Cmd+B), Signals (Cmd+Shift+B), and Info View; balances pane sizes;
   controls fullscreen; and changes interface zoom (Cmd+= / Cmd+- / Cmd+0).
 - **Window** uses the native Minimize, Zoom, and Bring All to Front commands.
-  **Help** opens the shortcut reference, FFT diagnostics, issue log, and app information.
+  **Help** opens the shortcut reference, performance and FFT diagnostics, issue
+  log, and app information. Development mode adds **Dev > Design System**.
 
 Checkmarks follow the live workspace. Unavailable actions are disabled, including
 incompatible component paste and workspace changes while editing or in a modal.
@@ -167,7 +175,8 @@ stop auto-orbit. Its speed is independent of history duration and analysis rate.
 X represents frequency, Y time, and Z level; angle fields use degrees.
 The gizmos use colored lines and plain axis labels without endpoint circles;
 axis clicking and dragging still work.
-History is live only; there is no recording or playback.
+History is live only, without timeline playback. File → Record Visualizer can
+capture the rendered performance and incoming audio as a movie.
 Waterfall frequency, gain, smoothing, and decay controls reprocess the retained
 history immediately. Under **Signal Response**, **Time smooth** softens changes
 between frames, while **Freq. smooth** blends neighboring display bands (0 is off,

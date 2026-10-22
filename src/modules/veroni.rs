@@ -856,7 +856,8 @@ mod tests {
                 frequency_hz: hz,
                 magnitude: 0.2,
                 dbfs: -14.0,
-            }],
+            }]
+            .into(),
             rms: [0.1, 0.2],
             mix_rms: 0.15,
             ..Default::default()
@@ -879,7 +880,7 @@ mod tests {
         }
         assert_eq!(audio_energy(&AnalysisFrame::default(), &settings), [0.0; 4]);
         let mut quiet = signal(80.0);
-        quiet.bins[0].magnitude = 1e-6;
+        std::sync::Arc::make_mut(&mut quiet.bins)[0].magnitude = 1e-6;
         quiet.mix_rms = 1e-6;
         assert_eq!(audio_energy(&quiet, &settings), [0.0; 4]);
         let mut insensitive = settings;

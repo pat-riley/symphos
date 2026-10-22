@@ -15,6 +15,7 @@ use egui::{self, Rect};
 use std::sync::Mutex;
 mod history;
 mod midi_preview;
+mod processor;
 
 pub type Shared = Arc<Mutex<Panel>>;
 pub const MIN_DOCK_HEIGHT: f32 = 320.0;
@@ -31,11 +32,15 @@ pub struct Panel {
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
     history: BTreeMap<u64, history::History>,
+    raw_history: BTreeMap<u64, history::History>,
+    processor: Option<u64>,
+    processor_section: SignalSection,
     midi_history: BTreeMap<u64, midi_preview::History>,
     last_history_time: f64,
     clipboard: Option<(Definition, bool)>,
     rename: Option<(u64, String, bool)>,
     learning: Option<RangeLearning>,
+    learning_notice: Option<(u64, String)>,
     sections: BTreeMap<u64, SignalSection>,
     pub close_inspector: bool,
     pub inspector_width: f32,
@@ -74,6 +79,16 @@ impl RangeLearning {
             self.samples += 1;
         }
     }
+    fn finish(&self, normalization: &mut Normalization) -> String {
+        if self.apply(normalization) {
+            format!(
+                "Learned {:.3} – {:.3}; now mapped to 0–1.",
+                normalization.low, normalization.high
+            )
+        } else {
+            "No changing live signal detected; range retained.".into()
+        }
+    }
     fn apply(&self, normalization: &mut Normalization) -> bool {
         if self.samples < 2 || self.high - self.low < 0.0001 {
             return false;
@@ -99,11 +114,15 @@ impl Default for Panel {
             span: None,
             deleted: None,
             history: Default::default(),
+            raw_history: Default::default(),
+            processor: None,
+            processor_section: SignalSection::Output,
             midi_history: Default::default(),
             last_history_time: 0.0,
             clipboard: None,
             rename: None,
             learning: None,
+            learning_notice: None,
             sections: BTreeMap::new(),
             close_inspector: false,
             inspector_width: 236.0,
@@ -111,6 +130,42 @@ impl Default for Panel {
     }
 }
 impl Panel {
+    pub fn learning_range(&self) -> bool {
+        self.learning.is_some()
+    }
+    pub fn advance_learning(&mut self) {
+        if let Some(capture) = &mut self.learning {
+            capture.observe(&self.snapshot);
+            if self.snapshot.time - capture.started >= 5.0 {
+                if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == capture.id) {
+                    self.learning_notice = Some((capture.id, capture.finish(&mut d.normalization)));
+                }
+                self.learning = None;
+            }
+        }
+    }
+
+    fn observe_history(&mut self) {
+        if self.snapshot.time != self.last_history_time {
+            self.last_history_time = self.snapshot.time;
+            self.history
+                .retain(|id, _| self.bank.channels.iter().any(|d| d.id == *id));
+            self.raw_history
+                .retain(|id, _| self.bank.channels.iter().any(|d| d.id == *id));
+            for d in &self.bank.channels {
+                self.raw_history.entry(d.id).or_default().push(
+                    self.snapshot.time,
+                    self.snapshot.values.get(&d.id).map_or(0.0, |s| s.raw),
+                );
+                let history = self.history.entry(d.id).or_default();
+                history.push(
+                    self.snapshot.time,
+                    self.snapshot.values.get(&d.id).map_or(0.0, |s| s.value),
+                );
+            }
+        }
+    }
+
     pub fn replace_bank(&mut self, bank: Bank) {
         self.selected = bank.channels.first().map(|d| d.id);
         self.bank = bank;
@@ -119,10 +174,13 @@ impl Panel {
         self.last_history_time = 0.0;
         self.rename = None;
         self.learning = None;
+        self.learning_notice = None;
         self.midi_learning = None;
         self.sections.clear();
         self.deleted = None;
         self.history.clear();
+        self.raw_history.clear();
+        self.processor = None;
         self.midi_history.clear();
     }
     fn can_paste(&self) -> bool {
@@ -151,27 +209,7 @@ impl Panel {
         self.bank.sync_slots();
         self.sections
             .retain(|id, _| self.bank.channels.iter().any(|d| d.id == *id));
-        if let Some(capture) = &mut self.learning {
-            capture.observe(&self.snapshot);
-            if self.snapshot.time - capture.started >= 5.0 {
-                if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == capture.id) {
-                    capture.apply(&mut d.normalization);
-                }
-                self.learning = None;
-            }
-        }
-        if self.snapshot.time != self.last_history_time {
-            self.last_history_time = self.snapshot.time;
-            self.history
-                .retain(|id, _| self.bank.channels.iter().any(|d| d.id == *id));
-            for d in &self.bank.channels {
-                let history = self.history.entry(d.id).or_default();
-                history.push(
-                    self.snapshot.time,
-                    self.snapshot.values.get(&d.id).map_or(0.0, |s| s.value),
-                );
-            }
-        }
+        self.observe_history();
         self.midi_history.retain(|id, _| {
             self.bank
                 .channels
@@ -526,6 +564,10 @@ impl Panel {
     }
     fn act(&mut self, action: StripAction) {
         match action {
+            StripAction::Processor(id) => {
+                self.processor = Some(id);
+                self.processor_section = SignalSection::Output;
+            }
             StripAction::Select(id) => {
                 self.selected = Some(id);
                 self.inspect_requested = true;
@@ -828,7 +870,18 @@ impl Panel {
                 }
             }),
             SignalSection::Output => {
-                normalization_editor(ui, d, &sample, &self.snapshot, &mut self.learning)
+                if self.processor != Some(id) && ui.small_button("Open signal processor…").clicked()
+                {
+                    self.processor = Some(id);
+                }
+                normalization_editor(
+                    ui,
+                    d,
+                    &sample,
+                    &self.snapshot,
+                    &mut self.learning,
+                    &mut self.learning_notice,
+                )
             }
             SignalSection::Routing => settings_group(ui, "Used by", |ui| {
                 if let Some(users) = self.consumers.get(&id) {
@@ -889,14 +942,24 @@ fn normalization_editor(
     sample: &Sample,
     snapshot: &Snapshot,
     learning: &mut Option<RangeLearning>,
+    notice: &mut Option<(u64, String)>,
 ) {
+    ui.horizontal_wrapped(|ui| {
+        for (label, value) in [
+            ("Raw", sample.raw),
+            ("Range", d.normalization.map(sample.raw)),
+            ("Final", sample.value),
+        ] {
+            ui.group(|ui| {
+                ui.small(label);
+                ui.strong(format!("{value:.3}"));
+            });
+        }
+    });
+    ui.weak("Detector > Range > Shape > Influence > Smooth");
     settings_group(ui, "Normalization", |ui| {
         ui.checkbox(&mut d.normalization.enabled,"Normalize output")
         .help_text("Stretch a narrow detector/envelope range to 0–1 before the influence knob. Values outside the input limits are clamped.");
-        ui.small(format!(
-            "Raw {:.3} · output {:.3}",
-            sample.raw, sample.value
-        ));
         ui.add_enabled_ui(d.normalization.enabled, |ui| {
             ui.add(
                 Parameter::new(&mut d.normalization.low, -1.0..=0.9999, 0.0)
@@ -930,6 +993,7 @@ fn normalization_editor(
                 if running {
                     finish = true;
                 } else {
+                    *notice = None;
                     *learning = Some(RangeLearning::new(d.id, snapshot.time));
                 }
             }
@@ -942,11 +1006,10 @@ fn normalization_editor(
             }
         });
         if finish && let Some(capture) = learning.take() {
-            if capture.apply(&mut d.normalization) {
-                ui.weak("Range learned.");
-            } else {
-                ui.weak("No changing live signal detected; range retained.");
-            }
+            *notice = Some((d.id, capture.finish(&mut d.normalization)));
+        }
+        if let Some((_, message)) = notice.as_ref().filter(|(id, _)| *id == d.id) {
+            ui.weak(message);
         }
         if running && let Some(l) = learning {
             if l.samples > 0 {
@@ -991,6 +1054,52 @@ fn normalization_editor(
             ui.small("Output 0–1 · before influence");
         }
     });
+    settings_group(ui, "Output shape", |ui| {
+        ui.checkbox(&mut d.shaping.enabled,"Shape output").help_text("Change the motion curve after range normalization. Bypass preserves the original signal. These controls affect every parameter mapped to this channel.");
+        ui.add_enabled_ui(d.shaping.enabled,|ui|{
+            ui.add(Parameter::new(&mut d.shaping.exponent,0.1..=8.0,1.0).logarithmic(true).text("Curve"))
+                .help_text("1 is linear. Below 1 lifts quiet movement; above 1 reserves strong movement for louder peaks. Signed sources keep their center and direction.");
+            ui.add(Parameter::new(&mut d.shaping.dead_zone,0.0..=0.95,0.0).text("Dead zone"))
+                .help_text("Ignore small input values, then stretch the remaining range. Useful for stopping tiny unwanted motion near silence or a controller's center.");
+            ui.add(Parameter::new(&mut d.shaping.steps,0..=32,0).bounds(0.0..=128.0).text("Steps"))
+                .help_text("0 or 1 keeps continuous motion. 2 creates an on/off signal; higher counts divide the output into equally spaced levels. Final smoothing can soften the transitions.");
+            ui.checkbox(&mut d.shaping.invert,"Invert output").help_text("For 0–1 sources, swaps high and low. For signed sources, reverses direction around zero.");
+        });
+        let signed = d.kind() == OutputKind::Bipolar;
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 100.0),
+            egui::Sense::hover(),
+        );
+        ui.painter()
+            .rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+        let plot = rect.shrink(8.0);
+        let low = if signed { -1.0 } else { 0.0 };
+        let span = 1.0 - low;
+        let point = |x: f32, y: f32| {
+            egui::pos2(
+                plot.left() + (x - low) / span * plot.width(),
+                plot.bottom() - (y - low) / span * plot.height(),
+            )
+        };
+        ui.painter().line_segment(
+            [point(low, low), point(1.0, 1.0)],
+            ui.visuals().widgets.inactive.bg_stroke,
+        );
+        let color = channel_color(d);
+        ui.painter().add(egui::Shape::line(
+            (0..=128)
+                .map(|i| {
+                    let x = low + span * i as f32 / 128.0;
+                    point(x, d.shaping.map(x, signed))
+                })
+                .collect(),
+            egui::Stroke::new(1.5, color),
+        ));
+        let input = d.normalization.map(sample.raw).clamp(low, 1.0);
+        ui.painter()
+            .circle_filled(point(input, d.shaping.map(input, signed)), 4.0, color);
+        ui.small("Input / output · dot shows the live signal");
+    });
     settings_group(ui, "Smoothing", |ui| {
         ui.add(Parameter::new(&mut d.smoothing_ms,0.0..=1000.0,0.0)
         .bounds(0.0..=5000.0).text("Smoothing ms"))
@@ -1018,6 +1127,7 @@ struct ChannelDrag(u64);
 #[derive(Clone, Copy)]
 enum StripAction {
     Select(u64),
+    Processor(u64),
     Delete(u64),
     Insert(u64, usize),
     Undo,
@@ -1147,6 +1257,10 @@ fn channel_menu(
             }
         }
         ui.separator();
+        if ui.button("Open signal processor…").clicked() {
+            action = Some(StripAction::Processor(d.id));
+            ui.close();
+        }
         if ui.button("Rename").clicked() {
             action = Some(StripAction::Rename(d.id));
             ui.close();
@@ -1779,6 +1893,44 @@ mod tests {
         let mut panel = Panel::default();
         panel.replace_bank(Bank::test_sources());
         panel
+    }
+    #[test]
+    fn range_learning_finishes_with_both_editors_hidden() {
+        let mut panel = test_panel();
+        let id = panel.bank.channels[0].id;
+        panel.learning = Some(RangeLearning::new(id, 0.0));
+        for (time, raw) in [(1.0, 0.50), (5.1, 0.55)] {
+            panel.snapshot = Arc::new(Snapshot {
+                time,
+                values: [(
+                    id,
+                    Sample {
+                        raw,
+                        status: Status::Live,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+            });
+            panel.advance_learning();
+        }
+        assert!(!panel.learning_range());
+        let range = &panel.bank.channels[0].normalization;
+        assert!(range.enabled);
+        assert_eq!((range.low, range.high), (0.50, 0.55));
+        assert_eq!(panel.learning_notice.as_ref().unwrap().0, id);
+        assert!(
+            panel
+                .learning_notice
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("0.500 – 0.550")
+        );
+        panel.advance_learning();
+        assert!(panel.learning_notice.is_some());
+        panel.replace_bank(Bank::default());
+        assert!(panel.learning_notice.is_none());
     }
     #[test]
     fn range_learning_uses_changing_live_raw_samples_and_ignores_disconnections() {

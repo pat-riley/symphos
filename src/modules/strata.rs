@@ -26,7 +26,7 @@ fn layer_targets(frame: &AnalysisFrame, settings: &StrataSettings) -> [f32; MAX_
     let edges: Vec<_> = (0..settings.layers)
         .map(|i| layer_range(i, settings.layers).1)
         .collect();
-    for bin in &frame.bins {
+    for bin in frame.bins.iter() {
         if !bin.frequency_hz.is_finite()
             || !(LOW_HZ..=HIGH_HZ).contains(&bin.frequency_hz)
             || !bin.magnitude.is_finite()
@@ -1203,7 +1203,8 @@ mod tests {
                         frequency_hz: (low * high).sqrt(),
                         magnitude: 0.3,
                         dbfs: -10.0,
-                    }],
+                    }]
+                    .into(),
                     mix_rms: 0.3,
                     ..Default::default()
                 };
@@ -1245,7 +1246,8 @@ mod tests {
                 frequency_hz,
                 magnitude: 0.3,
                 dbfs: -10.0,
-            }],
+            }]
+            .into(),
             ..Default::default()
         };
         for count in [2, 7, 12] {
@@ -1281,7 +1283,7 @@ mod tests {
             );
         }
         let mut invalid = tone(80.0);
-        invalid.bins[0].magnitude = f32::NAN;
+        std::sync::Arc::make_mut(&mut invalid.bins)[0].magnitude = f32::NAN;
         assert_eq!(layer_targets(&invalid, &strata.settings), [0.0; MAX_LAYERS]);
         strata.settings.sensitivity = 0.0;
         assert_eq!(
