@@ -167,3 +167,67 @@ fn benchmark_resonance_mesh() {
         }
     }
 }
+
+#[test]
+fn optimized_mesh_preserves_reference_geometry_and_colors() {
+    let mut r = Resonance::default();
+    r.settings.layers = 5;
+    r.settings.detail = 20;
+    r.settings.opening = 0.7;
+    r.settings.audio_expand = 0.7;
+    r.settings.audio_ripple = 0.6;
+    r.energy = 0.4;
+    r.bands = std::array::from_fn(|i| i as f32 / 24.0);
+    r.flow_phase = 0.13;
+    r.spin_phase = 0.7;
+    r.ripple_phase = 0.3;
+    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0));
+    // Sorting triangles with almost equal depths can change tie order after
+    // factoring arithmetic. Compare their geometry as an unordered multiset.
+    fn signature(mesh: &egui::Mesh) -> Vec<Vec<(i32, i32, [u8; 4])>> {
+        let mut triangles: Vec<_> = mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|tri| {
+                let mut vertices: Vec<_> = tri
+                    .iter()
+                    .map(|i| {
+                        let v = mesh.vertices[*i as usize];
+                        (
+                            (v.pos.x * 8.0).round() as i32,
+                            (v.pos.y * 8.0).round() as i32,
+                            v.color.to_array(),
+                        )
+                    })
+                    .collect();
+                vertices.sort();
+                vertices
+            })
+            .collect();
+        triangles.sort();
+        triangles
+    }
+    for style in [
+        Style::Membranes,
+        Style::Wireframe,
+        Style::Contours,
+        Style::Points,
+    ] {
+        r.settings.style = style;
+        let expected = r.reference_mesh(rect, &AppTheme::default());
+        let actual = r.build_mesh(rect, &AppTheme::default());
+        assert_eq!(actual.indices.len(), expected.indices.len());
+        // Numerical changes stay subpixel; comparing quantized geometry catches
+        // topology loss while allowing insignificant sin_cos rounding.
+        let a = signature(&actual);
+        let b = signature(&expected);
+        let matching = a.iter().zip(&b).filter(|(a, b)| a == b).count();
+        assert!(
+            matching as f32 / a.len() as f32 > 0.98,
+            "{style:?}: {matching}/{}",
+            a.len()
+        );
+    }
+}

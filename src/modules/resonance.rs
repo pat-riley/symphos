@@ -3,6 +3,8 @@
 mod controls;
 mod render;
 #[cfg(test)]
+mod render_reference;
+#[cfg(test)]
 mod tests;
 use super::{
     Palette, camera_gizmo,
@@ -258,6 +260,7 @@ impl Resonance {
         let i = x as usize;
         egui::lerp(self.bands[i]..=self.bands[(i + 1).min(23)], x.fract())
     }
+    #[cfg(test)]
     fn point(&self, layer: usize, u: f32, v: f32) -> [f32; 3] {
         let s = &self.settings;
         let t = self.layer_fraction(layer);
