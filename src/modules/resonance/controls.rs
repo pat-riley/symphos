@@ -17,6 +17,66 @@ impl Resonance {
             };
         }
         settings_panel(ui, "Geometry", |ui| {
+            settings_group(ui, "Spectrum response", |ui| {
+                property_row(ui, "Map spectrum", |ui| {
+                    properties_combo("lotus-spectrum-layout", ui.available_width(), 3)
+                        .selected_text(s.spectrum_layout.label()).show_ui(ui, |ui| {
+                            for mode in [SpectrumLayout::Layers, SpectrumLayout::PoleToPole, SpectrumLayout::AroundPetals] {
+                                ui.selectable_value(&mut s.spectrum_layout, mode, mode.label());
+                            }
+                        }).response.help_text("By layer assigns contiguous bass-to-treble bands from the first layer to the last, retaining each petal's silhouette. Layer flow carries each assigned band along with its shell. Pole to pole follows frequencies along the shell; Around petals mirrors the spectrum around each petal. These are artistic mappings, not a calibrated spectrum plot.");
+                });
+                p!(
+                    spectrum_depth,
+                    0.0..=1.0,
+                    0.35,
+                    "Spectrum movement",
+                    "Direct frequency-driven expansion of the petals, independent of the slow ripple animation. Zero restores the original base geometry's motion; higher values reveal changes in individual frequency bands.",
+                    ui
+                );
+                p!(
+                    spectrum_visibility,
+                    0.0..=1.0,
+                    0.7,
+                    "Spectrum visibility",
+                    "A bounded display boost reveals quiet frequency differences. Zero keeps their relative size; one gives the strongest boost. Near-silence is not amplified, and this never alters the shared signal.",
+                    ui
+                );
+                p!(
+                    attack_accent,
+                    0.0..=1.0,
+                    0.15,
+                    "Attack accent",
+                    "Briefly expand the flower on rising audio levels, then return as the sound sustains. Fast/slow envelope comparison follows attacks rather than estimating beats; zero disables it.",
+                    ui
+                );
+            });
+            settings_group(ui, "Audio motion", |ui| {
+                p!(
+                    audio_expand,
+                    0.0..=1.5,
+                    0.22,
+                    "Audio expansion",
+                    "Overall input level expands the layered shape. Zero disables direct expansion; scene macros can also drive geometry.",
+                    ui
+                );
+                p!(
+                    audio_ripple,
+                    0.0..=0.5,
+                    0.12,
+                    "Audio ripples",
+                    "The selected frequency range bends the shell from pole to pole. Zero disables the animated ripple response; Spectrum movement separately follows the frequency levels directly.",
+                    ui
+                );
+                p!(
+                    response_ms,
+                    0.0..=1000.0,
+                    90.0,
+                    "Motion smoothing ms",
+                    "Visual interpolation time for spectrum and level changes. This does not filter the shared audio signal. Attack accents retain a fast onset; disconnected input fades while ambient motion continues.",
+                    ui
+                );
+            });
             settings_group(ui, "Starting form", |ui| {
                 property_row(ui, "Form", |ui| {
                     properties_combo("resonance-form",ui.available_width(),3).selected_text("Choose a starting form…").show_ui(ui,|ui| {
@@ -185,23 +245,13 @@ impl Resonance {
             s.frequency.range_controls(ui);
         });
         settings_panel(ui, "Signal Response", |ui| {
-            settings_group(ui, "Audio influence", |ui| {
-                p!(
-                    audio_expand,
-                    0.0..=1.5,
-                    0.22,
-                    "Audio expansion",
-                    "Overall input level expands the layered shape. Zero disables direct expansion; scene macros can also drive geometry.",
-                    ui
-                );
-                p!(
-                    audio_ripple,
-                    0.0..=0.5,
-                    0.12,
-                    "Audio ripples",
-                    "The selected frequency range bends the shell from pole to pole. Zero disables spectral displacement.",
-                    ui
-                );
+            s.frequency.response_controls(ui);
+            settings_group(ui, "Display range", |ui| {
+                s.frequency.level_controls(ui);
+            });
+        });
+        settings_panel(ui, "Appearance", |ui| {
+            settings_group(ui, "Audio lighting", |ui| {
                 p!(
                     audio_light,
                     0.0..=1.0,
@@ -211,20 +261,15 @@ impl Resonance {
                     ui
                 );
                 p!(
-                    response_ms,
-                    0.0..=1000.0,
-                    90.0,
-                    "Response ms",
-                    "Smooth changes in direct audio influence. Disconnected input fades toward zero while ambient motion continues.",
+                    spectrum_light,
+                    0.0..=2.0,
+                    0.55,
+                    "Spectrum light",
+                    "Brighten each petal region with its mapped frequency band. Zero disables local spectral lighting; overall Audio brightness remains independent.",
                     ui
                 );
             });
-            s.frequency.response_controls(ui);
-            settings_group(ui, "Display range", |ui| {
-                s.frequency.level_controls(ui);
-            });
-        });
-        settings_panel(ui, "Appearance", |ui| {
+
             settings_group(ui, "Surface", |ui| {
                 property_row(ui, "Draw as", |ui| {
                     properties_combo("resonance-style",ui.available_width(),4).selected_text(match s.style {Style::Membranes=>"Membranes",Style::Wireframe=>"Wireframe",Style::Contours=>"Contours",Style::Points=>"Points"}).show_ui(ui,|ui| {

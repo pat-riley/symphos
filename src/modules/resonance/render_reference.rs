@@ -100,13 +100,32 @@ impl Resonance {
                     let color = s.palette.color_with_contrast(color_t, s.contrast, theme);
                     let light = s.brightness
                         * (0.55 + 0.45 * facing.sqrt() + edge * s.rim * 0.6)
-                        * (1.0 + s.audio_light * self.energy);
+                        * (1.0
+                            + s.audio_light * self.energy
+                            + s.spectrum_light
+                                * self.spectrum_level(
+                                    layer,
+                                    x as f32 / cols as f32,
+                                    y as f32 / rows as f32,
+                                ));
                     let alpha = match s.style {
                         Style::Membranes => {
                             (s.opacity * (0.45 + 0.55 * facing) + s.rim * edge * 0.48).min(1.0)
                         }
                         _ => s.opacity.sqrt(),
                     } * fade;
+                    // Frequency lighting also lifts translucent coverage, so
+                    // already-bright palette colors can still visibly react.
+                    let alpha = (alpha
+                        * (1.0
+                            + s.spectrum_light
+                                * self.spectrum_level(
+                                    layer,
+                                    x as f32 / cols as f32,
+                                    y as f32 / rows as f32,
+                                )
+                                * 0.6))
+                        .clamp(0.0, 1.0);
                     let channel = |c: u8| (c as f32 * light).clamp(0.0, 255.0) as u8;
                     vertices[y * cols + x].color = Color32::from_rgba_unmultiplied(
                         channel(color.r()),

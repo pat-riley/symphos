@@ -1,4 +1,4 @@
-//! Artistic layered wavefronts, inspired by lobed radiation diagrams.
+//! Lotus Flower: artistic layered petals with direct spectrum-driven motion.
 //! This is a visual primitive, not a physical black-hole simulation.
 mod controls;
 mod render;
@@ -34,6 +34,22 @@ enum ColorBy {
     Energy,
     Position,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum SpectrumLayout {
+    Layers,
+    PoleToPole,
+    AroundPetals,
+}
+impl SpectrumLayout {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Layers => "By layer",
+            Self::PoleToPole => "Pole to pole",
+            Self::AroundPetals => "Around petals",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct ResonanceSettings {
@@ -58,6 +74,11 @@ pub(crate) struct ResonanceSettings {
     ripple_count: f32,
     phase_spread: f32,
     alternate: bool,
+    spectrum_layout: SpectrumLayout,
+    spectrum_depth: f32,
+    spectrum_visibility: f32,
+    attack_accent: f32,
+    spectrum_light: f32,
     audio_expand: f32,
     audio_ripple: f32,
     audio_light: f32,
@@ -109,6 +130,11 @@ impl Default for ResonanceSettings {
             ripple_count: 3.0,
             phase_spread: 0.16,
             alternate: false,
+            spectrum_layout: SpectrumLayout::Layers,
+            spectrum_depth: 0.35,
+            spectrum_visibility: 0.7,
+            attack_accent: 0.15,
+            spectrum_light: 0.55,
             audio_expand: 0.22,
             audio_ripple: 0.12,
             audio_light: 0.35,
@@ -168,6 +194,7 @@ impl ResonanceSettings {
             radius: 0.05, 2.0; spacing: 0.01, 0.4; layer_depth: -3.0, 3.0;
             flattening: 0.03, 1.5; waist: 0.02, 1.0; sharpness: 0.2, 4.0; twist: -90.0, 90.0; opening: 0.1, 1.0;
             flow: -0.5, 0.5; spin: -90.0, 90.0; ripple_speed: -3.0, 3.0; ripple_amount: 0.0, 0.5; ripple_count: 0.0, 12.0; phase_spread: 0.0, 1.0;
+            spectrum_depth: 0.0, 1.0; spectrum_visibility: 0.0, 1.0; attack_accent: 0.0, 1.0; spectrum_light: 0.0, 2.0;
             audio_expand: 0.0, 1.5; audio_ripple: 0.0, 0.5; audio_light: 0.0, 1.0; response_ms: 0.0, 1000.0;
             color_shift: -1.0, 1.0; contrast: 0.25, 4.0; opacity: 0.0, 1.0; rim: 0.0, 1.0; brightness: 0.0, 3.0; wire_opacity: 0.0, 1.0;
             line_width: 0.25, 4.0; point_size: 0.5, 5.0; yaw: -PI, PI; elevation: -PI, PI; roll: -PI, PI; zoom: 0.25, 8.0;
@@ -178,17 +205,39 @@ impl ResonanceSettings {
         self.pan = self.pan.clamp(Vec2::splat(-4.0), Vec2::splat(4.0));
     }
 }
-#[derive(Default)]
 pub struct Resonance {
     settings: ResonanceSettings,
     data: FrequencyData,
     energy: f32,
-    bands: [f32; 24],
+    bands: [f32; BANDS],
+    spectrum_gain: f32,
+    attack_fast: f32,
+    attack_slow: f32,
+    transient: f32,
     last_draw: Option<Instant>,
     epoch: Option<u64>,
     flow_phase: f32,
     spin_phase: f32,
     ripple_phase: f32,
+}
+impl Default for Resonance {
+    fn default() -> Self {
+        Self {
+            settings: Default::default(),
+            data: Default::default(),
+            energy: 0.0,
+            bands: [0.0; BANDS],
+            spectrum_gain: 1.0,
+            attack_fast: 0.0,
+            attack_slow: 0.0,
+            transient: 0.0,
+            last_draw: None,
+            epoch: None,
+            flow_phase: 0.0,
+            spin_phase: 0.0,
+            ripple_phase: 0.0,
+        }
+    }
 }
 impl Resonance {
     pub fn settings_snapshot(&self) -> ResonanceSettings {
@@ -205,6 +254,10 @@ impl Resonance {
         self.data.clear();
         self.energy = 0.0;
         self.bands.fill(0.0);
+        self.spectrum_gain = 1.0;
+        self.attack_fast = 0.0;
+        self.attack_slow = 0.0;
+        self.transient = 0.0;
         self.last_draw = None;
         self.epoch = None;
         self.flow_phase = 0.0;
@@ -242,20 +295,57 @@ impl Resonance {
         let target = s
             .frequency
             .intensity(20.0 * rms.max(1e-7).log10() + s.frequency.gain);
+        let target = if target.is_finite() { target } else { 0.0 };
         self.energy += (target - self.energy) * alpha;
-        for (i, value) in self.bands.iter_mut().enumerate() {
-            let level = self.data.levels[i * BANDS / 24..(i + 1) * BANDS / 24]
-                .iter()
-                .copied()
-                .fold(-120.0_f32, f32::max);
-            let target = if live {
-                s.frequency.intensity(level)
+        // A fast/slow level follower accents attacks without pretending to
+        // detect musical beats. Both envelopes use the pane's virtual clock.
+        let pulse_target = rms.clamp(0.0, 16.0);
+        self.attack_fast += (pulse_target - self.attack_fast) * -(-dt / 0.008).exp_m1();
+        self.attack_slow += (pulse_target - self.attack_slow) * -(-dt / 0.180).exp_m1();
+        let onset = (self.attack_fast - self.attack_slow).max(0.0) / self.attack_slow.max(0.001);
+        let quiet_gate = ((rms - 0.001) / 0.004).clamp(0.0, 1.0);
+        self.transient = (onset * 0.6).clamp(0.0, 1.0) * quiet_gate;
+        for (value, db) in self.bands.iter_mut().zip(self.data.levels) {
+            let target = if live && db.is_finite() {
+                s.frequency.intensity(db)
             } else {
                 0.0
             };
+            let target = if target.is_finite() { target } else { 0.0 };
             *value += (target - *value) * alpha;
         }
+        // A bounded display boost reveals quiet spectral differences without
+        // changing the routed signal or amplifying a near-silent FFT floor.
+        let peak = self.bands.iter().copied().fold(0.0_f32, f32::max);
+        let gate = ((peak - 0.03) / 0.12).clamp(0.0, 1.0);
+        self.spectrum_gain =
+            1.0 + ((1.0 / peak.max(0.001)).clamp(1.0, 4.0) - 1.0) * s.spectrum_visibility * gate;
     }
+    fn spectrum_level(&self, layer: usize, u: f32, v: f32) -> f32 {
+        let level = match self.settings.spectrum_layout {
+            SpectrumLayout::Layers => {
+                let count = self.settings.layers.max(1);
+                let first = (layer * BANDS / count).min(BANDS - 1);
+                let last = ((layer + 1) * BANDS / count).max(first + 1).min(BANDS);
+                self.bands[first..last]
+                    .iter()
+                    .copied()
+                    .fold(0.0_f32, f32::max)
+            }
+            SpectrumLayout::PoleToPole => self.band(v),
+            SpectrumLayout::AroundPetals => {
+                // Mirror the spectrum in each petal, retaining the closed seam.
+                let phase = (u * self.settings.petals as f32).rem_euclid(1.0);
+                self.band((2.0 * phase - 1.0).abs())
+            }
+        };
+        (level * self.spectrum_gain).clamp(0.0, 1.0).powf(1.5)
+    }
+    fn expansion(&self) -> f32 {
+        1.0 + self.energy * self.settings.audio_expand
+            + self.transient * self.settings.attack_accent
+    }
+
     fn layer_fraction(&self, layer: usize) -> f32 {
         if self.settings.flow.abs() > 0.0001 {
             (layer as f32 / self.settings.layers as f32 + self.flow_phase).fract()
@@ -264,9 +354,12 @@ impl Resonance {
         }
     }
     fn band(&self, u: f32) -> f32 {
-        let x = u.clamp(0.0, 1.0) * 23.0;
+        let x = u.clamp(0.0, 1.0) * (BANDS - 1) as f32;
         let i = x as usize;
-        egui::lerp(self.bands[i]..=self.bands[(i + 1).min(23)], x.fract())
+        egui::lerp(
+            self.bands[i]..=self.bands[(i + 1).min(BANDS - 1)],
+            x.fract(),
+        )
     }
     #[cfg(test)]
     fn point(&self, layer: usize, u: f32, v: f32) -> [f32; 3] {
@@ -280,9 +373,10 @@ impl Resonance {
         let profile = s.waist + (1.0 - s.waist) * petal;
         let ripple = (v * PI * s.ripple_count - self.ripple_phase + t * TAU * s.phase_spread).sin()
             * (s.ripple_amount + s.audio_ripple * self.band(v));
-        let radius = (s.radius + t * s.spacing * s.layers.saturating_sub(1) as f32)
-            * (1.0 + self.energy * s.audio_expand);
-        let radial = radius * phi.sin() * profile * (1.0 + ripple);
+        let radius =
+            (s.radius + t * s.spacing * s.layers.saturating_sub(1) as f32) * self.expansion();
+        let spectral = 1.0 + s.spectrum_depth * self.spectrum_level(layer, u, v);
+        let radial = radius * phi.sin() * profile * (1.0 + ripple) * spectral;
         let turn = self.spin_phase
             * if s.alternate && layer % 2 == 1 {
                 -1.0
@@ -294,7 +388,7 @@ impl Resonance {
         [
             radial * theta.cos(),
             radial * theta.sin(),
-            radius * phi.cos() * s.flattening + (t - 0.5) * s.layer_depth,
+            radius * phi.cos() * s.flattening * spectral + (t - 0.5) * s.layer_depth,
         ]
     }
     pub fn draw(

@@ -148,6 +148,19 @@ follow its existing logarithmic/linear frequency mapping and dB range; scope tic
 show milliseconds and normalized display amplitude. Scope signal status is opt-in.
 Grid preferences persist in presets with defaults for older documents and never
 change audio processing, spectrum resolution or trigger timing.
+Lotus Flower (serialized as `Resonance` for compatibility) keeps its layered
+petal geometry while mapping 96 display frequency bands directly into local
+expansion and lighting. By layer assigns contiguous bass-to-treble ranges to
+numbered shells, carried along by layer flow; pole-to-pole and mirrored
+around-petal mappings offer alternatives. These are artistic deformations,
+not calibrated spectrum axes. Spectrum visibility provides a bounded, gated
+display boost; attack accents use 8/180 ms envelope comparison rather than beat
+detection. Visual motion/smoothing controls live in Geometry, lighting in
+Appearance, and frequency/gain processing remains in Signals. New response
+fields default safely in existing presets, retaining their geometry/camera
+values. Silence leaves the resting flower unchanged, and the pane's virtual
+clock holds all response during pause. Renderers precompute band levels by
+layer, row or column rather than repeat spectrum analysis per vertex.
 3D Rings wraps signed time-domain samples around each orbit. Geometry → Trace
 source selects Waveform (a fixed time window) or Oscilloscope (1–8 pitch-locked
 cycles, using the standalone scope’s normalized autocorrelation and rising zero

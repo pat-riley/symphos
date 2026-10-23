@@ -154,7 +154,7 @@ impl ModuleKind {
             Self::Cymatics => "Cymatics",
             Self::Milkdrop => "MilkDrop",
             Self::Orbital => "Orbital",
-            Self::Resonance => "3D Resonance",
+            Self::Resonance => "Lotus Flower",
             Self::Rings => "3D Rings",
             Self::Cylinder => "3D Cylinder",
             Self::Sphere => "3D Sphere",
@@ -200,7 +200,7 @@ impl ModuleKind {
             Self::Cymatics => "Audio-driven vibrating plates",
             Self::Milkdrop => "MilkDrop-compatible presets",
             Self::Orbital => "GPU orbital flocking",
-            Self::Resonance => "Layered petal wavefronts",
+            Self::Resonance => "Spectrum-driven petal layers",
             Self::Rings => "Orbital waveform rings",
             Self::Cylinder => "Cylindrical frequency history",
             Self::Sphere => "Spherical frequency history",
@@ -234,7 +234,7 @@ impl ModuleKind {
                 "GPU particles flock around moving attractor orbs. Shape orbital forces, collective motion, lighting, bloom and trails. Drag to rotate freely; Shift/right-drag pans. Parameters can be assigned to scene macros and driven by Signals."
             }
             Self::Resonance => {
-                "Translucent, layered petal shells inspired by radiation wavefronts. Adjust layers, spacing, lobes, twist and ripples; audio expands and illuminates the form. An artistic primitive, not a physical simulation. Drag to rotate freely; Shift/right-drag to pan."
+                "Translucent lotus petals driven by the selected audio spectrum. Map bass to treble across layers, from pole to pole, or around petals; add spectral movement, attack accents and frequency-driven light. The resting flower remains an artistic form, not a calibrated spectrum plot. Drag to rotate; Shift/right-drag to pan."
             }
             Self::Rings => {
                 "Live waveforms flow around configurable orbital, concentric, or stacked rings. Choose stereo or Mid/Side input, shape the audio displacement, and rotate freely in 3D."

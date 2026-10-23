@@ -316,3 +316,54 @@ fn every_axis_navigator_defaults_off_and_explicit_saved_choices_survive_restore(
     }
     assert_eq!(camera_count, 11);
 }
+
+#[test]
+fn lotus_motion_and_lighting_controls_are_in_the_visual_inspector() {
+    for (section, keys) in [
+        (
+            SettingsSection::Geometry,
+            vec![
+                "spectrum_depth",
+                "spectrum_visibility",
+                "attack_accent",
+                "audio_expand",
+                "audio_ripple",
+                "response_ms",
+            ],
+        ),
+        (
+            SettingsSection::Appearance,
+            vec!["audio_light", "spectrum_light"],
+        ),
+    ] {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.set_everything_is_visible(true));
+        let mut pane = ModulePane::new(ModuleKind::Resonance);
+        pane.select_inspector_section(section);
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(440.0, 12000.0))),
+                ..Default::default()
+            },
+            |ui| pane.inspector_controls(ui, &AnalysisFrame::default()),
+        );
+        out.textures_delta.clear();
+        let rendered = ctx
+            .data(|d| {
+                d.get_temp::<std::collections::BTreeSet<String>>(egui::Id::new(
+                    "test-rendered-parameter-keys",
+                ))
+            })
+            .unwrap();
+        for key in keys {
+            assert!(rendered.contains(key), "{key} belongs in {section:?}");
+        }
+        assert!(!rendered.contains("frequency.gain"));
+    }
+    let pane = ModulePane::new(ModuleKind::Resonance);
+    let settings = serde_json::to_value(pane.copy_settings()).unwrap();
+    assert!(
+        settings.get("Resonance").is_some(),
+        "Display rename preserves existing project and preset identifiers"
+    );
+}

@@ -80,6 +80,20 @@ impl Resonance {
                 (v, sin, cos, self.band(v))
             })
             .collect();
+        let row_spectrum: Vec<_> = if s.spectrum_layout == SpectrumLayout::PoleToPole {
+            (0..=rows)
+                .map(|y| self.spectrum_level(0, 0.0, y as f32 / rows as f32))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let column_spectrum: Vec<_> = if s.spectrum_layout == SpectrumLayout::AroundPetals {
+            (0..cols)
+                .map(|x| self.spectrum_level(0, x as f32 / cols as f32, 0.0))
+                .collect()
+        } else {
+            Vec::new()
+        };
         for layer in 0..s.layers {
             let t = self.layer_fraction(layer);
             let fade = if s.flow.abs() > 0.0001 {
@@ -87,8 +101,8 @@ impl Resonance {
             } else {
                 1.0
             };
-            let radius = (s.radius + t * s.spacing * s.layers.saturating_sub(1) as f32)
-                * (1.0 + self.energy * s.audio_expand);
+            let radius =
+                (s.radius + t * s.spacing * s.layers.saturating_sub(1) as f32) * self.expansion();
             let turn = self.spin_phase
                 * if s.alternate && layer % 2 == 1 {
                     -1.0
@@ -103,18 +117,25 @@ impl Resonance {
                     (*profile, sin, cos)
                 })
                 .collect();
+            let layer_spectrum = self.spectrum_level(layer, 0.0, 0.0);
+            let spectral_level = |y: usize, x: usize| match s.spectrum_layout {
+                SpectrumLayout::Layers => layer_spectrum,
+                SpectrumLayout::PoleToPole => row_spectrum[y],
+                SpectrumLayout::AroundPetals => column_spectrum[x],
+            };
             let mut vertices = Vec::with_capacity((rows + 1) * cols);
-            for &(v, sin_phi, cos_phi, band) in &row_data {
+            for (y, &(v, sin_phi, cos_phi, band)) in row_data.iter().enumerate() {
                 let ripple =
                     (v * PI * s.ripple_count - self.ripple_phase + t * TAU * s.phase_spread).sin()
                         * (s.ripple_amount + s.audio_ripple * band);
                 let radial = radius * sin_phi * (1.0 + ripple);
                 let depth = radius * cos_phi * s.flattening + (t - 0.5) * s.layer_depth;
-                for &(profile, sin_theta, cos_theta) in &columns {
+                for (x, &(profile, sin_theta, cos_theta)) in columns.iter().enumerate() {
+                    let spectral = 1.0 + s.spectrum_depth * spectral_level(y, x);
                     let view = project([
-                        radial * profile * cos_theta,
-                        radial * profile * sin_theta,
-                        depth,
+                        radial * profile * cos_theta * spectral,
+                        radial * profile * sin_theta * spectral,
+                        (depth - (t - 0.5) * s.layer_depth) * spectral + (t - 0.5) * s.layer_depth,
                     ]);
                     vertices.push(Vertex {
                         screen: center + Vec2::new(view[0], view[1]) * scale,
@@ -161,13 +182,19 @@ impl Resonance {
                     let color = s.palette.color_with_contrast(color_t, s.contrast, theme);
                     let light = s.brightness
                         * (0.55 + 0.45 * facing.sqrt() + edge * s.rim * 0.6)
-                        * (1.0 + s.audio_light * self.energy);
+                        * (1.0
+                            + s.audio_light * self.energy
+                            + s.spectrum_light * spectral_level(y, x));
                     let alpha = match s.style {
                         Style::Membranes => {
                             (s.opacity * (0.45 + 0.55 * facing) + s.rim * edge * 0.48).min(1.0)
                         }
                         _ => s.opacity.sqrt(),
                     } * fade;
+                    // Frequency lighting also lifts translucent coverage, so
+                    // already-bright palette colors can still visibly react.
+                    let alpha = (alpha * (1.0 + s.spectrum_light * spectral_level(y, x) * 0.6))
+                        .clamp(0.0, 1.0);
                     let channel = |c: u8| (c as f32 * light).clamp(0.0, 255.0) as u8;
                     vertices[y * cols + x].color = Color32::from_rgba_unmultiplied(
                         channel(color.r()),
