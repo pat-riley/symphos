@@ -268,7 +268,6 @@ impl SymphosApp {
             ));
         }
         self.panel_fullscreen = None;
-        self.fullscreen_hint_started = None;
         self.selected_pane = id;
         self.pane_highlighted = true;
         self.inspecting_signal = false;

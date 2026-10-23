@@ -1172,7 +1172,7 @@ impl Waterfall {
                 theme.muted,
             );
         }
-        if self.guides && self.show_gizmo {
+        if self.guides && self.show_gizmo && !super::presenting(ui) {
             let gizmo_rect =
                 Rect::from_min_size(rect.right_top() + Vec2::new(-88.0, 6.0), Vec2::splat(80.0));
             self.orientation_gizmo(ui, gizmo_rect, true);

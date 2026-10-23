@@ -5,6 +5,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Make pane fullscreen a clean edge-to-edge presentation: hide pane headers,
+  controls, outline, hover help, orientation navigator, exit hint, and native
+  title bar. Escape restores the workspace and window chrome without changing
+  visualizer settings; explicitly opened fullscreen macros remain available.
+
 - Add a resizable Macros dock, including fullscreen, with double-click reset and
   a remembered local height. Center crisp resize guides evenly between pane,
   dock, and sidebar edges; resizing uses pointer movement without a grab jump.

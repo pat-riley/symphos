@@ -1459,8 +1459,10 @@ impl ModulePane {
             d.insert_temp(egui::Id::new(crate::background::CONTEXT), self.background);
             previous
         });
-        ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
-            .help_text(self.kind.description());
+        if !presenting(ui) {
+            ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
+                .help_text(self.kind.description());
+        }
         match self.kind {
             ModuleKind::Milkdrop => self.milkdrop.draw(ui, rect, frame, now, live, frozen),
             ModuleKind::Cymatics => camera::draw(
@@ -1790,6 +1792,13 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
     }
     // Render the requested section inside its inspector disclosure.
     ui.push_id(title, body);
+}
+
+/// Transient viewport chrome suppression, independent of saved visualizer settings.
+pub(crate) const PRESENTATION: &str = "pane-clean-presentation";
+pub(crate) fn presenting(ui: &egui::Ui) -> bool {
+    ui.data(|d| d.get_temp::<bool>(egui::Id::new(PRESENTATION)))
+        .unwrap_or(false)
 }
 
 /// The inspector's outer bounds allow rules to span padding and the scroll gutter.

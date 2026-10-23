@@ -61,7 +61,7 @@ pub struct SymphosApp {
     fullscreen: bool,
     panel_fullscreen: Option<usize>,
     fullscreen_macros: bool,
-    fullscreen_hint_started: Option<Instant>,
+    presentation_decorations_hidden: bool,
     show_inspector: bool,
     show_issues: bool,
     show_shortcuts: bool,
@@ -141,7 +141,7 @@ impl SymphosApp {
             fullscreen: false,
             panel_fullscreen: None,
             fullscreen_macros: false,
-            fullscreen_hint_started: None,
+            presentation_decorations_hidden: false,
             show_inspector: false,
             show_issues: false,
             show_shortcuts: false,
@@ -870,14 +870,13 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
     }
 
-    fn toggle_panel_fullscreen(&mut self, index: usize, now: Instant) {
+    fn toggle_panel_fullscreen(&mut self, index: usize, _now: Instant) {
         self.fullscreen_macros = false;
         self.panel_fullscreen = if self.panel_fullscreen == Some(index) {
             None
         } else {
             Some(index)
         };
-        self.fullscreen_hint_started = self.panel_fullscreen.map(|_| now);
         self.selected_pane = index;
         self.pane_highlighted = true;
     }
@@ -889,7 +888,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         self.pane_highlighted = true;
         self.sidebar_open = true;
         self.panel_fullscreen = None;
-        self.fullscreen_hint_started = None;
     }
 
     fn handle_shortcut(&mut self, ctx: &egui::Context, frame: &AnalysisFrame, now: Instant) {
@@ -988,7 +986,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             })
         {
             self.panel_fullscreen = None;
-            self.fullscreen_hint_started = None;
             egui::Popup::close_all(ctx);
             return;
         }
@@ -1046,7 +1043,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.pane_highlighted = true;
                 if self.panel_fullscreen.is_some() {
                     self.panel_fullscreen = Some(index);
-                    self.fullscreen_hint_started = Some(now);
                 }
             }
             _ => {}
@@ -1070,6 +1066,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     }
 
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
+        let presentation = self.panel_fullscreen == Some(index);
         self.panes[index].background = self.background;
         let pane_started = self.performance.open.then(Instant::now);
         let live = matches!(self.status, AudioStatus::Streaming)
@@ -1079,7 +1076,11 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let painter = ui.painter_at(rect);
         // A single background spans the header, content padding and rounded edges.
         // Keep foreground layout inset without restarting gradients at the canvas.
-        self.background.paint_rounded(ui, rect, 7);
+        if presentation {
+            self.background.paint(ui, rect);
+        } else {
+            self.background.paint_rounded(ui, rect, 7);
+        }
         // A camera drag must not switch inspector context at pointer-down.
         // Only a completed click selects the visual component's inspector.
         if ui.input(|input| {
@@ -1097,9 +1098,11 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt(("pane", index))
-                .max_rect(rect.shrink(8.0)),
+                .max_rect(if presentation { rect } else { rect.shrink(8.0) }),
         );
-        child.set_clip_rect(rect.shrink(1.0).intersect(ui.clip_rect()));
+        child.set_clip_rect(
+            (if presentation { rect } else { rect.shrink(1.0) }).intersect(ui.clip_rect()),
+        );
         child.spacing_mut().interact_size.y = 24.0;
         child.spacing_mut().item_spacing.x = 6.0;
         child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
@@ -1108,7 +1111,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.theme.foreground,
             Color32::from_gray(25),
         ));
-        let header = child.horizontal(|ui| {
+        let header = (!presentation).then(|| child.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
             pane_title(ui, self.panes[index].kind);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1130,44 +1133,59 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     }
                 }); }
             });
-        });
-        if ui.input(|input| {
-            input.pointer.any_click()
-                && input
-                    .pointer
-                    .interact_pos()
-                    .is_some_and(|pos| header.response.rect.contains(pos))
-        }) && ui.rect_contains_pointer(header.response.rect)
-        {
+        }));
+        if header.as_ref().is_some_and(|header| {
+            ui.input(|input| {
+                input.pointer.any_click()
+                    && input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|pos| header.response.rect.contains(pos))
+            }) && ui.rect_contains_pointer(header.response.rect)
+        }) {
             self.pane_highlighted = true;
         }
-        painter.rect_stroke(
-            rect,
-            7.0,
-            Stroke::new(
-                1.0,
-                if self.pane_highlighted && self.selected_pane == index {
-                    mix(
-                        mix(self.theme.panel, self.theme.muted, 0.22),
-                        self.theme.accent,
-                        0.18,
-                    )
-                } else {
-                    mix(self.theme.panel, self.theme.muted, 0.22)
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
-        let canvas = Rect::from_min_max(
-            Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
-            rect.max - Vec2::splat(8.0),
-        );
+        if !presentation {
+            painter.rect_stroke(
+                rect,
+                7.0,
+                Stroke::new(
+                    1.0,
+                    if self.pane_highlighted && self.selected_pane == index {
+                        mix(
+                            mix(self.theme.panel, self.theme.muted, 0.22),
+                            self.theme.accent,
+                            0.18,
+                        )
+                    } else {
+                        mix(self.theme.panel, self.theme.muted, 0.22)
+                    },
+                ),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let canvas = if presentation {
+            rect
+        } else {
+            Rect::from_min_max(
+                Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
+                rect.max - Vec2::splat(8.0),
+            )
+        };
         let background_id = egui::Id::new(crate::background::PANE_PAINTED);
         let previous_background = child.data_mut(|d| {
             let previous = d.get_temp::<bool>(background_id);
             d.insert_temp(background_id, true);
             previous
         });
+        let presentation_id = egui::Id::new(crate::modules::PRESENTATION);
+        let previous_presentation = child.data_mut(|d| {
+            let previous = d.get_temp::<bool>(presentation_id);
+            d.insert_temp(presentation_id, presentation);
+            previous
+        });
+        #[cfg(test)]
+        child.data_mut(|d| d.insert_temp(egui::Id::new(("test-pane-canvas", index)), canvas));
         if canvas.width() >= 24.0
             && canvas.height() >= 24.0
             && !self.recording.draw(
@@ -1182,6 +1200,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
         }
         child.data_mut(|d| {
+            d.remove::<bool>(presentation_id);
+            if let Some(previous) = previous_presentation {
+                d.insert_temp(presentation_id, previous);
+            }
             d.remove::<bool>(background_id);
             if let Some(previous) = previous_background {
                 d.insert_temp(background_id, previous);
@@ -1204,7 +1226,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         self.scene_macros
             .remove_component(self.panes[id].instance_id());
         self.panel_fullscreen = None;
-        self.fullscreen_hint_started = None;
         if let Some(tree) = self.tiles.take() {
             self.tiles = tree.remove(id);
         }
@@ -1548,8 +1569,14 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         ui: &mut egui::Ui,
         rect: Rect,
         snapshot: &AnalysisFrame,
-        now: Instant,
+        _now: Instant,
     ) {
+        let presentation = self.panel_fullscreen.is_some();
+        if presentation != self.presentation_decorations_hidden {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Decorations(!presentation));
+            self.presentation_decorations_hidden = presentation;
+        }
         let source_label = self
             .sources
             .iter()
@@ -1607,48 +1634,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             if let Some(id) = self.pending_close.take() {
                 self.close_pane(id);
             }
-            if self.panel_fullscreen.is_some() {
-                self.fullscreen_hint(ui, rect, now);
-            }
         } else {
             self.normal_workspace(ui, rect, snapshot);
         }
-    }
-
-    fn fullscreen_hint(&mut self, ui: &egui::Ui, rect: Rect, now: Instant) {
-        let Some(started) = self.fullscreen_hint_started else {
-            return;
-        };
-        let alpha = (3.0 - now.saturating_duration_since(started).as_secs_f32()).clamp(0.0, 1.0);
-        if alpha == 0.0 {
-            self.fullscreen_hint_started = None;
-            return;
-        }
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Tooltip,
-            egui::Id::new("panel-fullscreen-hint"),
-        ));
-        let text = painter.layout_no_wrap(
-            "Press Esc to exit fullscreen".into(),
-            FontId::proportional(14.0),
-            self.theme.foreground.gamma_multiply(alpha),
-        );
-        let bounds = Rect::from_center_size(
-            Pos2::new(rect.center().x, rect.bottom() - 48.0),
-            text.size() + Vec2::new(32.0, 20.0),
-        );
-        painter.rect_filled(bounds, 6.0, self.theme.card.gamma_multiply(alpha));
-        painter.rect_stroke(
-            bounds,
-            6.0,
-            Stroke::new(1.0, self.theme.muted.gamma_multiply(alpha * 0.5)),
-            egui::StrokeKind::Inside,
-        );
-        painter.galley(
-            bounds.min + Vec2::new(16.0, 10.0),
-            text,
-            self.theme.foreground.gamma_multiply(alpha),
-        );
     }
 
     fn scene_macro_bar(&mut self, ui: &mut egui::Ui, rect: Rect) {
@@ -1674,7 +1662,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.inspecting_signal = false;
             self.sidebar_open = true;
             self.panel_fullscreen = None;
-            self.fullscreen_hint_started = None;
         }
         for pane in &mut self.panes {
             pane.set_scene_macros(&self.scene_macros);
@@ -2482,7 +2469,7 @@ mod workspace_interaction_tests {
             fullscreen: false,
             panel_fullscreen: None,
             fullscreen_macros: false,
-            fullscreen_hint_started: None,
+            presentation_decorations_hidden: false,
             show_inspector: false,
             show_issues: false,
             show_shortcuts: false,
@@ -4116,48 +4103,57 @@ mod workspace_interaction_tests {
     }
 
     #[test]
-    fn fullscreen_hint_fades_and_restore_and_eye_buttons_both_work() {
+    fn fullscreen_is_chrome_free_edge_to_edge_and_escape_restores_the_editor() {
         let mut app = app();
+        app.panes[0].kind = ModuleKind::Rings;
+        let mut saved = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
+        saved["Rings"]["show_gizmo"] = true.into();
+        assert!(app.panes[0].paste_settings(&serde_json::from_value(saved).unwrap()));
+        let settings = app.panes[0].copy_settings();
         let ctx = egui::Context::default();
         let now = Instant::now();
         app.toggle_panel_fullscreen(0, now);
-        let hint = |output: &egui::FullOutput| {
-            output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text)
-                    if text.galley.job.text == "Press Esc to exit fullscreen" =>
-                {
-                    Some(text.galley.job.sections[0].format.color)
-                }
-                _ => None,
-            })
-        };
-        let initial = hint(&workspace_frame(&mut app, &ctx, now, vec![])).unwrap();
-        let fading = hint(&workspace_frame(
-            &mut app,
-            &ctx,
-            now + Duration::from_millis(2500),
-            vec![],
-        ))
-        .unwrap();
-        assert!(fading.a() < initial.a());
-        assert!(
-            hint(&workspace_frame(
-                &mut app,
-                &ctx,
-                now + Duration::from_millis(3100),
-                vec![]
-            ))
-            .is_none()
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        assert_eq!(
+            ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test-pane-canvas", 0)))),
+            Some(bounds)
         );
-        let restore = Pos2::new(1150.0, 20.0);
-        workspace_frame(
+        assert!(!out.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t)
+            if ["3D Rings", "Press Esc to exit fullscreen", "Components", "Signals", "Macros", "X", "Y", "Z"].contains(&t.galley.job.text.as_str()))));
+        assert!(
+            !out.shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape, egui::Shape::Rect(r)
+            if r.rect == bounds && r.stroke.width > 0.0))
+        );
+        assert!(
+            out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::Decorations(false)))
+        );
+        assert_eq!(app.panes[0].copy_settings(), settings);
+        let out = workspace_frame(
             &mut app,
             &ctx,
             now,
-            vec![egui::Event::PointerMoved(restore), button(restore, true)],
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
         );
-        workspace_frame(&mut app, &ctx, now, vec![button(restore, false)]);
         assert!(app.panel_fullscreen.is_none());
+        assert!(
+            out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::Decorations(true)))
+        );
+        assert!(!app.presentation_decorations_hidden);
         app.toggle_panel_fullscreen(0, now);
         workspace_frame(&mut app, &ctx, now, vec![]);
         app.pane_action(0, pane_menu::Action::Inspect, &AnalysisFrame::default());

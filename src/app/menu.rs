@@ -152,7 +152,6 @@ impl SymphosApp {
             if self.fullscreen_macros {
                 self.scene_macros.open = true;
             }
-            self.fullscreen_hint_started = None;
         } else {
             let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
             if panel.show_signals {
