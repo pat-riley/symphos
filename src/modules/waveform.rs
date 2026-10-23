@@ -934,6 +934,8 @@ fn envelope(samples: &[f32], pixels: usize) -> Vec<(usize, f32)> {
     result
 }
 
+module_palette!(Waveform, palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

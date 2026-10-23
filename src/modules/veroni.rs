@@ -674,6 +674,8 @@ fn reflect(value: f32) -> f32 {
     0.015 + (1.0 - (value.rem_euclid(2.0) - 1.0).abs()) * 0.97
 }
 
+module_palette!(Veroni, settings.palette);
+
 #[cfg(test)]
 fn audio_energy(frame: &AnalysisFrame, s: &VeroniSettings) -> [f32; 4] {
     super::reactive::energy(frame, s.sensitivity, s.gate_db)

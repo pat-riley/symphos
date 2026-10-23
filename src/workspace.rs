@@ -1428,9 +1428,21 @@ mod tests {
         let mut state = restored;
         state.appearance.theme = crate::theme::ThemeChoice::Midnight;
         state.appearance.ui_scale = Some(1.3);
+        state.appearance.default_palette = crate::colors::Palette::Ocean;
         let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert_eq!(restored.appearance, state.appearance);
         let mut value = serde_json::to_value(state).unwrap();
+        value["appearance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("default_palette");
+        let old = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            old.appearance.default_palette,
+            crate::colors::Palette::ClassicLed
+        );
+        assert_eq!(old.appearance.theme, crate::theme::ThemeChoice::Midnight);
+        assert_eq!(old.appearance.ui_scale, Some(1.3));
         value["appearance"]["theme"] = "future_skin".into();
         assert_eq!(
             Session::decode(&serde_json::to_vec(&value).unwrap())

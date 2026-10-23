@@ -1076,6 +1076,8 @@ impl super::camera::Controlled for Flux {
     }
 }
 
+module_palette!(Flux, settings.palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1534,6 +1534,8 @@ fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(TAU) - PI
 }
 
+module_palette!(SpectralSurface, palette);
+
 #[cfg(test)]
 mod tests {
     use super::super::frequency::HistoryRow;

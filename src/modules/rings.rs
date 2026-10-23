@@ -996,6 +996,8 @@ impl super::camera::Controlled for Rings {
     }
 }
 
+module_palette!(Rings, settings.palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

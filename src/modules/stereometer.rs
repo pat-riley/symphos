@@ -772,6 +772,8 @@ fn paint_correlation_meter(
     }
 }
 
+module_palette!(Stereometer, palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

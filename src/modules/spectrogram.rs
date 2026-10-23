@@ -467,6 +467,8 @@ impl Spectrogram {
     }
 }
 
+module_palette!(Spectrogram, palette);
+
 #[cfg(test)]
 mod tests {
     use super::super::frequency::HistoryRow;

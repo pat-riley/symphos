@@ -147,9 +147,15 @@ pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
 
 /// Shared skin for every inspector; applies locally to its child UI.
 pub fn inspector_style(ui: &mut egui::Ui, theme: &AppTheme) {
-    sidebar_style(ui, theme);
+    inspector_controls_style(ui, theme);
     ui.painter()
         .rect_filled(ui.max_rect(), 0.0, theme.navigation);
+}
+
+/// Inspector typography, fields, rules and scrollbars without painting a surface.
+/// Dialogs can reuse this skin while keeping their own frame and rounded edges.
+pub fn inspector_controls_style(ui: &mut egui::Ui, theme: &AppTheme) {
+    sidebar_style(ui, theme);
     ui.spacing_mut().item_spacing = Vec2::new(7.0, 6.0);
     ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
     ui.spacing_mut().scroll.bar_width = 9.0;

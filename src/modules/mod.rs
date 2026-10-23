@@ -1,3 +1,15 @@
+// Palette access stays local to each renderer; app preferences are applied only
+// when a component is added, never while restoring settings or rendering.
+macro_rules! module_palette {
+    ($module:ident, $($field:ident).+) => {
+        impl $module {
+            pub(super) fn set_palette(&mut self, palette: crate::colors::Palette) {
+                self.$($field).+ = palette;
+            }
+        }
+    };
+}
+
 // Explicit settings-only snapshots: no samples, histories, textures, or clocks.
 // Clone is deliberate so this schema can grow owned preset fields later.
 macro_rules! module_settings {
@@ -718,6 +730,33 @@ impl ModulePane {
         }
         self.kind = state.kind;
         self.reset();
+    }
+
+    pub(crate) fn new_with_palette(kind: ModuleKind, palette: Palette) -> Self {
+        let mut pane = Self::new(kind);
+        pane.set_initial_palette(palette);
+        pane
+    }
+
+    pub(crate) fn set_initial_palette(&mut self, palette: Palette) {
+        match self.kind {
+            ModuleKind::Waterfall => self.waterfall.set_palette(palette),
+            ModuleKind::Sphere => self.sphere.set_palette(palette),
+            ModuleKind::Cylinder => self.cylinder.set_palette(palette),
+            ModuleKind::Rings => self.rings.set_palette(palette),
+            ModuleKind::Resonance => self.resonance.set_palette(palette),
+            ModuleKind::Spectrum => self.spectrum.set_palette(palette),
+            ModuleKind::Waveform => self.waveform.set_palette(palette),
+            ModuleKind::Spectrogram => self.spectrogram.set_palette(palette),
+            ModuleKind::Stereometer => self.stereometer.set_palette(palette),
+            ModuleKind::Oscilloscope => self.oscilloscope.set_palette(palette),
+            ModuleKind::Veroni => self.veroni.set_palette(palette),
+            ModuleKind::Strata => self.strata.set_palette(palette),
+            ModuleKind::Flux => self.flux.set_palette(palette),
+            // Preset shaders and sketches with material/particle color systems
+            // keep their own color controls and authored defaults.
+            _ => {}
+        }
     }
 
     pub fn new(kind: ModuleKind) -> Self {

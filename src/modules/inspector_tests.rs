@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn initial_palette_applies_to_shared_palettes_and_saved_overrides_survive_restore() {
+    let palette = Palette::Custom(Palette::ClassicLed.gradient(&AppTheme::default()));
+    let mut supported = 0;
+    for kind in ModuleKind::ALL {
+        let mut pane = ModulePane::new_with_palette(kind, palette);
+        let settings = serde_json::to_value(pane.copy_settings()).unwrap();
+        let active = settings.as_object().unwrap().values().next().unwrap();
+        if let Some(value) = active.get("palette") {
+            assert_eq!(*value, serde_json::to_value(palette).unwrap(), "{kind:?}");
+            supported += 1;
+            // An inspector override is stored with the pane, not linked to the
+            // app preference that happened to be chosen when it was created.
+            pane.set_initial_palette(Palette::Ocean);
+            let saved = pane.snapshot();
+            let mut restored = ModulePane::new_with_palette(kind, Palette::Ember);
+            restored.restore(&saved);
+            assert_eq!(restored.copy_settings(), pane.copy_settings());
+        } else {
+            assert_eq!(
+                pane.copy_settings(),
+                ModulePane::new(kind).copy_settings(),
+                "{kind:?} keeps its authored colors"
+            );
+        }
+    }
+    assert_eq!(supported, 13);
+}
+
+#[test]
 fn rings_visual_response_is_in_geometry_and_source_gain_stays_in_signals() {
     let collect = |input: bool| {
         let ctx = egui::Context::default();

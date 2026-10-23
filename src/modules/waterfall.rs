@@ -1508,6 +1508,8 @@ pub(super) fn mesh_segment(
     mesh.add_triangle(offset, offset + 2, offset + 3);
 }
 
+module_palette!(Waterfall, palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

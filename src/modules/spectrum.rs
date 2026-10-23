@@ -574,6 +574,8 @@ impl Spectrum {
     }
 }
 
+module_palette!(Spectrum, palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

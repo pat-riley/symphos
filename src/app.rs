@@ -147,10 +147,22 @@ impl SymphosApp {
             render_fps: 60,
             last_frame: Instant::now(),
             panes: vec![
-                ModulePane::new(ModuleKind::Waterfall),
-                ModulePane::new(ModuleKind::Spectrum),
-                ModulePane::new(ModuleKind::Waveform),
-                ModulePane::new(ModuleKind::Spectrogram),
+                ModulePane::new_with_palette(
+                    ModuleKind::Waterfall,
+                    AppearancePreferences::default().default_palette,
+                ),
+                ModulePane::new_with_palette(
+                    ModuleKind::Spectrum,
+                    AppearancePreferences::default().default_palette,
+                ),
+                ModulePane::new_with_palette(
+                    ModuleKind::Waveform,
+                    AppearancePreferences::default().default_palette,
+                ),
+                ModulePane::new_with_palette(
+                    ModuleKind::Spectrogram,
+                    AppearancePreferences::default().default_palette,
+                ),
             ],
             selected_pane: 0,
             pane_highlighted: true,
@@ -373,7 +385,13 @@ impl SymphosApp {
                     background: Default::default(),
                     macros: Some(Default::default()),
                     signals: Default::default(),
-                    panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
+                    panes: vec![
+                        ModulePane::new_with_palette(
+                            ModuleKind::Waterfall,
+                            self.appearance.default_palette,
+                        )
+                        .snapshot(),
+                    ],
                     layout: None,
                     selected_pane: 0,
                     analysis: self.capture_scene().analysis,
@@ -429,7 +447,13 @@ impl SymphosApp {
             background: Default::default(),
             macros: Some(Default::default()),
             signals: Default::default(),
-            panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
+            panes: vec![
+                ModulePane::new_with_palette(
+                    ModuleKind::Waterfall,
+                    self.appearance.default_palette,
+                )
+                .snapshot(),
+            ],
             layout: None,
             selected_pane: 0,
             analysis: Default::default(),
@@ -1123,10 +1147,13 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let ids = self.open_panes();
         let slot = (0..self.panes.len()).find(|id| !ids.contains(id));
         if let Some(id) = slot {
-            self.panes[id] = ModulePane::new(kind);
+            self.panes[id] = ModulePane::new_with_palette(kind, self.appearance.default_palette);
             Some(id)
         } else if self.panes.len() < MAX_PANES {
-            self.panes.push(ModulePane::new(kind));
+            self.panes.push(ModulePane::new_with_palette(
+                kind,
+                self.appearance.default_palette,
+            ));
             Some(self.panes.len() - 1)
         } else {
             None
@@ -1136,6 +1163,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     fn add_component(&mut self, kind: ModuleKind, target: usize, edge: Edge) {
         if edge == Edge::Center && self.tiles.is_some() {
             self.panes[target].kind = kind;
+            self.panes[target].set_initial_palette(self.appearance.default_palette);
             self.panes[target].reset();
             self.selected_pane = target;
             self.pane_highlighted = true;
@@ -3316,6 +3344,104 @@ mod workspace_interaction_tests {
             app.scene_macros.slots[1].target.as_ref().unwrap().pane,
             target.pane
         );
+    }
+
+    #[test]
+    fn settings_palette_picker_changes_the_default_without_changing_the_scene() {
+        use crate::colors::Palette;
+        let mut app = app();
+        app.settings_window.open = true;
+        let ctx = egui::Context::default();
+        apply_style(&ctx, &app.theme);
+        let original = app.capture_scene();
+        let frame = AnalysisFrame::default();
+        let render = |app: &mut SymphosApp, events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_settings(ui.ctx(), &frame),
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let text = |out: &egui::FullOutput, name: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == name => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+        render(&mut app, vec![]);
+        let out = render(&mut app, vec![]);
+        let picker = text(&out, "Classic LED");
+        render(
+            &mut app,
+            vec![egui::Event::PointerMoved(picker), button(picker, true)],
+        );
+        render(&mut app, vec![button(picker, false)]);
+        let out = render(&mut app, vec![]);
+        let ocean = text(&out, "Ocean");
+        render(
+            &mut app,
+            vec![egui::Event::PointerMoved(ocean), button(ocean, true)],
+        );
+        render(&mut app, vec![button(ocean, false)]);
+        assert_eq!(app.appearance.default_palette, Palette::Ocean);
+        assert!(app.capture_scene() == original);
+        assert!(app.settings_window.open);
+    }
+
+    #[test]
+    fn default_palette_changes_new_adds_and_replacements_without_recoloring_existing_panes() {
+        use crate::colors::Palette;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let original = app.panes[0].copy_settings();
+        let palette = |app: &SymphosApp, id: usize| {
+            let settings = serde_json::to_value(app.panes[id].copy_settings()).unwrap();
+            settings.as_object().unwrap().values().next().unwrap()["palette"].clone()
+        };
+        app.appearance.default_palette = Palette::Ocean;
+        app.add_component(ModuleKind::Sphere, 0, Edge::Right);
+        let sphere = app.selected_pane;
+        assert_eq!(
+            palette(&app, sphere),
+            serde_json::to_value(Palette::Ocean).unwrap()
+        );
+        let override_palette = Palette::Custom(Palette::Pearl.gradient(&app.theme));
+        app.panes[sphere].set_initial_palette(override_palette);
+        let custom = app.panes[sphere].copy_settings();
+        app.appearance.default_palette = Palette::ClassicLed;
+        app.appearance.theme = crate::theme::ThemeChoice::Graphite;
+        app.apply_appearance(&ctx);
+        assert_eq!(app.panes[0].copy_settings(), original);
+        assert_eq!(app.panes[sphere].copy_settings(), custom);
+        app.add_component(ModuleKind::Rings, sphere, Edge::Right);
+        assert_eq!(
+            palette(&app, app.selected_pane),
+            serde_json::to_value(Palette::ClassicLed).unwrap()
+        );
+        app.add_component(ModuleKind::Waterfall, sphere, Edge::Center);
+        assert_eq!(
+            palette(&app, sphere),
+            serde_json::to_value(Palette::ClassicLed).unwrap()
+        );
+        app.close_pane(sphere);
+        app.appearance.default_palette = Palette::Ember;
+        app.add_component(ModuleKind::Cylinder, 0, Edge::Right);
+        assert_eq!(
+            palette(&app, app.selected_pane),
+            serde_json::to_value(Palette::Ember).unwrap()
+        );
+        let saved = Session::decode(&serde_json::to_vec(&app.workspace(&ctx)).unwrap()).unwrap();
+        assert_eq!(saved.appearance.default_palette, Palette::Ember);
     }
 
     #[test]

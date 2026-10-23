@@ -905,6 +905,8 @@ fn paint_labels(
     );
 }
 
+module_palette!(Oscilloscope, palette);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,8 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::{f32::consts::TAU, time::Instant};
 
 const MAX_LAYERS: usize = 12;
+module_palette!(Strata, settings.palette);
+
 #[cfg(test)]
 const LOW_HZ: f32 = 20.0;
 #[cfg(test)]

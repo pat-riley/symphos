@@ -29,6 +29,15 @@ Milkdrop presets paint their own opaque full-frame canvas and keep that behavior
 
 ## Palette browser
 
+**Settings → Theme & Colors → Default visualizer colors** sets the starting
+palette for newly added visualizers, independently of the GUI theme. It starts
+at **Classic LED** and supports factory and saved/custom gradients. Adding a pane
+or dragging a component into an existing pane uses this preference. Existing
+scenes, component presets, and inspector overrides retain their stored colors.
+The preference is local to this installation and is not a scene-wide color link.
+It covers all thirteen visualizers with the shared Palette control; MilkDrop
+presets and sketches with dedicated particle/material colors keep those systems.
+
 Choose **Appearance**, then open **Palette**. There are twenty
 factory gradient previews: Spectrum, Ocean, Ember, Heatmap, Viridis, Magma,
 Inferno, Plasma, Aurora, Ice, Electric lime, Pearl, Classic LED, Pixel fire,

@@ -191,12 +191,22 @@ impl ThemeChoice {
         }
     }
 }
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppearancePreferences {
     pub theme: ThemeChoice,
     /// None follows the existing platform/development scale.
     pub ui_scale: Option<f32>,
+    pub(crate) default_palette: crate::colors::Palette,
+}
+impl Default for AppearancePreferences {
+    fn default() -> Self {
+        Self {
+            theme: ThemeChoice::default(),
+            ui_scale: None,
+            default_palette: crate::colors::Palette::ClassicLed,
+        }
+    }
 }
 impl AppearancePreferences {
     pub fn valid(&self) -> bool {

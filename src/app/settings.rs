@@ -49,7 +49,7 @@ impl SettingsWindow {
         let screen = ctx.content_rect();
         let size = Vec2::new(
             760.0_f32.min(screen.width() - 24.0).max(300.0),
-            510.0_f32.min(screen.height() - 24.0).max(260.0),
+            660.0_f32.min(screen.height() - 24.0).max(260.0),
         );
         let mut position = self.position.unwrap_or(screen.center() - size * 0.5);
         position.x = position
@@ -69,7 +69,7 @@ impl SettingsWindow {
             )
             .frame(
                 egui::Frame::new()
-                    .fill(theme.panel)
+                    .fill(theme.navigation)
                     .corner_radius(8)
                     .stroke(Stroke::new(1.0, theme.foreground.gamma_multiply(0.18)))
                     .inner_margin(0),
@@ -78,7 +78,8 @@ impl SettingsWindow {
             .show(ctx, |ui| {
                 ui.set_min_size(size);
                 ui.set_max_size(size);
-                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                workspace_ui::inspector_controls_style(ui, theme);
+                let divider = ui.visuals().widgets.noninteractive.bg_stroke;
                 let rect = Rect::from_min_size(ui.cursor().min, size);
                 let header = Rect::from_min_size(rect.min, Vec2::new(size.x, 40.0));
                 ui.painter().rect_filled(
@@ -106,12 +107,14 @@ impl SettingsWindow {
                     position += drag.drag_delta();
                 }
                 ui.painter().text(
-                    header.center(),
-                    egui::Align2::CENTER_CENTER,
+                    header.left_center() + Vec2::new(16.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
                     "Settings",
-                    FontId::proportional(16.0),
+                    FontId::proportional(14.0),
                     theme.foreground,
                 );
+                ui.painter()
+                    .hline(header.x_range(), header.bottom(), divider);
                 let close_rect = Rect::from_center_size(
                     header.right_center() - Vec2::new(22.0, 0.0),
                     Vec2::splat(26.0),
@@ -121,6 +124,7 @@ impl SettingsWindow {
                         .id_salt("settings-close")
                         .max_rect(close_rect),
                 );
+                close_ui.visuals_mut().button_frame = false;
                 if icons::sized_button(
                     &mut close_ui,
                     Icon::Close,
@@ -138,25 +142,55 @@ impl SettingsWindow {
                 );
                 let nav =
                     Rect::from_min_max(body.min, Pos2::new(body.left() + 164.0, body.bottom()));
-                ui.painter().rect_filled(nav, 0.0, theme.card);
-                ui.painter().vline(
-                    nav.right(),
-                    nav.y_range(),
-                    Stroke::new(1.0, theme.foreground.gamma_multiply(0.12)),
-                );
+                ui.painter().rect_filled(nav, 0.0, theme.navigation);
+                ui.painter().vline(nav.right(), nav.y_range(), divider);
                 let mut nav_ui = ui.new_child(
                     egui::UiBuilder::new()
                         .id_salt("settings-categories")
                         .max_rect(nav.shrink2(Vec2::new(6.0, 12.0))),
                 );
-                nav_ui.spacing_mut().item_spacing.y = 3.0;
-                nav_ui.style_mut().override_font_id = Some(FontId::proportional(13.0));
+                nav_ui.spacing_mut().item_spacing.y = 2.0;
                 for category in Category::ALL {
-                    if nav_ui
-                        .add(
-                            egui::Button::selectable(self.category == category, category.label())
-                                .min_size(Vec2::new(nav_ui.available_width(), 36.0)),
+                    let (rect, response) = nav_ui.allocate_exact_size(
+                        Vec2::new(nav_ui.available_width(), 32.0),
+                        Sense::click(),
+                    );
+                    let selected = self.category == category;
+                    if selected || response.hovered() {
+                        nav_ui.painter().rect_filled(
+                            rect,
+                            1.0,
+                            nav_ui.visuals().widgets.noninteractive.bg_fill,
+                        );
+                    }
+                    if selected {
+                        nav_ui.painter().vline(
+                            rect.left(),
+                            rect.y_range().shrink(6.0),
+                            Stroke::new(2.0, theme.accent),
+                        );
+                    }
+                    nav_ui.painter().text(
+                        rect.left_center() + Vec2::new(10.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        category.label(),
+                        FontId::proportional(12.0),
+                        if selected || response.hovered() {
+                            theme.foreground
+                        } else {
+                            theme.muted
+                        },
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            selected,
+                            category.label(),
                         )
+                    });
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
                         self.category = category;
@@ -178,10 +212,10 @@ impl SettingsWindow {
                     .max_height(panel.height())
                     .show(&mut panel_ui, |ui| {
                         ui.set_width(panel.width());
-                        ui.style_mut().override_font_id = Some(FontId::proportional(14.0));
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                         content(ui, self.category);
                     });
+                ui.painter().hline(rect.x_range(), body.bottom(), divider);
                 ui.painter().text(
                     rect.right_bottom() - Vec2::new(16.0, 8.0),
                     egui::Align2::RIGHT_BOTTOM,
@@ -209,14 +243,14 @@ fn row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
     let width = ui.available_width();
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(
-            Vec2::new(width * 0.43, 28.0),
+            Vec2::new(width * 0.43, 22.0),
             Layout::left_to_right(Align::Center),
             |ui| {
                 ui.label(label);
             },
         );
         ui.allocate_ui_with_layout(
-            Vec2::new(width * 0.54, 28.0),
+            Vec2::new(width * 0.57 - ui.spacing().item_spacing.x, 22.0),
             Layout::left_to_right(Align::Center),
             control,
         );
@@ -250,30 +284,31 @@ impl SymphosApp {
         let mut dismiss = false;
         match category {
             Category::Theme => {
+                section(ui, "Default visualizer colors");
+                ui.label("Starting palette for new visualizers with a Palette control. Existing scenes and presets keep their colors; override individual visualizers in Appearance.");
+                ui.push_id("default-visualizer-palette", |ui| {
+                    self.appearance.default_palette.controls(ui);
+                });
                 section(ui, "GUI theme");
-                ui.label("GUI skins style navigation, sidebars, controls, and dialogs. Visualization palettes are independent.");
-                let width = (ui.available_width() - 12.0) * 0.5;
+                ui.label("Style the app's navigation, panels and controls independently of visualizer colors.");
+                let width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
                 for choices in ThemeChoice::ALL.chunks(2) {
                     ui.horizontal(|ui| {
                         for &choice in choices {
                             let preview = choice.resolve(&self.automatic_theme);
                             let (rect, response) =
-                                ui.allocate_exact_size(Vec2::new(width, 72.0), Sense::click());
+                                ui.allocate_exact_size(Vec2::new(width, 62.0), Sense::click());
                             let painter = ui.painter();
-                            painter.rect_filled(rect, 5.0, preview.card);
+                            painter.rect_filled(rect, 2.0, preview.navigation);
                             painter.rect_stroke(
                                 rect,
-                                5.0,
+                                2.0,
                                 Stroke::new(
-                                    if self.appearance.theme == choice {
-                                        2.0
-                                    } else {
-                                        1.0
-                                    },
+                                    1.0,
                                     if self.appearance.theme == choice {
                                         self.theme.accent
                                     } else {
-                                        self.theme.muted.gamma_multiply(0.4)
+                                        ui.visuals().widgets.noninteractive.bg_stroke.color
                                     },
                                 ),
                                 egui::StrokeKind::Inside,
@@ -282,11 +317,11 @@ impl SymphosApp {
                                 rect.left_top() + Vec2::new(12.0, 7.0),
                                 egui::Align2::LEFT_TOP,
                                 choice.label(),
-                                FontId::proportional(14.0),
+                                FontId::proportional(12.0),
                                 preview.foreground,
                             );
                             painter.text(
-                                rect.left_top() + Vec2::new(12.0, 27.0),
+                                rect.left_top() + Vec2::new(12.0, 23.0),
                                 egui::Align2::LEFT_TOP,
                                 choice.description(),
                                 FontId::proportional(11.0),
@@ -302,8 +337,8 @@ impl SymphosApp {
                             .enumerate()
                             {
                                 painter.circle_filled(
-                                    rect.left_bottom() + Vec2::new(18.0 + i as f32 * 22.0, -17.0),
-                                    6.0,
+                                    rect.left_bottom() + Vec2::new(17.0 + i as f32 * 18.0, -12.0),
+                                    4.5,
                                     color,
                                 );
                             }
@@ -325,8 +360,6 @@ impl SymphosApp {
                 } else {
                     "Automatic uses the default Symphos palette."
                 });
-                section(ui, "Visualization colors · independent");
-                ui.label("Use the inspector's Appearance tab for gradients, custom color stops, saved palettes, and swatches.");
                 if ui
                     .add_enabled(
                         self.tiles.is_some(),
@@ -334,9 +367,9 @@ impl SymphosApp {
                     )
                     .clicked()
                 {
+                    self.inspect_panel(self.selected_pane);
                     self.panes[self.selected_pane]
-                        .select_section(crate::modules::SettingsSection::Appearance);
-                    self.sidebar_open = true;
+                        .select_inspector_section(crate::modules::SettingsSection::Appearance);
                     dismiss = true;
                 }
             }
@@ -664,6 +697,34 @@ mod tests {
             pressed,
             button: egui::PointerButton::Primary,
             modifiers: egui::Modifiers::NONE,
+        }
+    }
+    #[test]
+    fn taller_settings_fit_the_viewport_and_keep_a_scrollable_content_area() {
+        for size in [Vec2::new(1200.0, 900.0), Vec2::new(800.0, 600.0)] {
+            let ctx = egui::Context::default();
+            let mut dialog = SettingsWindow {
+                open: true,
+                ..Default::default()
+            };
+            let mut actual = Rect::NOTHING;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| {
+                    actual = dialog.show(ui.ctx(), &AppTheme::default(), |ui, _| {
+                        for i in 0..100 {
+                            ui.label(format!("Preference {i}"));
+                        }
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(actual));
+            // The returned outer rectangle includes the one-point frame.
+            assert!((actual.height() - 660.0_f32.min(size.y - 24.0)).abs() <= 2.0);
         }
     }
     #[test]

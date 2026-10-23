@@ -2,6 +2,8 @@
 //! This is a visual primitive, not a physical black-hole simulation.
 mod controls;
 mod render;
+module_palette!(Resonance, settings.palette);
+
 #[cfg(test)]
 mod render_reference;
 #[cfg(test)]
