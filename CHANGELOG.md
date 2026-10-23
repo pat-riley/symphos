@@ -5,6 +5,14 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add View → Show Panel Gaps (Cmd/Ctrl+Shift+G), with a remembered local
+  preference. Hidden gaps join pane edges with square corners while preserving
+  resize cursors, dragging, and double-click balancing along shared edges.
+
+- Align inspector color-code text with standard property rows, place the shared
+  scene-background note before its controls, and give the Color panel even
+  padding, aligned slider endpoints, and consistent gaps between controls.
+
 - Reduce development build debug artifacts and disable the incremental object
   cache. Reclaim debug build artifacts before supervised builds exceed a 12 GiB
   cache budget, preserving development workspaces, presets, and the working app.

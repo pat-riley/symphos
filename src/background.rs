@@ -133,6 +133,15 @@ impl Background {
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         // This is already scoped to Appearance, before visualizer-specific groups.
         crate::modules::settings_group(ui, "Scene background", |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Shared by every sketch in this scene.")
+                        .weak()
+                        .size(11.0),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
             property_row(ui, "Fill", |ui| {
                 crate::dropdown::ComboBox::from_id_salt("scene-background-mode")
                     .width(ui.available_width())
@@ -172,14 +181,6 @@ impl Background {
             if self.mode == Mode::Linear {
                 ui.add(Parameter::new(&mut self.angle, 0.0..=360.0, 90.0).text("Angle °"));
             }
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new("Shared by every sketch in this scene.")
-                        .weak()
-                        .size(11.0),
-                )
-                .wrap(),
-            );
         });
     }
 }

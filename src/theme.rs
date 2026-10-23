@@ -194,6 +194,7 @@ impl ThemeChoice {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppearancePreferences {
+    pub show_panel_gaps: bool,
     pub theme: ThemeChoice,
     /// None follows the existing platform/development scale.
     pub ui_scale: Option<f32>,
@@ -203,6 +204,7 @@ impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
             theme: ThemeChoice::default(),
+            show_panel_gaps: true,
             ui_scale: None,
             default_palette: crate::colors::Palette::ClassicLed,
         }

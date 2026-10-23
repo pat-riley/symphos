@@ -1085,7 +1085,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if presentation {
             self.background.paint(ui, rect);
         } else {
-            self.background.paint_rounded(ui, rect, 7);
+            self.background.paint_rounded(
+                ui,
+                rect,
+                if self.appearance.show_panel_gaps {
+                    7
+                } else {
+                    0
+                },
+            );
         }
         // A camera drag must not switch inspector context at pointer-down.
         // Only a completed click selects the visual component's inspector.
@@ -1154,7 +1162,11 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if !presentation {
             painter.rect_stroke(
                 rect,
-                7.0,
+                if self.appearance.show_panel_gaps {
+                    7.0
+                } else {
+                    0.0
+                },
                 Stroke::new(
                     1.0,
                     if self.pane_highlighted && self.selected_pane == index {
@@ -1312,7 +1324,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             return;
         }
         let tree = self.tiles.as_ref().unwrap();
-        let (leaves, dividers) = tree.geometry(rect);
+        let (leaves, dividers) = tree.geometry_with_gaps(rect, self.appearance.show_panel_gaps);
         if ui.input(|input| {
             input.pointer.any_click()
                 && input.pointer.interact_pos().is_some_and(|pos| {
@@ -1323,43 +1335,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }) && ui.rect_contains_pointer(rect)
         {
             self.pane_highlighted = false;
-        }
-        for divider in dividers {
-            let response = ui
-                .interact(
-                    divider.handle,
-                    ui.id().with(("tile-divider", &divider.path)),
-                    Sense::click_and_drag(),
-                )
-                .on_hover_and_drag_cursor(if divider.axis == Axis::Horizontal {
-                    egui::CursorIcon::ResizeHorizontal
-                } else {
-                    egui::CursorIcon::ResizeVertical
-                })
-                .help_text("Drag to resize adjacent panes. Double-click to make this split equal.");
-            let value = if response.double_clicked() {
-                Some(0.5)
-            } else if response.dragged() {
-                let delta = response.drag_delta();
-                Some(if divider.axis == Axis::Horizontal {
-                    (divider.handle.left() - divider.bounds.left() + delta.x)
-                        / (divider.bounds.width() - divider.handle.width()).max(1.0)
-                } else {
-                    (divider.handle.top() - divider.bounds.top() + delta.y)
-                        / (divider.bounds.height() - divider.handle.height()).max(1.0)
-                })
-            } else {
-                None
-            };
-            if let Some(value) = value {
-                self.tiles
-                    .as_mut()
-                    .unwrap()
-                    .set_fraction(&divider.path, value);
-            }
-            if response.hovered() || response.dragged() {
-                paint_resize_divider(ui, divider.handle, divider.axis, self.theme.accent);
-            }
         }
         let mut drop = None;
         for (id, cell) in leaves {
@@ -1386,6 +1361,37 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 && let Some(pos) = ui.ctx().pointer_interact_pos()
             {
                 drop = Some((*payload, id, workspace::drop_zone(cell, pos).0));
+            }
+        }
+        // Register resize targets last so touching panes cannot swallow edge gestures.
+        for divider in dividers {
+            let response = ui
+                .interact(
+                    divider.interaction_rect(),
+                    ui.id().with(("tile-divider", &divider.path)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_and_drag_cursor(if divider.axis == Axis::Horizontal {
+                    egui::CursorIcon::ResizeHorizontal
+                } else {
+                    egui::CursorIcon::ResizeVertical
+                })
+                .help_text("Drag to resize adjacent panes. Double-click to make this split equal.");
+            let value = if response.double_clicked() {
+                Some(0.5)
+            } else if response.dragged() {
+                Some(divider.dragged_fraction(response.drag_delta()))
+            } else {
+                None
+            };
+            if let Some(value) = value {
+                self.tiles
+                    .as_mut()
+                    .unwrap()
+                    .set_fraction(&divider.path, value);
+            }
+            if response.hovered() || response.dragged() {
+                paint_resize_divider(ui, divider.handle, divider.axis, self.theme.accent);
             }
         }
         if let Some((payload, target, edge)) = drop {
@@ -4794,6 +4800,105 @@ mod workspace_interaction_tests {
         );
         assert_eq!(std::fs::read(&path).unwrap(), b"not a directory");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn panel_gaps_menu_shortcut_and_recovery_share_a_local_preference() {
+        use crate::project_menu::{self, Action as A};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let scene = serde_json::to_value(app.capture_scene()).unwrap();
+        assert!(app.menu_item_state(&ctx, A::PanelGaps).checked);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::G,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                let available: Vec<_> = project_menu::commands()
+                    .filter(|c| app.menu_item_state(ui.ctx(), c.action).enabled)
+                    .map(|c| c.action)
+                    .collect();
+                let action = project_menu::take_shortcut(ui.ctx(), |a| available.contains(&a));
+                assert_eq!(action, Some(A::PanelGaps));
+                app.menu_action(ui.ctx(), action.unwrap());
+            },
+        );
+        output.textures_delta.clear();
+        assert!(!app.menu_item_state(&ctx, A::PanelGaps).checked);
+        let saved = serde_json::to_value(app.workspace(&ctx)).unwrap();
+        let restored: Session = serde_json::from_value(saved.clone()).unwrap();
+        assert!(!restored.appearance.show_panel_gaps);
+        assert_eq!(serde_json::to_value(app.capture_scene()).unwrap(), scene);
+        let mut legacy = saved;
+        legacy["appearance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("show_panel_gaps");
+        assert!(
+            serde_json::from_value::<Session>(legacy)
+                .unwrap()
+                .appearance
+                .show_panel_gaps
+        );
+        app.menu_action(&ctx, A::PanelGaps);
+        assert!(app.appearance.show_panel_gaps);
+        app.panel_fullscreen = Some(0);
+        app.menu_action(&ctx, A::PanelGaps);
+        assert!(
+            app.appearance.show_panel_gaps,
+            "fullscreen ignores stale gap commands"
+        );
+    }
+
+    #[test]
+    fn hidden_panel_gaps_keep_resize_cursors_and_dragging() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let mut app = app();
+            app.appearance.show_panel_gaps = false;
+            app.tiles = Some(Tile::split(axis, 0.4, Tile::Pane(0), Tile::Pane(1)));
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            settle_drawers(&mut app, &ctx, now);
+            let canvas = app.scene_library.canvas.unwrap();
+            let (_, dividers) = app
+                .tiles
+                .as_ref()
+                .unwrap()
+                .geometry_with_gaps(canvas, false);
+            let pos = dividers[0].handle.center();
+            let expected = if axis == Axis::Horizontal {
+                egui::CursorIcon::ResizeHorizontal
+            } else {
+                egui::CursorIcon::ResizeVertical
+            };
+            let out = workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            assert_eq!(out.platform_output.cursor_icon, expected);
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, true)]);
+            let delta = if axis == Axis::Horizontal {
+                Vec2::new(30.0, 0.0)
+            } else {
+                Vec2::new(0.0, 30.0)
+            };
+            let out = workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos + delta)],
+            );
+            assert_eq!(out.platform_output.cursor_icon, expected);
+            let Tile::Split { fraction, .. } = app.tiles.as_ref().unwrap() else {
+                panic!()
+            };
+            assert!(*fraction > 0.4, "shared-edge gesture must resize the split");
+            workspace_frame(&mut app, &ctx, now, vec![button(pos + delta, false)]);
+        }
     }
 
     #[test]

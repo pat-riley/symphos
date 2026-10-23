@@ -125,7 +125,8 @@ Window, and Help**. Other desktops expose the same app commands under **Menu**.
 - **Playback** pauses one/all components, clears captured history, and resets
   peak/clip hold. **View** toggles the component browser (Cmd+Shift+A), inspector,
   Macros (Cmd+B), Signals (Cmd+Shift+B), and Info View; balances pane sizes;
-  controls fullscreen; and changes interface zoom (Cmd+= / Cmd+- / Cmd+0).
+  toggles panel gaps (Cmd+Shift+G); controls fullscreen; and changes interface
+  zoom (Cmd+= / Cmd+- / Cmd+0).
 - **Window** uses the native Minimize, Zoom, and Bring All to Front commands.
   **Help** opens the shortcut reference, performance and FFT diagnostics, issue
   log, and app information. Development mode adds **Dev > Design System**.
