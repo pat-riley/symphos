@@ -44,7 +44,7 @@ macro_rules! parameters {
             pub auto_orbit:bool,
         }
         impl Default for OrbitalSettings {
-            fn default()->Self { Self {camera_motion:super::camera_motion::Settings::y_up_default(),$($field:$default,)*quality:1,attractors:3,particle_shape:0,color_palette:0,color_mode:0,color_start:[20,220,255],color_end:[255,40,150],orb_style:0,orb_color_mode:0,orb_palette:2,orb_color_start:[20,220,255],orb_color_end:[255,40,150],orb_colors:[[40,200,255],[255,70,140],[255,190,40],[120,255,90],[150,90,255]],orb_field_enabled:false,orb_solid:true,show_paths:false,show_grid:true,show_axes:true,show_gizmo:true,grid_plane:0,projection:0,auto_orbit:false} }
+            fn default()->Self { Self {camera_motion:super::camera_motion::Settings::y_up_default(),$($field:$default,)*quality:1,attractors:3,particle_shape:0,color_palette:0,color_mode:0,color_start:[20,220,255],color_end:[255,40,150],orb_style:0,orb_color_mode:0,orb_palette:2,orb_color_start:[20,220,255],orb_color_end:[255,40,150],orb_colors:[[40,200,255],[255,70,140],[255,190,40],[120,255,90],[150,90,255]],orb_field_enabled:false,orb_solid:true,show_paths:false,show_grid:true,show_axes:true,show_gizmo:false,grid_plane:0,projection:0,auto_orbit:false} }
         }
         impl OrbitalSettings {
             fn sanitize(&mut self) {

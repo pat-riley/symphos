@@ -145,7 +145,7 @@ impl Default for ResonanceSettings {
             point_size: 1.4,
             black_canvas: true,
             guides: false,
-            show_gizmo: true,
+            show_gizmo: false,
             yaw: -0.45,
             elevation: 0.3,
             roll: 0.35,

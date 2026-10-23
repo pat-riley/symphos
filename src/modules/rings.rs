@@ -153,7 +153,7 @@ impl Default for RingsSettings {
             thickness: 1.4,
             glow: 0.2,
             guides: true,
-            show_gizmo: true,
+            show_gizmo: false,
             baselines: false,
             yaw: -0.35,
             elevation: 0.35,

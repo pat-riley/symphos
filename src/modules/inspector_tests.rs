@@ -274,3 +274,45 @@ fn detailed_grids_are_visual_controls_that_restore_from_new_and_legacy_presets()
         assert_eq!(legacy, original);
     }
 }
+
+#[test]
+fn every_axis_navigator_defaults_off_and_explicit_saved_choices_survive_restore() {
+    let mut camera_count = 0;
+    for kind in ModuleKind::ALL {
+        let mut pane = ModulePane::new(kind);
+        let mut encoded = serde_json::to_value(pane.copy_settings()).unwrap();
+        let body = encoded
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        let Some(gizmo) = body.get_mut("show_gizmo") else {
+            continue;
+        };
+        camera_count += 1;
+        assert_eq!(
+            *gizmo,
+            serde_json::json!(false),
+            "{kind:?} must start without an axis navigator"
+        );
+        *gizmo = true.into();
+        let enabled: ModuleSettings = serde_json::from_value(encoded).unwrap();
+        assert!(pane.paste_settings(&enabled));
+        let mut restored = ModulePane::new(kind);
+        restored.restore(&pane.snapshot());
+        assert_eq!(
+            restored.copy_settings(),
+            enabled,
+            "{kind:?} preserves a saved opt-in"
+        );
+        restored.reset_settings();
+        let reset = serde_json::to_value(restored.copy_settings()).unwrap();
+        let body = reset.as_object().unwrap().values().next().unwrap();
+        assert_eq!(
+            body["show_gizmo"], false,
+            "{kind:?} reset also disables the navigator"
+        );
+    }
+    assert_eq!(camera_count, 11);
+}
