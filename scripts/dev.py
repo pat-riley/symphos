@@ -14,6 +14,40 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 DEV = ROOT / "target" / "dev"
+DEBUG_CACHE_BUDGET = 12 * 1024**3
+
+
+def debug_cache_exceeds(root=ROOT, budget=DEBUG_CACHE_BUDGET):
+    """Count allocated debug artifacts only; never follow links into user data."""
+    total = 0
+    for directory, _, files in os.walk(root / "target" / "debug", followlinks=False):
+        for name in files:
+            path = Path(directory) / name
+            try:
+                if path.is_symlink():
+                    continue
+                metadata = path.stat()
+            except FileNotFoundError:  # Cargo may be removing an old artifact.
+                continue
+            total += getattr(metadata, "st_blocks", (metadata.st_size + 511) // 512) * 512
+            if total > budget:
+                return True
+    return False
+
+
+def reclaim_debug_cache(root=ROOT):
+    """Serialize with Cargo, retaining the lock inode and all non-debug data."""
+    debug = root / "target" / "debug"
+    debug.mkdir(parents=True, exist_ok=True)
+    with (debug / ".cargo-lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for path in debug.iterdir():
+            if path.name == ".cargo-lock":
+                continue
+            if path.is_symlink() or not path.is_dir():
+                path.unlink()
+            else:
+                shutil.rmtree(path)
 
 
 def atomic_json(path, value):
@@ -69,6 +103,9 @@ class Supervisor:
             self.app_log = None
 
     def build(self):
+        if debug_cache_exceeds():
+            self.status("Reclaiming oversized development build cache...")
+            reclaim_debug_cache()
         self.status("Building...")
         started = time.monotonic()
         with (self.dev / "build.log").open("w") as output:

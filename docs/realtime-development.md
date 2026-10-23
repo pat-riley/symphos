@@ -1,5 +1,15 @@
 # Live reload development
 
+Development builds use limited debug symbols and disable Rust's incremental
+object cache to avoid accumulating large intermediate files during frequent
+rebuilds. Before a supervised build, the watcher checks `target/debug`; above
+12 GiB of allocated storage it waits for Cargo's build lock, clears the debug
+artifacts while retaining that lock file, and rebuilds.
+This retains `target/dev` (workspace, presets, and the last working app), release
+builds, and all source files. With no builds running, manual reclamation can use
+`cargo clean --profile dev`;
+never remove the entire `target` directory while using the development workspace.
+
 Run the development app and its file watcher with one command from this checkout:
 
 ```sh

@@ -47,6 +47,10 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 1
+# Frequent rebuilds otherwise retain many large debug object files. Keep useful
+# line tables while bounding the amount produced by interrupted compilations.
+debug = "line-tables-only"
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
