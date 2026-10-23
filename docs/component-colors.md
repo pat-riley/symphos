@@ -1,6 +1,6 @@
 # Compact inspector and component colors
 
-Open a component's inspector with its eye button, **I**, or the navbar inspector
+Open a component's inspector by right-clicking its pane and choosing **Inspect**, **I**, or the navbar inspector
 button. The pinned inspector header sits above the shared **Geometry**, **Appearance**,
 and optional **Camera** tabs. Color and lighting controls live in Appearance;
 audio processing stays in Signals. Dropdowns use the surrounding panel theme,

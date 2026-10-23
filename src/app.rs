@@ -15,6 +15,7 @@ use crate::theme::{AppTheme, AppearancePreferences};
 mod history;
 mod input_routing;
 mod menu;
+mod pane_menu;
 mod scene_library;
 mod settings;
 mod visualizer_inspector;
@@ -65,6 +66,7 @@ pub struct SymphosApp {
     show_issues: bool,
     show_shortcuts: bool,
     settings_clipboard: Option<ModuleSettings>,
+    pane_clipboard: Option<pane_menu::Clipboard>,
     display_fps: f32,
     render_fps: u32,
     last_frame: Instant,
@@ -143,6 +145,7 @@ impl SymphosApp {
             show_issues: false,
             show_shortcuts: false,
             settings_clipboard: None,
+            pane_clipboard: None,
             display_fps: 0.0,
             render_fps: 60,
             last_frame: Instant::now(),
@@ -1038,10 +1041,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 if icons::sized_button(ui, Icon::Close, false, 24.0, "Close pane. Its neighbor expands to fill the space.").clicked() {
                     self.pending_close = Some(index);
                 }
-                if icons::sized_button(ui, Icon::Eye, self.sidebar_open && !self.inspecting_signal && self.inspecting_macro.is_none() && self.selected_pane == index,
-                    24.0, "Inspect this panel. Open all its parameters in the right sidebar.").clicked() {
-                    self.inspect_panel(index);
-                }
                 let expanded = self.panel_fullscreen == Some(index);
                 if icons::sized_button(ui, if expanded { Icon::Restore } else { Icon::Fullscreen }, false,
                     24.0, if expanded { "Exit panel fullscreen · Esc" } else { "Fullscreen panel · F" }).clicked() {
@@ -1114,6 +1113,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 d.insert_temp(background_id, previous);
             }
         });
+        self.pane_context_menu(ui, index, rect, frame, live);
         if let Some(started) = pane_started {
             self.performance.pane(
                 format!("{} · {}", index + 1, self.panes[index].kind.label()),
@@ -2412,6 +2412,7 @@ mod workspace_interaction_tests {
             show_issues: false,
             show_shortcuts: false,
             settings_clipboard: None,
+            pane_clipboard: None,
             display_fps: 0.0,
             render_fps: 60,
             last_frame: Instant::now(),
@@ -3691,7 +3692,7 @@ mod workspace_interaction_tests {
         render(&mut app, &ctx, vec![]);
         render(&mut app, &ctx, vec![]);
         let panel = app.tiles.as_ref().unwrap().geometry(dashboard_rect()).0[0].1;
-        let full = Pos2::new(panel.right() - 80.0, panel.top() + 20.0);
+        let full = Pos2::new(panel.right() - 50.0, panel.top() + 20.0);
         render(
             &mut app,
             &ctx,
@@ -3756,7 +3757,7 @@ mod workspace_interaction_tests {
             ))
             .is_none()
         );
-        let restore = Pos2::new(1120.0, 20.0);
+        let restore = Pos2::new(1150.0, 20.0);
         workspace_frame(
             &mut app,
             &ctx,
@@ -3767,14 +3768,7 @@ mod workspace_interaction_tests {
         assert!(app.panel_fullscreen.is_none());
         app.toggle_panel_fullscreen(0, now);
         workspace_frame(&mut app, &ctx, now, vec![]);
-        let eye = Pos2::new(1150.0, 20.0);
-        workspace_frame(
-            &mut app,
-            &ctx,
-            now,
-            vec![egui::Event::PointerMoved(eye), button(eye, true)],
-        );
-        workspace_frame(&mut app, &ctx, now, vec![button(eye, false)]);
+        app.pane_action(0, pane_menu::Action::Inspect, &AnalysisFrame::default());
         assert!(app.panel_fullscreen.is_none());
         assert!(app.sidebar_open);
     }
@@ -3891,28 +3885,194 @@ mod workspace_interaction_tests {
     }
 
     #[test]
-    fn eye_button_selects_its_panel_and_opens_inspector_without_changing_layout() {
+    fn pane_right_click_offers_inspect_first_and_opens_the_clicked_inspector() {
         let mut app = app();
         let ctx = egui::Context::default();
         let layout = app.tiles.clone();
         render(&mut app, &ctx, vec![]);
         render(&mut app, &ctx, vec![]);
-        let panel = app.tiles.as_ref().unwrap().geometry(dashboard_rect()).0[1].1;
-        let eye = Pos2::new(panel.right() - 52.0, panel.top() + 20.0);
+        let cell = app.tiles.as_ref().unwrap().geometry(dashboard_rect()).0[1].1;
+        let pos = cell.center();
+        for pressed in [true, false] {
+            render(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        let out = render(&mut app, &ctx, vec![]);
+        let labels: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => {
+                    Some((t.galley.job.text.as_str(), t.pos + t.galley.size() * 0.5))
+                }
+                _ => None,
+            })
+            .collect();
+        let position = |name| {
+            labels
+                .iter()
+                .find(|(label, _)| *label == name)
+                .unwrap_or_else(|| panic!("missing {name}: {labels:?}"))
+                .1
+        };
+        assert!(position("Inspect").y < position("Copy pane").y);
+        assert!(position("Reset pane settings").y < position("Delete pane").y);
+        let inspect = position("Inspect");
         render(
             &mut app,
             &ctx,
-            vec![egui::Event::PointerMoved(eye), button(eye, true)],
+            vec![egui::Event::PointerMoved(inspect), button(inspect, true)],
         );
-        render(&mut app, &ctx, vec![button(eye, false)]);
+        render(&mut app, &ctx, vec![button(inspect, false)]);
         assert!(app.sidebar_open);
         assert_eq!(app.selected_pane, 1);
         assert_eq!(app.tiles, layout);
         assert!(!app.fullscreen);
-        // Inspecting the same panel again keeps the inspector open.
-        render(&mut app, &ctx, vec![button(eye, true)]);
-        render(&mut app, &ctx, vec![button(eye, false)]);
-        assert!(app.sidebar_open);
+    }
+    #[test]
+    fn pane_copy_paste_duplicates_settings_audio_and_mappings_with_distinct_ids_and_undo() {
+        use pane_menu::Action as A;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let frame = AnalysisFrame::default();
+        let source = app.panes[0].instance_id().to_owned();
+        let input = app
+            .signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add_audio_input()
+            .unwrap();
+        app.panes[0].audio_input = crate::signals::audio::Connection::Input(input);
+        let mut settings = app.panes[0].copy_settings();
+        assert!(crate::macros::set(&mut settings, "height", 2.5));
+        app.panes[0].paste_settings(&settings);
+        app.scene_macros.slots[0] = crate::macros::Slot {
+            target: Some(crate::macros::ParameterContext {
+                pane: source.clone(),
+                kind: ModuleKind::Waterfall,
+            }),
+            parameter: Some(crate::macros::ParameterSpec {
+                field: "height".into(),
+                label: "Height".into(),
+                min: 0.0,
+                max: 4.0,
+                safe_min: 0.0,
+                safe_max: 4.0,
+                default: 1.0,
+                integer: false,
+                logarithmic: false,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        app.pane_action(0, A::Copy, &frame);
+        app.pane_action(0, A::Duplicate, &frame);
+        let new = app.selected_pane;
+        assert_eq!(app.open_panes().len(), 5);
+        assert_ne!(app.panes[new].instance_id(), source);
+        assert_eq!(app.panes[new].copy_settings(), settings);
+        assert_eq!(app.panes[new].audio_input, app.panes[0].audio_input);
+        let copied_id = app.panes[new].instance_id().to_owned();
+        assert!(
+            app.scene_macros
+                .slots
+                .iter()
+                .any(|s| s.target.as_ref().is_some_and(|t| t.pane == copied_id))
+        );
+        assert_eq!(
+            app.scene_macros.slots[0].target.as_ref().unwrap().pane,
+            source
+        );
+        assert!(app.workspace(&ctx).validate());
+        app.undo_edit(false);
+        assert_eq!(app.open_panes().len(), 4);
+        app.undo_edit(true);
+        assert_eq!(app.open_panes().len(), 5);
+        let old = app.panes[1].snapshot();
+        app.pane_action(1, A::Paste, &frame);
+        assert_eq!(app.panes[1].kind, ModuleKind::Waterfall);
+        assert_eq!(app.panes[1].instance_id(), old.instance_id);
+        assert_eq!(app.panes[1].copy_settings(), settings);
+        assert_eq!(app.panes[1].audio_input, app.panes[0].audio_input);
+        app.undo_edit(false);
+        assert_eq!(app.panes[1].kind, old.kind);
+        app.pane_action(new, A::Delete, &frame);
+        assert!(!app.open_panes().contains(&new));
+        app.undo_edit(false);
+        assert!(app.open_panes().contains(&new));
+        assert!(app.workspace(&ctx).validate());
+    }
+    #[test]
+    fn pane_positioning_preserves_runtime_and_capacity_limits_do_not_block_replacement() {
+        use pane_menu::Action as A;
+        let mut app = app();
+        let frame = AnalysisFrame::default();
+        app.panes[0].toggle_freeze(&frame, Instant::now());
+        let mut saved = app.panes[0].snapshot();
+        saved.macros.as_mut().unwrap().open = false;
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            app.pane_action(0, A::Position(edge), &frame);
+            assert!(app.panes[0].is_frozen());
+            let mut current = app.panes[0].snapshot();
+            current.macros.as_mut().unwrap().open = false; // Dock visibility is navigation, not an edit.
+            assert_eq!(current, saved);
+            assert!(app.tiles.as_ref().unwrap().valid(app.panes.len()));
+            app.undo_edit(false);
+        }
+        app.pane_action(0, A::Swap(1), &frame);
+        assert!(app.panes[0].is_frozen());
+        app.pane_action(0, A::Copy, &frame);
+        while app.open_panes().len() < MAX_PANES {
+            app.pane_action(0, A::PasteNew(Edge::Right), &frame);
+        }
+        app.pane_action(0, A::Duplicate, &frame);
+        assert_eq!(app.open_panes().len(), MAX_PANES);
+        app.pane_action(1, A::Paste, &frame);
+        assert_eq!(app.open_panes().len(), MAX_PANES);
+        assert_eq!(app.panes[1].kind, ModuleKind::Waterfall);
+    }
+    #[test]
+    fn secondary_drag_pans_a_3d_pane_without_opening_its_menu() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        render(&mut app, &ctx, vec![]);
+        render(&mut app, &ctx, vec![]);
+        let cell = app.tiles.as_ref().unwrap().geometry(dashboard_rect()).0[0].1;
+        let start = cell.center();
+        let before = app.panes[0].copy_settings();
+        let secondary = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        render(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(start), secondary(start, true)],
+        );
+        let end = start + Vec2::new(60.0, 30.0);
+        render(&mut app, &ctx, vec![egui::Event::PointerMoved(end)]);
+        render(&mut app, &ctx, vec![secondary(end, false)]);
+        let out = render(&mut app, &ctx, vec![]);
+        assert_ne!(app.panes[0].copy_settings(), before);
+        assert!(
+            !out.shapes.iter().any(
+                |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Copy pane")
+            )
+        );
     }
 
     #[test]
@@ -4291,7 +4451,7 @@ fn settings_header(ui: &mut egui::Ui, kind: ModuleKind, metadata: &str) -> egui:
         kind.label(),
         kind.subtitle(),
         metadata,
-        "Close the component inspector. Use a panel’s eye button to reopen it.",
+        "Close the component inspector. Right-click a pane and choose Inspect, or use the top navigation toggle to reopen it.",
     )
 }
 
@@ -4320,7 +4480,7 @@ fn build_details(ui: &mut egui::Ui) {
 fn pane_title(ui: &mut egui::Ui, kind: ModuleKind) -> egui::Response {
     // Reserve space for the pane actions and truncate long component names.
     let width =
-        (ui.available_width() - 96.0 - 4.0 * ui.spacing().item_spacing.x).clamp(30.0, 180.0);
+        (ui.available_width() - 72.0 - 3.0 * ui.spacing().item_spacing.x).clamp(30.0, 180.0);
     ui.allocate_ui_with_layout(
         Vec2::new(width, 24.0),
         Layout::left_to_right(Align::Center),
@@ -4814,7 +4974,8 @@ mod layout_tests {
                         let title = pane_title(ui, kind);
                         assert!((title.rect.left() - ui.max_rect().left()).abs() < 0.1);
                         let pause = icons::sized_button(ui, Icon::Pause, false, 24.0, "Pause");
-                        let expand = icons::sized_button(ui, Icon::Eye, false, 24.0, "Inspect");
+                        let expand =
+                            icons::sized_button(ui, Icon::Fullscreen, false, 24.0, "Fullscreen");
                         assert!(title.rect.right() < pause.rect.left());
                         assert!(pause.rect.right() < expand.rect.left());
                         assert!(expand.rect.right() <= ui.max_rect().right() + 0.1);

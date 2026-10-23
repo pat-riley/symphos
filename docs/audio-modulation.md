@@ -11,7 +11,7 @@ small headings; mixed workspaces still use one capture and analysis stream.
 
 ## Make a mapping
 
-1. Open a visualizer's inspector with its eye button.
+1. Open a visualizer's inspector by right-clicking its pane and choosing **Inspect**.
 2. Select an existing mapping, or use **Add mapping** to choose a destination.
 3. Choose **Frequency band**, **Full mix**, or **Stereo balance** as its source.
 4. For a frequency band, drag the two bright edges over the live spectrum, or

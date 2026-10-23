@@ -71,7 +71,7 @@ Each dashboard pane owns independent waterfall, spectrum, waveform,
 spectrogram, and stereometer state in `src/modules/`. Selecting a pane directs
 the right-hand inspector to its active module without opening it automatically.
 The inspector reserves space on the right and resizes from its left edge. A pane’s
-eye button opens it; its header X closes it. Parameter sections are independent
+right-click menu’s Inspect action opens it; its header X closes it. Parameter sections are independent
 collapsible headers in one scrollable surface that meets the navbar and window edges. Pane assignment and sizing live in
 the UI; capture and analysis remain independent of layout and rendering.
 The component browser and inspector slide over 220 ms using egui's frame clock

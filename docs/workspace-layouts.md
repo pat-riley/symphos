@@ -9,7 +9,7 @@ to the current scene.
 ## Component inspector
 
 The component inspector docks on the right and starts open on first launch.
-Each pane’s top-right eye button selects that pane and opens its inspector; **I**
+Right-click a pane and choose **Inspect** to select it and open its inspector; **I**
 opens the selected pane’s inspector, and **N** toggles it. The far-right navbar
 button also toggles the inspector and highlights when it is open. The inspector header X
 closes it. Selecting a visualization never opens a hidden inspector automatically.
@@ -51,12 +51,20 @@ another pane's left, right, top, or bottom edge to split that pane and move the
 existing component there. Drop in its center to swap the two pane positions.
 Settings and histories travel with the moved component. Escape cancels a drag.
 
-Each header has separate eye and fullscreen buttons. The eye opens the inspector.
+Each header has freeze/resume, fullscreen, and close buttons. Right-click anywhere
+in a pane for Inspect, Copy/Paste, Duplicate, Freeze/Resume, Fullscreen, Position,
+Swap with, Balance sizes, Reset settings, and Delete. Paste replaces the clicked
+pane; Paste as new pane adds the copy at a chosen edge. Copies retain visual
+settings, camera, audio connection, and mappings where scene slots are available.
+They have distinct identities and fresh runtime history. Position moves a pane to
+a workspace edge; Swap preserves both components and their running histories.
+Layout/settings actions support Undo. Unavailable copied signal feeds are left
+unassigned. Right-drag continues to pan 3D views without opening the menu.
 Fullscreen fills the app window with that panel and hides the navigation, inspector,
 and footer. Escape or the restore icon returns to the previous workspace. A brief
 “Press Esc to exit fullscreen” hint fades away after three seconds. F toggles panel
 fullscreen; F11 toggles native application fullscreen. Compact panes hide pause
-and the drag grip first, keeping fullscreen, inspect, and close accessible.
+and the drag grip first, keeping fullscreen and close accessible; Inspect is always in the context menu.
 
 ## Add components
 

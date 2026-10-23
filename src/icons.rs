@@ -16,7 +16,6 @@ pub enum Icon {
     Veroni,
     Strata,
     Flux,
-    Eye,
     Inspector,
     Plus,
     Save,
@@ -432,20 +431,6 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             (15.0, 10.0),
             (19.0, 10.0),
         ]),
-        Icon::Eye => {
-            line(&[
-                (1.0, 10.0),
-                (5.0, 5.0),
-                (10.0, 3.0),
-                (15.0, 5.0),
-                (19.0, 10.0),
-                (15.0, 15.0),
-                (10.0, 17.0),
-                (5.0, 15.0),
-                (1.0, 10.0),
-            ]);
-            painter.circle_stroke(p(10.0, 10.0), 3.0, stroke);
-        }
         Icon::Close => {
             line(&[(5.0, 5.0), (15.0, 15.0)]);
             line(&[(15.0, 5.0), (5.0, 15.0)]);
@@ -469,8 +454,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_inspect_icon_is_compact_and_clickable() {
-        for icon in [Icon::Eye] {
+    fn navigation_knob_icon_is_compact_and_clickable() {
+        for icon in [Icon::Knob] {
             let context = egui::Context::default();
             let render = |events| {
                 let mut clicked = false;
@@ -483,7 +468,7 @@ mod tests {
                     |ui| {
                         ui.spacing_mut().interact_size.y = 24.0;
                         ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
-                        let response = sized_button(ui, icon, false, 24.0, "Inspect panel");
+                        let response = sized_button(ui, icon, false, 24.0, "Macros");
                         rect = response.rect;
                         clicked = response.clicked();
                     },
