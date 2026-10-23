@@ -397,6 +397,8 @@ pub struct Session {
     pub library_width: f32,
     #[serde(default = "default_signals_height")]
     pub signals_height: f32,
+    #[serde(default = "default_macros_height")]
+    pub macros_height: f32,
     pub help_open: bool,
     pub analysis: AnalysisSettings,
     pub meter_stereo: bool,
@@ -414,6 +416,9 @@ pub const fn default_library_width() -> f32 {
 }
 pub fn default_signals_height() -> f32 {
     390.0
+}
+pub fn default_macros_height() -> f32 {
+    236.0
 }
 fn default_demo() -> bool {
     true
@@ -448,6 +453,7 @@ impl Session {
             && (160.0..=640.0).contains(&self.sidebar_width)
             && (default_library_width()..=440.0).contains(&self.library_width)
             && (180.0..=1000.0).contains(&self.signals_height)
+            && (180.0..=1000.0).contains(&self.macros_height)
             && FFT_SIZES.contains(&self.analysis.fft_size)
             && (1..=240).contains(&self.analysis.analysis_fps)
             && self.window_size.is_none_or(|size| {
@@ -1314,6 +1320,7 @@ mod tests {
             sidebar_width: 236.0,
             library_width: default_library_width(),
             signals_height: default_signals_height(),
+            macros_height: default_macros_height(),
             help_open: false,
             render_fps: 60,
             analysis: AnalysisSettings::default(),
@@ -1322,6 +1329,27 @@ mod tests {
             window_size: None,
             window_position: None,
             active_preset: default_preset(),
+        }
+    }
+
+    #[test]
+    fn macro_dock_height_is_backward_compatible_and_bounded() {
+        let mut saved = serde_json::to_value(session()).unwrap();
+        saved.as_object_mut().unwrap().remove("macros_height");
+        let old = Session::decode(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert_eq!(old.macros_height, default_macros_height());
+        for height in [180.0, 236.0, 500.0, 1000.0] {
+            saved["macros_height"] = height.into();
+            assert_eq!(
+                Session::decode(&serde_json::to_vec(&saved).unwrap())
+                    .unwrap()
+                    .macros_height,
+                height as f32
+            );
+        }
+        for height in [-1.0, 1001.0] {
+            saved["macros_height"] = height.into();
+            assert!(Session::decode(&serde_json::to_vec(&saved).unwrap()).is_none());
         }
     }
 

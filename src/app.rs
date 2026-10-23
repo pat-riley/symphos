@@ -84,6 +84,7 @@ pub struct SymphosApp {
     sidebar_width: f32,
     library_width: f32,
     signals_height: f32,
+    macros_height: f32,
     inspecting_signal: bool,
     inspecting_macro: Option<usize>,
     help_open: bool,
@@ -173,6 +174,7 @@ impl SymphosApp {
             sidebar_width: DEFAULT_SETTINGS_WIDTH,
             library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
+            macros_height: workspace::default_macros_height(),
             inspecting_signal: false,
             inspecting_macro: None,
             help_open: false,
@@ -215,6 +217,7 @@ impl SymphosApp {
             app.sidebar_width = state.sidebar_width;
             app.library_width = state.library_width;
             app.signals_height = state.signals_height;
+            app.macros_height = state.macros_height;
             app.help_open = state.help_open;
             app.storage.active = state.active_preset;
             *app.engine
@@ -281,6 +284,7 @@ impl SymphosApp {
             sidebar_width: self.sidebar_width,
             library_width: self.library_width,
             signals_height: self.signals_height,
+            macros_height: self.macros_height,
             help_open: self.help_open,
             analysis: self
                 .engine
@@ -1309,12 +1313,13 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             let value = if response.double_clicked() {
                 Some(0.5)
             } else if response.dragged() {
-                response.interact_pointer_pos().map(|pos| {
-                    if divider.axis == Axis::Horizontal {
-                        (pos.x - divider.bounds.left()) / divider.bounds.width()
-                    } else {
-                        (pos.y - divider.bounds.top()) / divider.bounds.height()
-                    }
+                let delta = response.drag_delta();
+                Some(if divider.axis == Axis::Horizontal {
+                    (divider.handle.left() - divider.bounds.left() + delta.x)
+                        / (divider.bounds.width() - divider.handle.width()).max(1.0)
+                } else {
+                    (divider.handle.top() - divider.bounds.top() + delta.y)
+                        / (divider.bounds.height() - divider.handle.height()).max(1.0)
                 })
             } else {
                 None
@@ -1326,11 +1331,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     .set_fraction(&divider.path, value);
             }
             if response.hovered() || response.dragged() {
-                ui.painter().rect_filled(
-                    divider.handle.shrink2(Vec2::splat(2.0)),
-                    1.0,
-                    self.theme.accent,
-                );
+                paint_resize_divider(ui, divider.handle, divider.axis, self.theme.accent);
             }
         }
         let mut drop = None;
@@ -1585,13 +1586,20 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         if let Some(index) = self.panel_fullscreen {
             let mut panel_rect = rect;
-            if self.fullscreen_macros
-                && let Some(height) = self.scene_macros.height()
-            {
-                let height = height.min((rect.height() - 150.0).max(30.0));
-                let bar_rect =
-                    Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - height), rect.max);
-                panel_rect.max.y = bar_rect.top() - 6.0;
+            if self.fullscreen_macros && self.scene_macros.open {
+                let mut layout = WorkspaceLayout {
+                    dashboard: rect,
+                    sidebar: None,
+                    help: None,
+                };
+                let bar_rect = resize_performance_dock(
+                    ui,
+                    &mut layout,
+                    &mut self.macros_height,
+                    DockKind::Macros,
+                    &self.theme,
+                );
+                panel_rect = layout.dashboard;
                 self.scene_macro_bar(ui, bar_rect);
             }
             self.scene_library.canvas = Some(panel_rect);
@@ -1940,44 +1948,23 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.sidebar_width,
         );
         if signals_open {
-            let dock_bottom = layout
-                .help
-                .map_or(layout.dashboard.bottom(), |r| r.bottom());
-            let max_height = (dock_bottom - layout.dashboard.top() - 106.0).max(100.0);
-            let min_height = crate::signals::ui::MIN_DOCK_HEIGHT.min(max_height);
-            let height = self
-                .signals_height
-                .clamp(min_height, 1000.0)
-                .min(max_height);
-            let top = dock_bottom - height;
-            let grip = Rect::from_min_max(
-                Pos2::new(layout.dashboard.left(), top - 5.0),
-                Pos2::new(layout.dashboard.right(), top + 3.0),
+            let dock = resize_performance_dock(
+                ui,
+                &mut layout,
+                &mut self.signals_height,
+                DockKind::Signals,
+                &self.theme,
             );
-            let response = ui
-                .interact(grip, egui::Id::new("signals-resize"), Sense::drag())
-                .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical)
-                .help_text("Drag to resize Signals · double-click to reset");
-            if response.double_clicked() {
-                self.signals_height = workspace::default_signals_height();
-            } else if response.dragged()
-                && let Some(pos) = response.interact_pointer_pos()
-            {
-                self.signals_height =
-                    (dock_bottom - pos.y).clamp(min_height, max_height.clamp(min_height, 1000.0));
-            }
-            if response.hovered() || response.dragged() {
-                ui.painter().hline(
-                    grip.x_range(),
-                    top - 1.0,
-                    Stroke::new(1.0, self.theme.muted.gamma_multiply(0.8)),
-                );
-            }
-            let dock = dock_performance(&mut layout, height);
             self.signals_dock(ui, dock, snapshot);
-        } else if let Some(height) = self.scene_macros.height() {
-            let performance_rect = dock_performance(&mut layout, height);
-            self.scene_macro_bar(ui, performance_rect);
+        } else if self.scene_macros.open {
+            let dock = resize_performance_dock(
+                ui,
+                &mut layout,
+                &mut self.macros_height,
+                DockKind::Macros,
+                &self.theme,
+            );
+            self.scene_macro_bar(ui, dock);
         }
         if let Some(sidebar_rect) = layout.sidebar {
             ui.painter()
@@ -2524,6 +2511,7 @@ mod workspace_interaction_tests {
             sidebar_width: 236.0,
             library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
+            macros_height: workspace::default_macros_height(),
             inspecting_signal: false,
             inspecting_macro: None,
             help_open: false,
@@ -3334,7 +3322,7 @@ mod workspace_interaction_tests {
             &mut app,
             vec![egui::Event::PointerMoved(start), button(start, true)],
         );
-        let end = Pos2::new(380.0, 180.0);
+        let end = Pos2::new(382.0, 180.0);
         frame(&mut app, vec![egui::Event::PointerMoved(end)]);
         frame(&mut app, vec![button(end, false)]);
         assert_eq!(app.library_width, 380.0);
@@ -3363,6 +3351,7 @@ mod workspace_interaction_tests {
         for _ in 0..40 {
             frame(&mut app, vec![]);
         }
+        let end = Pos2::new(app.library_width + 6.0, 180.0);
         for _ in 0..2 {
             frame(
                 &mut app,
@@ -3662,6 +3651,72 @@ mod workspace_interaction_tests {
         assert_eq!(app.open_panes().len(), 5);
         assert_eq!(app.panes[app.selected_pane].kind, ModuleKind::Rings);
         assert_eq!(app.signal_ui.lock().unwrap().bank.channels.len(), 1);
+    }
+
+    #[test]
+    fn macro_dock_resizes_resets_and_persists_without_creative_changes() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.scene_macros.open = true;
+        for fullscreen in [false, true] {
+            app.panel_fullscreen = fullscreen.then_some(0);
+            app.fullscreen_macros = fullscreen;
+            app.macros_height = workspace::default_macros_height();
+            workspace_frame(&mut app, &ctx, now, vec![]);
+            workspace_frame(&mut app, &ctx, now, vec![]);
+            let before = app.capture_scene().creative_fingerprint();
+            let grip = ctx
+                .read_response(egui::Id::new("macros-resize"))
+                .unwrap()
+                .rect
+                .center();
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(grip), button(grip, true)],
+            );
+            let end = grip - Vec2::new(0.0, 70.0);
+            let moved = workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(end)]);
+            assert_eq!(
+                moved.platform_output.cursor_icon,
+                egui::CursorIcon::ResizeVertical
+            );
+            workspace_frame(&mut app, &ctx, now, vec![button(end, false)]);
+            assert!((app.macros_height - workspace::default_macros_height() - 70.0).abs() < 0.1);
+            assert_eq!(app.capture_scene().creative_fingerprint(), before);
+            let saved = app.workspace(&ctx);
+            assert_eq!(
+                Session::decode(&serde_json::to_vec(&saved).unwrap())
+                    .unwrap()
+                    .macros_height,
+                app.macros_height
+            );
+            // Let the drag's click history expire before double-click reset.
+            for _ in 0..40 {
+                workspace_frame(&mut app, &ctx, now, vec![]);
+            }
+            let grip = ctx
+                .read_response(egui::Id::new("macros-resize"))
+                .unwrap()
+                .rect
+                .center();
+            for _ in 0..2 {
+                workspace_frame(
+                    &mut app,
+                    &ctx,
+                    now,
+                    vec![egui::Event::PointerMoved(grip), button(grip, true)],
+                );
+                workspace_frame(&mut app, &ctx, now, vec![button(grip, false)]);
+            }
+            assert_eq!(
+                app.macros_height,
+                workspace::default_macros_height(),
+                "fullscreen: {fullscreen}, grip: {grip:?}"
+            );
+        }
     }
 
     #[test]
@@ -4995,8 +5050,8 @@ fn library_width(bounds: Rect, inspector_open: bool, requested: f32) -> f32 {
 fn resize_library(ui: &mut egui::Ui, bounds: Rect, inspector_open: bool, width: &mut f32) {
     let edge = bounds.left() + library_width(bounds, inspector_open, *width);
     let handle = Rect::from_min_max(
-        Pos2::new(edge - 3.0, bounds.top()),
-        Pos2::new(edge + 5.0, bounds.bottom()),
+        Pos2::new(edge + 2.0, bounds.top()),
+        Pos2::new(edge + 10.0, bounds.bottom()),
     );
     let response = ui
         .interact(
@@ -5010,17 +5065,15 @@ fn resize_library(ui: &mut egui::Ui, bounds: Rect, inspector_open: bool, width: 
         );
     if response.double_clicked() {
         *width = workspace_ui::LIBRARY_WIDTH;
-    } else if response.dragged()
-        && let Some(pointer) = response.interact_pointer_pos()
-    {
-        *width = library_width(bounds, inspector_open, pointer.x - bounds.left());
+    } else if response.dragged() {
+        *width = library_width(
+            bounds,
+            inspector_open,
+            library_width(bounds, inspector_open, *width) + response.drag_delta().x,
+        );
     }
     if response.hovered() || response.dragged() {
-        ui.painter().vline(
-            edge + 2.0,
-            bounds.y_range(),
-            Stroke::new(2.0, ui.visuals().selection.bg_fill),
-        );
+        paint_resize_divider(ui, handle, Axis::Horizontal, ui.visuals().selection.bg_fill);
     }
 }
 
@@ -5036,8 +5089,8 @@ fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool
         return;
     };
     let handle = Rect::from_min_max(
-        Pos2::new(sidebar.left() - 5.0, sidebar.top()),
-        Pos2::new(sidebar.left() + 3.0, sidebar.bottom()),
+        Pos2::new(sidebar.left() - 9.0, sidebar.top()),
+        Pos2::new(sidebar.left() - 1.0, sidebar.bottom()),
     );
     let response = ui
         .interact(
@@ -5049,17 +5102,14 @@ fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool
         .help_text("Drag to resize module settings. Double-click to restore the compact width.");
     if response.double_clicked() {
         *width = DEFAULT_SETTINGS_WIDTH;
-    } else if response.dragged()
-        && let Some(pointer) = response.interact_pointer_pos()
-    {
-        *width = settings_width(content, content.right() - pointer.x);
+    } else if response.dragged() {
+        *width = settings_width(
+            content,
+            settings_width(content, *width) - response.drag_delta().x,
+        );
     }
     if response.hovered() || response.dragged() {
-        ui.painter().vline(
-            sidebar.left() - 2.0,
-            sidebar.y_range(),
-            Stroke::new(2.0, ui.visuals().selection.bg_fill),
-        );
+        paint_resize_divider(ui, handle, Axis::Horizontal, ui.visuals().selection.bg_fill);
     }
 }
 
@@ -5130,6 +5180,96 @@ fn workspace_layout_animated(
         dashboard,
         sidebar,
         help,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DockKind {
+    Signals,
+    Macros,
+}
+impl DockKind {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Signals => "signals-resize",
+            Self::Macros => "macros-resize",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Signals => "Signals",
+            Self::Macros => "Macros",
+        }
+    }
+    fn default_height(self) -> f32 {
+        match self {
+            Self::Signals => workspace::default_signals_height(),
+            Self::Macros => workspace::default_macros_height(),
+        }
+    }
+    fn minimum(self) -> f32 {
+        match self {
+            Self::Signals => crate::signals::ui::MIN_DOCK_HEIGHT,
+            Self::Macros => workspace::default_macros_height(),
+        }
+    }
+}
+
+/// Both docks inset their visible frames by eight points; the plot ends six
+/// points before the dock allocation. Center the guide in that full visible gap.
+fn resize_performance_dock(
+    ui: &mut egui::Ui,
+    layout: &mut WorkspaceLayout,
+    requested: &mut f32,
+    kind: DockKind,
+    theme: &AppTheme,
+) -> Rect {
+    let bottom = layout
+        .help
+        .map_or(layout.dashboard.bottom(), |r| r.bottom());
+    let maximum = (bottom - layout.dashboard.top() - 106.0).clamp(30.0, 1000.0);
+    let minimum = kind.minimum().min(maximum);
+    let height = requested.clamp(minimum, maximum);
+    let center = bottom - height + 1.0;
+    let grip = Rect::from_min_max(
+        Pos2::new(layout.dashboard.left(), center - 4.0),
+        Pos2::new(layout.dashboard.right(), center + 4.0),
+    );
+    let response = ui
+        .interact(grip, egui::Id::new(kind.id()), Sense::click_and_drag())
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical)
+        .help_text(format!(
+            "Drag to resize {} · double-click to reset",
+            kind.label()
+        ));
+    if response.double_clicked() {
+        *requested = kind.default_height();
+    } else if response.dragged() {
+        *requested = (height - response.drag_delta().y)
+            .clamp(minimum, maximum)
+            .max(180.0);
+    }
+    let dock = dock_performance(layout, requested.clamp(minimum, maximum));
+    if response.hovered() || response.dragged() {
+        let gap = Rect::from_min_max(
+            Pos2::new(layout.dashboard.left(), layout.dashboard.bottom()),
+            Pos2::new(layout.dashboard.right(), dock.top() + 8.0),
+        );
+        paint_resize_divider(ui, gap, Axis::Vertical, theme.muted.gamma_multiply(0.8));
+    }
+    dock
+}
+
+fn paint_resize_divider(ui: &egui::Ui, gap: Rect, axis: Axis, color: Color32) {
+    let scale = ui.ctx().pixels_per_point();
+    let center_pixel = |v: f32| ((v * scale - 0.5).round() + 0.5) / scale;
+    let stroke = Stroke::new(1.0 / scale, color);
+    if axis == Axis::Horizontal {
+        ui.painter()
+            .vline(center_pixel(gap.center().x), gap.y_range(), stroke);
+    } else {
+        ui.painter()
+            .hline(gap.x_range(), center_pixel(gap.center().y), stroke);
     }
 }
 
@@ -5585,9 +5725,9 @@ mod layout_tests {
             ]
         };
         render(&mut width, vec![]);
-        let start = Pos2::new(content.right() - width, 180.0);
+        let start = Pos2::new(content.right() - width - 5.0, 180.0);
         render(&mut width, pointer(start, true));
-        let end = Pos2::new(content.right() - 380.0, 180.0);
+        let end = Pos2::new(content.right() - 380.0 - 5.0, 180.0);
         render(&mut width, vec![egui::Event::PointerMoved(end)]);
         render(&mut width, pointer(end, false));
         assert_eq!(width, 380.0);
@@ -5669,6 +5809,83 @@ mod layout_tests {
                 .global_id,
             3
         );
+    }
+
+    #[test]
+    fn dock_resize_guides_are_centered_in_the_visible_gap_at_each_display_scale() {
+        for scale in [1.0, 1.5, 2.0] {
+            for kind in [DockKind::Signals, DockKind::Macros] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let theme = AppTheme::default();
+                let mut requested = kind.default_height();
+                let mut gap = Rect::NOTHING;
+                for _ in 0..2 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(1200.0, 800.0),
+                            )),
+                            events: vec![egui::Event::PointerMoved(Pos2::new(
+                                500.0,
+                                730.0 - requested + 1.0,
+                            ))],
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut layout = WorkspaceLayout {
+                                dashboard: Rect::from_min_max(
+                                    Pos2::new(12.0, 60.0),
+                                    Pos2::new(1100.0, 730.0),
+                                ),
+                                sidebar: None,
+                                help: None,
+                            };
+                            let dock = resize_performance_dock(
+                                ui,
+                                &mut layout,
+                                &mut requested,
+                                kind,
+                                &theme,
+                            );
+                            gap = Rect::from_min_max(
+                                layout.dashboard.left_bottom(),
+                                Pos2::new(layout.dashboard.right(), dock.top() + 8.0),
+                            );
+                        },
+                    );
+                    output.textures_delta.clear();
+                    if !ctx
+                        .read_response(egui::Id::new(kind.id()))
+                        .is_some_and(|r| r.hovered())
+                    {
+                        continue;
+                    }
+                    let line = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::LineSegment { points, stroke }
+                                if stroke.color == theme.muted.gamma_multiply(0.8) =>
+                            {
+                                Some((points, stroke))
+                            }
+                            _ => None,
+                        })
+                        .expect("hovered resize guide");
+                    assert!((line.0[0].y - gap.center().y).abs() <= 0.51 / scale);
+                    assert!((line.1.width * scale - 1.0).abs() < 0.001);
+                    let grip = ctx.read_response(egui::Id::new(kind.id())).unwrap().rect;
+                    assert!((grip.center().y - gap.center().y).abs() < 0.001);
+                }
+                assert!(
+                    ctx.read_response(egui::Id::new(kind.id()))
+                        .unwrap()
+                        .hovered()
+                );
+            }
+        }
     }
 
     #[test]

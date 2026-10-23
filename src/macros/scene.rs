@@ -163,9 +163,6 @@ impl SceneMacros {
             }
         }
     }
-    pub fn height(&self) -> Option<f32> {
-        self.open.then_some(236.0)
-    }
     pub fn bar(
         &mut self,
         ui: &mut egui::Ui,

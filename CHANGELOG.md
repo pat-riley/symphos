@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add a resizable Macros dock, including fullscreen, with double-click reset and
+  a remembered local height. Center crisp resize guides evenly between pane,
+  dock, and sidebar edges; resizing uses pointer movement without a grab jump.
+
 - Left-align footer dock controls beside the performance readout, with Signals
   before Macros, matching levels/knob icons, and equal vertically centered buttons.
 
