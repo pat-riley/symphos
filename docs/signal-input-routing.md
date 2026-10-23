@@ -5,28 +5,36 @@ This experiment lives on `codex/signal-input-routing`, branched from GitHub
 
 ## Try it
 
-1. Open **Signals** in the footer. **Modulation** keeps the existing channel mixer.
-2. Select **Audio inputs**, then **+ Audio input**. Name it, select Stereo,
-   Left, Right, Mid or Side, and adjust gain, high-pass, low-pass and noise gate.
-   The live spectrum and level show its output.
-3. Open **Sketch connections**. Select a sketch and choose the named input.
-   Several sketches can share it; each receives its waveform, spectrum and
-   measurements. Main audio retains the existing direct connection.
-4. Adjust that sketch's frequency, envelope and response controls below its
-   connection. These are the same saved parameters previously in its inspector.
-   Gain/filtering on a named input is shared; sketch response is independent.
-5. Choose **Unassigned** to disable built-in audio response while keeping LFO,
-   MIDI and separate modulation mappings available. Disable an audio input to
-   silence all its consumers, or delete it to disconnect them.
+1. Open **Signals** in the footer. Audio, LFO, MIDI and detector channels share
+   one mixer; there are no extra dock tabs.
+2. Right-click empty mixer space and choose **Add channel → Audio**.
+   A **System audio** channel appears with a live frequency-spectrum preview.
+   Existing experimental audio inputs also appear here without creating copies.
+3. Click its header to edit the audio channel in the inspector. Set gain,
+   Stereo/Left/Right/Mid/Side, high-pass, low-pass and noise gate.
+4. Under **Connected sketches**, enable the sketches that should receive its
+   waveform, spectrum and measurements. Expand a connected sketch's response
+   controls to tune its independent frequency/envelope behavior.
+5. Audio channels use an **Input gain** knob and a spectrum; control channels
+   retain their **Visual influence** knob and time-history curves. MIDI retains
+   its message-specific preview. Rename, duplicate, reorder, color, mute, solo
+   and delete audio channels using the same mixer interactions.
+6. Choose **Unassigned** from a sketch's audio connection to disable built-in
+   audio response while retaining LFO/MIDI modulation. Muting an audio channel
+   silences its consumers. Audio solo acts among audio channels, independently
+   of control-channel solo. Deleting disconnects consumers without substitution.
 
-The visualizer inspector has an **Audio & modulation…** shortcut to its Signals
-connection. Signal Response, Frequency Range, channel routing and legacy
-modulation sections appear in Signals. Appearance, geometry, motion physics,
-camera and scientific-model settings remain in the inspector. Cymatics'
+The visualizer inspector's **Driven by** selector chooses the captured system
+audio, an existing audio channel, or Unassigned. It never creates a channel.
+**Inspect audio signal…** selects the existing connected channel in Signals;
+there is no separate sketch-audio inspector. Set frequency range, gain, smoothing
+and response in the audio channel's **Connected sketches → Sketch response**.
+Peak markers, reference traces, note labels, appearance, geometry, motion physics,
+camera and scientific-model settings stay in the visualizer inspector. Cymatics'
 physical damping ratio stays with plate Geometry.
 
-Modulation channels still produce control values/events. In a channel's Source
-inspector, select a named audio input to run its detector on the same processed
+Modulation channels still produce control values/events. In a detector channel's Source
+inspector, select an Audio feed to run its detector on the same processed
 audio used by a sketch. An input can therefore feed both a waterfall's spectrum
 and a bass-envelope detector. LFO and MIDI sources remain independent of audio.
 
@@ -66,7 +74,8 @@ effects engine. The gate is a simple hard gate, without a dedicated gate envelop
 
 Each input keeps a bounded thirty-second spectrum archive (at most 901 rows),
 so connected history visualizers catch up after occlusion. Source/processing
-changes clear incompatible histories. Input edits preserve particle simulation
+changes clear incompatible histories, while live gain adjustments keep the
+archive scrolling continuously. Input edits preserve particle simulation
 and camera state. Renaming an input does not reset its processing or history.
 Rendering and recording consume the same connection; no input DSP runs on the
 capture callback or render thread.
@@ -81,3 +90,7 @@ and a 4096-point FFT measured 0.193 ms per fresh snapshot over 300 updates.
 Reusing an unchanged capture measured 0.110 microseconds per worker lookup.
 This excludes main capture/analysis, rendering and recording; higher sample
 rates, larger FFTs and additional processed inputs increase the worker cost.
+
+Audio detectors and control processing now use the typed
+[insert-chain workflow](signal-inserts.md). The earlier fixed detector selector
+and standalone detector creation commands have been replaced by insert slots.

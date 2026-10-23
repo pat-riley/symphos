@@ -239,12 +239,14 @@ impl ParticleWaves {
             });
         });
         settings_panel(ui, "Camera", |ui| {
-            ui.checkbox(&mut s.auto_orbit,"Auto-rotate").help_text("Orbit continuously around the layers at the chosen speed. Manual rotation stops auto-rotate; panning and zoom retain it.");
+            if super::visual_inspector(ui).is_none() {
+                ui.checkbox(&mut s.auto_orbit,"Auto-rotate").help_text("Orbit continuously around the layers at the chosen speed. Manual rotation stops auto-rotate; panning and zoom retain it.");
+            }
             ui.checkbox(&mut s.orthographic,"Orthographic").help_text("Remove perspective size changes while retaining 3D rotation. Depth of field can still show the focus plane.");
             ui.checkbox(&mut s.guides,"XYZ reference grid").help_text("Show the world-space ground grid and colored X/Y/Z axes. It follows the same camera as the particles and is hidden by default.");
             ui.horizontal(|ui| {
-                if ui.button("Front").help_text("Look directly across X and Y, centered on the layers. Stops auto-rotate.").clicked(){s.yaw=0.0;s.elevation=0.0;s.roll=0.0;s.auto_orbit=false;}
-                if ui.button("Top").help_text("Look down at the XZ plane. Stops auto-rotate.").clicked(){s.yaw=0.0;s.elevation = -std::f32::consts::FRAC_PI_2;s.roll=0.0;s.auto_orbit=false;}
+                if super::visual_inspector(ui).is_none() && ui.button("Front").help_text("Look directly across X and Y, centered on the layers. Stops auto-rotate.").clicked() {s.yaw=0.0;s.elevation=0.0;s.roll=0.0;s.auto_orbit=false;}
+                if super::visual_inspector(ui).is_none() && ui.button("Top").help_text("Look down at the XZ plane. Stops auto-rotate.").clicked() {s.yaw=0.0;s.elevation = -std::f32::consts::FRAC_PI_2;s.roll=0.0;s.auto_orbit=false;}
                 if ui.button("Reset camera").help_text("Restore the angled view and framing without changing the spectrum, focus settings or particles.").clicked(){reset_camera(s, self.sculptural);}
             });
             s.numeric_controls(ui, "Camera", "");
@@ -325,7 +327,7 @@ impl ParticleWaves {
                 - std::f32::consts::PI;
         }
         let response=ui.interact(rect,ui.id().with("particle-waves-camera"),Sense::click_and_drag()).help_text("Spectral particles · frequency shapes luminous 3D layers. Drag to rotate freely, Shift/right-drag to pan, scroll to zoom, double-click to reset. Stronger audio scatters grains; quieter passages draw them back to their spectral surface.");
-        if response.dragged() {
+        if response.dragged() && !super::camera::over_navigator(ui) {
             let delta = ui.input(|i| i.pointer.delta());
             if response.dragged_by(egui::PointerButton::Secondary)
                 || response.dragged_by(egui::PointerButton::Middle)
@@ -346,11 +348,11 @@ impl ParticleWaves {
                 s.auto_orbit = false;
             }
         }
-        if response.hovered() {
+        if response.hovered() && !super::camera::over_navigator(ui) {
             s.zoom =
                 (s.zoom * (ui.input(|i| i.smooth_scroll_delta.y) * 0.002).exp()).clamp(0.25, 4.0);
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !super::camera::over_navigator(ui) {
             reset_camera(s, self.sculptural);
         }
         let axes = trackball::orientation_axes(s.yaw, s.elevation, s.roll)
@@ -542,6 +544,31 @@ fn draw_guides(ui: &egui::Ui, rect: Rect, s: &Settings, axes: [[f32; 4]; 3], the
                 egui::FontId::proportional(12.0),
                 c,
             );
+        }
+    }
+}
+
+impl super::camera::Controlled for ParticleWaves {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan_x,
+            pan_y: &mut s.pan_y,
+            degrees: false,
+            y_up: true,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: true,
+            default_speed: 0.14,
+            speed_limit: 1.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
         }
     }
 }

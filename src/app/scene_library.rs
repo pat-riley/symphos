@@ -2,6 +2,26 @@ use super::*;
 use crate::scenes::library::{self, Capture, CapturePurpose, Command, Selection};
 
 impl SymphosApp {
+    pub(super) fn activate_scene_preset(&mut self, id: u64, name: String) {
+        let baseline = self.capture_scene().creative_fingerprint();
+        if let Some(scene) = self.scenes.current_mut() {
+            scene.name = name;
+            scene.preset = baseline.map(|baseline| crate::scenes::PresetLink {
+                id,
+                baseline,
+                edited: false,
+            });
+        }
+    }
+    pub(super) fn refresh_scene_preset_edited(&mut self) {
+        if self.scenes.current().is_none_or(|s| s.preset.is_none()) {
+            return;
+        }
+        let fingerprint = self.capture_scene().creative_fingerprint();
+        if let Some(link) = self.scenes.current_mut().and_then(|s| s.preset.as_mut()) {
+            link.edited = fingerprint != Some(link.baseline);
+        }
+    }
     pub(super) fn request_scene_preview(&mut self, purpose: CapturePurpose) {
         self.scenes.store(self.capture_scene());
         self.scene_library.ensure_loaded(&self.storage.dir);
@@ -80,6 +100,8 @@ impl SymphosApp {
         let mut presets = self.scene_library.presets.clone();
         let mut persist = false;
         let mut next_selection = selection;
+        let mut saved_preset = None;
+        let mut renamed_preset = None;
         match command {
             Command::New => {
                 let active = self.scenes.active_scene;
@@ -105,7 +127,9 @@ impl SymphosApp {
             }
             Command::Load(Selection::Preset(id)) => {
                 if let Some(preset) = presets.entries.iter().find(|s| s.id == id).cloned()
-                    && let Some(scene_id) = self.scenes.insert(preset.name, preset.state.clone())
+                    && let Some(scene_id) = self
+                        .scenes
+                        .insert(preset.name.clone(), preset.state.clone())
                 {
                     self.scenes
                         .scenes
@@ -114,6 +138,7 @@ impl SymphosApp {
                         .unwrap()
                         .preview = preset.preview;
                     self.apply_scene(preset.state);
+                    self.activate_scene_preset(id, preset.name);
                     self.scene_library.open = false;
                 }
             }
@@ -157,6 +182,7 @@ impl SymphosApp {
             }
             Command::Rename(Selection::Preset(id), name) => {
                 if let Some(p) = presets.entries.iter_mut().find(|p| p.id == id) {
+                    renamed_preset = Some((id, p.name.clone(), name.trim().to_owned()));
                     p.name = name.trim().into();
                     persist = true;
                 }
@@ -193,9 +219,10 @@ impl SymphosApp {
                     }
                 }
                 let preview = self.scenes.current().and_then(|s| s.preview.clone());
-                match presets.insert(name, state, preview) {
+                match presets.insert(name.clone(), state, preview) {
                     Ok(id) => {
                         next_selection = Some(Selection::Preset(id));
+                        saved_preset = Some((id, name.trim().to_owned()));
                         persist = true;
                     }
                     Err(e) => self.scene_library.notice = Some(e),
@@ -210,8 +237,26 @@ impl SymphosApp {
             }
             match presets.save(&self.storage.dir) {
                 Ok(()) => {
+                    // Saving is a library operation, not an undoable visual edit.
+                    // Finish the save-click transaction before adopting its name.
+                    if saved_preset.is_some() {
+                        self.finish_edit();
+                    }
                     self.scene_library.presets = presets;
                     self.scene_library.selection = next_selection;
+                    if let Some((id, old, new)) = renamed_preset {
+                        for scene in &mut self.scenes.scenes {
+                            if scene.name == old
+                                && scene.preset.as_ref().is_some_and(|p| p.id == id)
+                            {
+                                scene.name = new.clone();
+                            }
+                        }
+                    }
+                    if let Some((id, name)) = saved_preset {
+                        self.activate_scene_preset(id, name);
+                        self.scene_library.select_saved(id);
+                    }
                     self.scene_library.notice = Some("Scene preset library saved.".into());
                     self.scene_library.finish_dialog();
                 }

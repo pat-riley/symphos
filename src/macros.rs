@@ -140,7 +140,7 @@ impl State {
         if !self.has_modulation(kind, snapshot) {
             return Vec::new();
         }
-        let document = serde_json::to_value(settings).ok().unwrap_or_default();
+        let document = settings.parameter_document().ok().unwrap_or_default();
         self.effective_document(kind, &document, snapshot)
     }
     // Apply all live values in one settings round-trip and return only the
@@ -154,7 +154,7 @@ impl State {
         if !self.has_modulation(kind, snapshot) {
             return Vec::new();
         }
-        let Ok(mut document) = serde_json::to_value(&*settings) else {
+        let Ok(mut document) = settings.parameter_document() else {
             return Vec::new();
         };
         let changes = self.effective_document(kind, &document, snapshot);
@@ -167,7 +167,7 @@ impl State {
             }
         }
         if !restore.is_empty() {
-            let Ok(updated) = serde_json::from_value(document) else {
+            let Ok(updated) = settings.updated_parameters(document) else {
                 return Vec::new();
             };
             *settings = updated;
@@ -253,7 +253,7 @@ pub fn inspector_indicators(
         .as_ref()
         .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()));
     let effective = state.effective(kind, settings, panel.as_ref().map(|s| s.snapshot.as_ref()));
-    let document = serde_json::to_value(settings).ok().unwrap_or_default();
+    let document = settings.parameter_document().ok().unwrap_or_default();
     let values = state.banks[kind as usize]
         .iter()
         .enumerate()
@@ -305,7 +305,7 @@ fn field<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json:
     Some(value)
 }
 pub fn get(settings: &ModuleSettings, path: &str) -> Option<f64> {
-    field(&serde_json::to_value(settings).ok()?, path)?.as_f64()
+    field(&settings.parameter_document().ok()?, path)?.as_f64()
 }
 pub fn set(settings: &mut ModuleSettings, path: &str, value: f64) -> bool {
     set_many(settings, &[(path.to_owned(), value)])
@@ -314,7 +314,7 @@ pub fn set_many(settings: &mut ModuleSettings, changes: &[(String, f64)]) -> boo
     if changes.is_empty() {
         return false;
     }
-    let Ok(mut document) = serde_json::to_value(&*settings) else {
+    let Ok(mut document) = settings.parameter_document() else {
         return false;
     };
     let mut changed = false;
@@ -324,7 +324,7 @@ pub fn set_many(settings: &mut ModuleSettings, changes: &[(String, f64)]) -> boo
     if !changed {
         return false;
     }
-    let Ok(updated) = serde_json::from_value(document) else {
+    let Ok(updated) = settings.updated_parameters(document) else {
         return false;
     };
     *settings = updated;
@@ -430,7 +430,7 @@ fn bar_impl(
     let document = state.banks[kind as usize]
         .iter()
         .any(|s| s.parameter.is_some())
-        .then(|| serde_json::to_value(&*settings).ok().unwrap_or_default());
+        .then(|| settings.parameter_document().ok().unwrap_or_default());
     let width = ((child.available_width() - 1.0) / 12.0).max(116.0);
     let row_bounds = Rect::from_min_max(
         child.available_rect_before_wrap().min,
@@ -708,7 +708,7 @@ fn bar_impl(
                                                             d.name.as_str()
                                                         });
                                                     ui.label("Source");
-                                                    egui::ComboBox::from_id_salt("source")
+                                                    crate::dropdown::ComboBox::from_id_salt("source")
                                                         .width(260.0)
                                                         .selected_text(selected)
                                                         .show_ui(ui, |ui| {
@@ -717,7 +717,7 @@ fn bar_impl(
                                                                 None,
                                                                 "No modulation",
                                                             );
-                                                            for d in &panel.bank.channels {
+                                                            for d in panel.bank.channels.iter().filter(|d| d.has_control_output()) {
                                                                 ui.selectable_value(
                                                                     &mut signal,
                                                                     Some(d.id),

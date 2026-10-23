@@ -14,16 +14,21 @@ opens the selected pane’s inspector, and **N** toggles it. The far-right navba
 button also toggles the inspector and highlights when it is open. The inspector header X
 closes it. Selecting a visualization never opens a hidden inspector automatically.
 
-A pinned vertical icon rail switches between configuration tabs. Hover an icon
-for its name; the active tab also has a labeled title. Each pane/module remembers
-its selected tab, and each tab keeps its own scroll position. Related controls
-within the tab use compact collapsible groups and edge-to-edge dividers.
+The inspector keeps the component identity and **Driven by** source pinned above
+horizontal **Geometry**, **Appearance**, and **Camera** tabs. Flat visualizers omit
+Camera. Geometry contains structure, population, motion and simulation controls;
+Appearance contains rendering, colors, materials, lighting and feedback. Audio
+processing remains in Signals. Each visualizer remembers its selected tab and
+scroll position. The tab-row menu contains preset, copy/paste and reset actions.
+All 3D cameras offer graphical view buttons and an optional XYZ navigator, plus
+axis/custom-axis orbit, back-and-forth sweeps, wobble and auto-pan. Manual camera
+navigation stops motion at the visible view; pausing holds it in place.
 
 The pinned header shows the component icon, name, visualization type, panel
 number, live/paused status, and capture sample rate. Numeric controls use aligned
-label/value columns with subtle alternating rows and slim accent indicators.
+label/value columns on a flat panel surface with slim accent indicators.
 Drag fields, Shift-drag for fine adjustment, or click the value for exact entry.
-The **Appearance** palette icon opens the shared [gradient and swatch library](component-colors.md).
+The **Appearance** tab contains the shared [gradient and swatch library](component-colors.md).
 
 The inspector surface meets the navbar, right window edge, and bottom window
 edge without outer padding. A gap on its left separates it from the plots.

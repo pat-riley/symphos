@@ -1,20 +1,25 @@
 # Compact inspector and component colors
 
 Open a component's inspector with its eye button, **I**, or the navbar inspector
-button. The fixed icon rail selects one configuration tab at a time: audio
-mappings, geometry, motion, particles, appearance, camera, and component-specific
-analysis tabs. Hover icons for their names. The active tab title identifies the current controls.
+button. The pinned inspector header sits above the shared **Geometry**, **Appearance**,
+and optional **Camera** tabs. Color and lighting controls live in Appearance;
+audio processing stays in Signals. Dropdowns use the surrounding panel theme,
+compact text and flush selection rows.
 
 The inspector uses 22-point property rows, 12-point labels, aligned numeric
-fields, subtle alternating row shading, compact disclosure groups, and full-width
-rules. The header and tab rail remain fixed while properties scroll. Tab
+fields, flat themed surfaces, compact disclosure groups, and full-width
+rules. The header and tabs remain fixed while properties scroll. Tab
 selection is saved with the pane; scroll and disclosure positions are independent
 for each pane, module, and tab during the session. The performance bar's Inspect
 action selects the relevant tab.
 
+Signals, inserts, and Macros use this same inspector skin and pinned identity
+header, without tabs. Their properties scroll through full-width collapsible
+groups; values and source pickers share the same column alignment and field sizes.
+
 ## Palette browser
 
-Choose the palette icon (**Appearance**), then open **Palette**. There are twenty
+Choose **Appearance**, then open **Palette**. There are twenty
 factory gradient previews: Spectrum, Ocean, Ember, Heatmap, Viridis, Magma,
 Inferno, Plasma, Aurora, Ice, Electric lime, Pearl, Classic LED, Pixel fire,
 Phosphor green, Amber CRT, Neon nights, Candy sunset, Ultraviolet, and Monochrome.

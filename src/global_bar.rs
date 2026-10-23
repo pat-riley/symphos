@@ -241,7 +241,7 @@ pub(crate) fn channel_selector(
     id: &str,
     channel: &mut ChannelMode,
 ) -> egui::Response {
-    egui::ComboBox::from_id_salt(id)
+    crate::dropdown::ComboBox::from_id_salt(id)
         .selected_text(channel.label())
         .show_ui(ui, |ui| {
             for value in ChannelMode::ALL {

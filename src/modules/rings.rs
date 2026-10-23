@@ -35,6 +35,9 @@ enum ColorBy {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct RingsSettings {
+    camera_motion: super::camera_motion::Settings,
+    auto_orbit: bool,
+    orbit_speed: f32,
     arrangement: Arrangement,
     rings: usize,
     radius: f32,
@@ -83,6 +86,9 @@ pub(crate) struct RingsSettings {
 impl Default for RingsSettings {
     fn default() -> Self {
         Self {
+            camera_motion: Default::default(),
+            auto_orbit: false,
+            orbit_speed: 10.0,
             arrangement: Arrangement::Orbital,
             rings: 4,
             radius: 1.0,
@@ -515,6 +521,7 @@ impl Rings {
                         s.pan = Vec2::ZERO;
                     }
                     if ui.button("Reset camera").clicked() {
+                        s.auto_orbit = false;
                         s.yaw = -0.35;
                         s.elevation = 0.35;
                         s.roll = 0.0;
@@ -866,6 +873,31 @@ impl Rings {
                 "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
                 theme.muted,
             );
+        }
+    }
+}
+
+impl super::camera::Controlled for Rings {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan.x,
+            pan_y: &mut s.pan.y,
+            degrees: false,
+            y_up: false,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 10.0,
+            speed_limit: 360.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
         }
     }
 }

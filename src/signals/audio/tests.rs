@@ -104,6 +104,33 @@ fn bypass_is_shared_mute_gate_and_side_cancellation_are_silent() {
         assert!(out[&1].frame.bins.iter().all(|b| b.magnitude < 1e-7));
     }
 }
+
+#[test]
+fn solo_audio_inputs_mutes_other_audio_feeds_without_resetting_color_edits() {
+    let source = source();
+    let mut inputs = Inputs::default();
+    let mut buses = vec![
+        InputBus {
+            id: 1,
+            ..Default::default()
+        },
+        InputBus {
+            id: 2,
+            ..Default::default()
+        },
+    ];
+    let first = inputs.process(&buses, &source);
+    buses[0].color = Some([30, 120, 200]);
+    let colored = inputs.process(&buses, &source);
+    assert!(Arc::ptr_eq(&first[&1], &colored[&1]));
+    buses[0].solo = true;
+    let soloed = inputs.process(&buses, &source);
+    assert!(soloed[&1].frame.mix_rms > 0.0);
+    assert_eq!(soloed[&2].frame.mix_rms, 0.0);
+    buses[0].solo = false;
+    let restored = inputs.process(&buses, &source);
+    assert!(restored[&2].frame.mix_rms > 0.0);
+}
 #[test]
 fn connections_preserve_modulation_and_deletion_never_falls_back_to_master() {
     let mut bank = Bank::default();

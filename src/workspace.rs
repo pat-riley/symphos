@@ -1512,6 +1512,76 @@ mod tests {
     }
 
     #[test]
+    fn linked_scene_fingerprints_survive_recovery_without_bypassing_parameter_bounds() {
+        let dir =
+            std::env::temp_dir().join(format!("symphos-linked-recovery-{}", std::process::id()));
+        let mut state = session();
+        let mut book = crate::scenes::Book::new(crate::project::SceneState::capture(state.clone()));
+        book.current_mut().unwrap().preset = Some(crate::scenes::PresetLink {
+            id: 1,
+            baseline: u64::MAX,
+            edited: false,
+        });
+        state.scenes = Some(book);
+        assert!(
+            state.validate(),
+            "preset fingerprints are metadata, not numeric parameters"
+        );
+        let mut legacy = serde_json::to_value(&state).unwrap();
+        assert_eq!(
+            legacy["scenes"]["scenes"][0]["preset"]["baseline"],
+            "ffffffffffffffff"
+        );
+        legacy["scenes"]["scenes"][0]["preset"]["baseline"] = u64::MAX.into();
+        let legacy = Session::decode(&serde_json::to_vec(&legacy).unwrap())
+            .expect("old numeric fingerprints remain supported");
+        assert_eq!(
+            legacy
+                .scenes
+                .unwrap()
+                .current()
+                .unwrap()
+                .preset
+                .as_ref()
+                .unwrap()
+                .baseline,
+            u64::MAX
+        );
+        let mut storage = Storage::new(dir.clone());
+        storage.checkpoint(&state);
+        assert!(storage.notice.is_none());
+        let reloaded = Session::load(&dir).expect("linked preset must survive a recovery reload");
+        assert_eq!(
+            reloaded
+                .scenes
+                .unwrap()
+                .current()
+                .unwrap()
+                .preset
+                .as_ref()
+                .unwrap()
+                .baseline,
+            u64::MAX
+        );
+        let saved = std::fs::read(dir.join("workspace.json")).unwrap();
+        // Invalid controls must still be rejected, retaining the good checkpoint.
+        let mut settings = serde_json::to_value(&state.panes[0].settings).unwrap();
+        settings[0]["Waterfall"]["detail"] = 300.into();
+        state.panes[0].settings = serde_json::from_value(settings).unwrap();
+        assert!(!state.validate());
+        storage.checkpoint(&state);
+        assert!(
+            storage
+                .notice
+                .as_ref()
+                .is_some_and(|notice| notice.contains("Invalid workspace"))
+        );
+        assert_eq!(std::fs::read(dir.join("workspace.json")).unwrap(), saved);
+        drop(storage);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn background_recovery_reports_write_errors_and_can_retry() {
         let dir =
             std::env::temp_dir().join(format!("symphos-recovery-failure-{}", std::process::id()));

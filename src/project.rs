@@ -18,6 +18,37 @@ pub struct SceneState {
     pub analysis: AnalysisSettings,
 }
 impl SceneState {
+    /// Stable creative-state identity; GUI navigation and automatic motion are
+    /// presentation, not edits. Stream the encoding rather than allocate JSON.
+    pub fn creative_fingerprint(&self) -> Option<u64> {
+        let mut state = self.clone();
+        state.selected_pane = 0;
+        if let Some(macros) = &mut state.macros {
+            macros.open = false;
+        }
+        for pane in &mut state.panes {
+            pane.sections.fill(0);
+            if let Some(macros) = &mut pane.macros {
+                macros.open = false;
+            }
+        }
+        struct Fingerprint(u64);
+        impl std::io::Write for Fingerprint {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                for byte in bytes {
+                    self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut hash = Fingerprint(0xcbf29ce484222325);
+        serde_json::to_writer(&mut hash, &state).ok()?;
+        Some(hash.0)
+    }
+
     pub fn capture(session: Session) -> Self {
         Self {
             macros: Some(session.macros.unwrap_or_else(|| {
@@ -174,6 +205,9 @@ pub fn dependencies(content: &PresetContent, bank: &Bank) -> Vec<Definition> {
             }
         }
         for pane in panes {
+            if let crate::signals::audio::Connection::Input(id) = pane.audio_input {
+                ids.insert(id);
+            }
             if let Some(macros) = &pane.macros {
                 for slot in macros.banks.iter().flatten() {
                     if let Some(id) = slot.signal {
@@ -194,8 +228,17 @@ pub fn dependencies(content: &PresetContent, bank: &Bank) -> Vec<Definition> {
 /// in another project from being silently substituted.
 pub fn bind_preset_sources(content: &mut PresetContent, definitions: &[Definition], bank: &Bank) {
     fn same_source(a: &Definition, b: &Definition) -> bool {
-        let mut a = a.clone();
-        let mut b = b.clone();
+        let canonical = |d: &Definition| {
+            let mut bank = Bank {
+                channels: vec![d.clone()],
+                next_id: d.id.saturating_add(1),
+                ..Default::default()
+            };
+            bank.migrate_inserts();
+            bank.channels.remove(0)
+        };
+        let mut a = canonical(a);
+        let mut b = canonical(b);
         a.color = Some(a.color_rgb());
         b.color = Some(b.color_rgb());
         a.id = 0;
@@ -258,19 +301,57 @@ pub fn bind_preset_inputs(
     bank: &Bank,
 ) {
     use crate::signals::audio::Connection;
+    let mut expected_bank = Bank {
+        channels: definitions.clone(),
+        audio_inputs: saved.to_vec(),
+        next_id: saved
+            .iter()
+            .map(|b| b.id)
+            .chain(definitions.iter().map(|d| d.id))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1),
+        ..Default::default()
+    };
+    expected_bank.migrate_inserts();
+    let mut actual_bank = bank.clone();
+    actual_bank.migrate_inserts();
+    let audio_prefix = |bank: &Bank, id| {
+        bank.channels
+            .iter()
+            .find(|d| d.id == id)
+            .and_then(|d| d.inserts.as_ref())
+            .map(|c| {
+                c.stages
+                    .iter()
+                    .take_while(|s| s.effect.output() == crate::signals::inserts::Data::Audio)
+                    .map(|s| (s.enabled, s.effect.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
     let resolve = |connection| match connection {
-        Connection::Input(id) => saved.iter().find(|b| b.id == id).and_then(|input| {
-            let mut expected = input.clone();
-            expected.id = 0;
-            bank.audio_inputs
-                .iter()
-                .find(|candidate| {
-                    let mut candidate = (*candidate).clone();
-                    candidate.id = 0;
-                    candidate == expected
-                })
-                .map(|b| Connection::Input(b.id))
-        }),
+        Connection::Input(id) => expected_bank
+            .audio_inputs
+            .iter()
+            .find(|b| b.id == id)
+            .and_then(|input| {
+                let mut expected = input.clone();
+                expected.id = 0;
+                expected.color = None;
+                actual_bank
+                    .audio_inputs
+                    .iter()
+                    .find(|candidate| {
+                        let prefix_matches = audio_prefix(&expected_bank, id)
+                            == audio_prefix(&actual_bank, candidate.id);
+                        let mut candidate = (*candidate).clone();
+                        candidate.id = 0;
+                        candidate.color = None;
+                        candidate == expected && prefix_matches
+                    })
+                    .map(|b| Connection::Input(b.id))
+            }),
         other => Some(other),
     };
     if let PresetContent::View { panes, .. } = content {
@@ -397,6 +478,67 @@ mod tests {
         modulation::Target,
         modules::{ModuleKind, ModulePane},
     };
+    #[test]
+    fn visual_presets_match_audio_insert_processing_without_creating_channels() {
+        use crate::signals::audio::Connection;
+        use crate::signals::{
+            Input,
+            inserts::{Detection, Detector, Effect},
+        };
+        let mut bank = Bank::default();
+        let id = bank.add_source(Input::System).unwrap();
+        let chain = bank.channels[0].inserts.as_mut().unwrap();
+        chain
+            .add(
+                Input::System,
+                0,
+                Effect::Filter {
+                    low: 30.0,
+                    high: 180.0,
+                },
+            )
+            .unwrap();
+        chain
+            .add(
+                Input::System,
+                1,
+                Effect::Detect(Detection::new(Detector::Bass)),
+            )
+            .unwrap();
+        let mut pane = crate::modules::ModulePane::new(crate::modules::ModuleKind::Waterfall);
+        pane.audio_input = Connection::Input(id);
+        let original = PresetContent::View {
+            layout: Tile::Pane(0),
+            panes: vec![pane.snapshot()],
+            macros: None,
+        };
+        let saved = dependencies(&original, &bank);
+        assert_eq!(saved.len(), 1);
+        let mut target = bank.clone();
+        target.channels[0].inserts.as_mut().unwrap().stages[0].effect = Effect::Filter {
+            low: 30.0,
+            high: 500.0,
+        };
+        let mut content = original.clone();
+        bind_preset_inputs(
+            &mut content,
+            &mut saved.clone(),
+            &bank.audio_inputs,
+            &target,
+        );
+        let PresetContent::View { panes, .. } = content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Off);
+        let mut content = original;
+        bind_preset_inputs(&mut content, &mut saved.clone(), &bank.audio_inputs, &bank);
+        let PresetContent::View { panes, .. } = content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Input(id));
+        assert_eq!(target.channels.len(), 1);
+        assert_eq!(target.audio_inputs.len(), 1);
+    }
     #[test]
     fn typed_inputs_roundtrip_and_view_presets_reuse_only_matching_inputs() {
         use crate::signals::audio::Connection;

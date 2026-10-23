@@ -18,10 +18,14 @@ macro_rules! module_settings {
     };
 }
 
+mod camera;
 mod camera_gizmo;
+mod camera_motion;
 mod cymatics;
 mod flux;
 mod frequency;
+#[cfg(test)]
+mod inspector_tests;
 mod milkdrop;
 mod orbital;
 mod oscilloscope;
@@ -286,6 +290,7 @@ pub struct ModulePane {
     strata: Strata,
     flux: Flux,
     active_sections: [usize; 18],
+    camera_runtime: [camera::Runtime; 18],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -315,16 +320,27 @@ pub enum ModuleSettings {
 }
 
 impl ModuleSettings {
-    /// Auto-orbit advances presentation state without a user edit.
-    pub fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        match self {
-            Self::Waterfall(s) => s.automatic_yaw(),
-            Self::Sphere(s) | Self::Cylinder(s) => s.automatic_yaw(),
-            Self::Orbital(s) => s.automatic_yaw(),
-            Self::ParticleWaves(s) | Self::SpectralBloom(s) => s.automatic_yaw(),
-            _ => None,
+    /// Modulation edits numeric parameters, never portable binary assets. Keep
+    /// large image payloads out of the per-frame JSON parameter round-trip.
+    pub(crate) fn parameter_document(&self) -> Result<serde_json::Value, serde_json::Error> {
+        if let Self::Waterfall(settings) = self {
+            serde_json::to_value(Self::Waterfall(settings.without_image()))
+        } else {
+            serde_json::to_value(self)
         }
     }
+
+    pub(crate) fn updated_parameters(
+        &self,
+        document: serde_json::Value,
+    ) -> Result<Self, serde_json::Error> {
+        let mut updated: Self = serde_json::from_value(document)?;
+        if let (Self::Waterfall(original), Self::Waterfall(settings)) = (self, &mut updated) {
+            settings.restore_image(original);
+        }
+        Ok(updated)
+    }
+
     pub fn modulation_mut(&mut self) -> Option<&mut crate::modulation::ModulationSettings> {
         match self {
             Self::Flux(s) => s.modulation.as_mut(),
@@ -513,29 +529,6 @@ impl SettingsSection {
     }
 }
 
-impl SettingsSection {
-    fn icon(self) -> Icon {
-        match self {
-            Self::Camera => Icon::Camera,
-            Self::Appearance => Icon::Palette,
-            Self::History | Self::TimeWindow => Icon::Clock,
-            Self::Geometry => Icon::Waterfall,
-            Self::Frequency => Icon::Bars,
-            Self::Response | Self::Amplitude => Icon::Settings,
-            Self::Modulation => Icon::AudioMappings,
-            Self::Channels | Self::Correlation => Icon::Stereo,
-            Self::Display => Icon::Surface,
-            Self::Sync => Icon::Oscilloscope,
-            Self::Flow => Icon::Waveform,
-            Self::Particles => Icon::Flux,
-            Self::Orbs => Icon::Sphere,
-            Self::Rendering => Icon::Palette,
-            Self::Presets => Icon::Surface,
-            Self::Feedback => Icon::Rings,
-        }
-    }
-}
-
 impl ModulePane {
     /// Source lifecycle is owned by Signals. Reconcile every retained visualizer,
     /// including inactive types, without creating or rebinding any channels.
@@ -681,15 +674,7 @@ impl ModulePane {
         }
         let before = self.snapshot();
         for saved in &state.settings {
-            let mut settings = saved.clone();
-            if let Some(old) = before.settings.iter().find(|s| s.kind() == settings.kind()) {
-                let mut old = old.clone();
-                if let (Some(current), Some(restored)) =
-                    (old.automatic_yaw(), settings.automatic_yaw())
-                {
-                    *restored = *current;
-                }
-            }
+            let settings = saved.clone();
             if before.settings.iter().any(|s| s == &settings) {
                 continue;
             }
@@ -702,6 +687,7 @@ impl ModulePane {
     }
 
     pub fn restore(&mut self, state: &PaneState) {
+        self.camera_runtime = std::array::from_fn(|_| Default::default());
         self.audio_input = state.audio_input;
         self.input_revision = None;
         self.instance_id = state.instance_id.clone();
@@ -760,6 +746,7 @@ impl ModulePane {
             strata: Strata::default(),
             flux: Flux::default(),
             active_sections: [0; 18],
+            camera_runtime: std::array::from_fn(|_| Default::default()),
             inspector_focus: None,
             frozen: None,
             paused_duration: Duration::ZERO,
@@ -1014,6 +1001,11 @@ impl ModulePane {
         self.apply_live_settings(settings);
         self.kind = kind;
     }
+    #[cfg(all(test, feature = "development"))]
+    pub(crate) fn advance_waterfall_camera(&mut self, now: Instant) -> (f32, f32) {
+        self.waterfall.advance_camera(now);
+        self.waterfall.camera_angles()
+    }
     #[cfg(test)]
     pub fn toggle_performance(&mut self) {
         self.macros.open = !self.macros.open;
@@ -1100,64 +1092,81 @@ impl ModulePane {
         }
     }
 
-    pub fn inspector_tabs(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn resolve_inspector_focus(&mut self) {
         if let Some(section) = self.inspector_focus.take() {
             self.select_section(section);
-        }
-        for &section in self.sections() {
-            if matches!(
-                section,
-                SettingsSection::Response
-                    | SettingsSection::Modulation
-                    | SettingsSection::Frequency
-                    | SettingsSection::Channels
-            ) {
-                continue;
-            }
-            let selected = self.active_section() == section;
-            let response =
-                crate::icons::sized_button(ui, section.icon(), selected, 28.0, section.title());
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, section.title())
-            });
-            if response.clone().help_text(section.title()).clicked() {
-                self.select_section(section);
-            }
         }
     }
 
     pub fn inspector_controls(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
-        if matches!(
-            self.active_section(),
-            SettingsSection::Response
-                | SettingsSection::Modulation
-                | SettingsSection::Frequency
-                | SettingsSection::Channels
-        ) {
-            let next = self
-                .sections()
-                .iter()
-                .copied()
-                .find(|s| {
-                    !matches!(
-                        s,
-                        SettingsSection::Response
-                            | SettingsSection::Modulation
-                            | SettingsSection::Frequency
-                            | SettingsSection::Channels
-                    )
-                })
-                .unwrap();
-            self.select_section(next);
-        }
-        let section = self.active_section();
+        let section = self.active_inspector_section();
         ui.data_mut(|d| d.insert_temp(egui::Id::new("property-row-index"), 0_usize));
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(VISUAL_INSPECTOR), (self.kind, section)));
         ui.push_id(self.kind.label(), |ui| {
-            inspector_section(ui, section.title(), |ui| {
-                ui.data_mut(|d| d.insert_temp(ui.id().with("active-module-section"), section));
-                self.section_controls(ui, frame);
-            });
+            ui.data_mut(|d| d.insert_temp(egui::Id::new(FLAT_INSPECTOR), true));
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, |ui| {
+                    if section == SettingsSection::Camera
+                        && let Some(camera) = self.controlled_camera()
+                    {
+                        camera::views(camera, ui);
+                    }
+                    self.section_controls(ui, frame);
+                    if section == SettingsSection::Camera
+                        && self
+                            .controlled_camera()
+                            .is_some_and(|m| camera::controls(m, ui))
+                    {
+                        self.camera_runtime[self.kind as usize] = Default::default();
+                    }
+                });
+            ui.data_mut(|d| d.remove::<bool>(egui::Id::new(FLAT_INSPECTOR)));
         });
+        ui.data_mut(|d| {
+            d.remove::<(ModuleKind, SettingsSection)>(egui::Id::new(VISUAL_INSPECTOR));
+        });
+    }
+
+    fn controlled_camera(&mut self) -> Option<&mut dyn camera::Controlled> {
+        Some(match self.kind {
+            ModuleKind::Sphere => &mut self.sphere,
+            ModuleKind::Cylinder => &mut self.cylinder,
+            ModuleKind::Rings => &mut self.rings,
+            ModuleKind::Resonance => &mut self.resonance,
+            ModuleKind::Orbital => &mut self.orbital,
+            ModuleKind::Cymatics => &mut self.cymatics,
+            ModuleKind::ParticleWaves => &mut self.particle_waves,
+            ModuleKind::SpectralBloom => &mut self.spectral_bloom,
+            ModuleKind::Flux => &mut self.flux,
+            ModuleKind::Strata => &mut self.strata,
+            _ => return None,
+        })
+    }
+
+    pub fn inspector_sections(&self) -> &'static [SettingsSection] {
+        use SettingsSection::*;
+        if self.sections().contains(&Camera) {
+            &[Geometry, Appearance, Camera]
+        } else {
+            &[Geometry, Appearance]
+        }
+    }
+
+    pub fn active_inspector_section(&self) -> SettingsSection {
+        visual_category_for(self.kind, self.active_section().title())
+    }
+
+    pub fn select_inspector_section(&mut self, section: SettingsSection) {
+        // Keep the existing saved section indices readable; the new presentation
+        // groups them without changing any parameter addresses or values.
+        if let Some(index) = self
+            .sections()
+            .iter()
+            .position(|s| visual_category_for(self.kind, s.title()) == section)
+        {
+            self.active_sections[self.kind as usize] = index;
+        }
     }
 
     pub fn sections(&self) -> &'static [SettingsSection] {
@@ -1376,18 +1385,78 @@ impl ModulePane {
             .help_text(self.kind.description());
         match self.kind {
             ModuleKind::Milkdrop => self.milkdrop.draw(ui, rect, frame, now, live, frozen),
-            ModuleKind::Cymatics => self.cymatics.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::SpectralBloom => {
-                self.spectral_bloom.draw(ui, rect, frame, theme, now, live)
-            }
-            ModuleKind::ParticleWaves => {
-                self.particle_waves.draw(ui, rect, frame, theme, now, live)
-            }
-            ModuleKind::Orbital => self.orbital.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Resonance => self.resonance.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Rings => self.rings.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Cylinder => self.cylinder.draw(ui, rect, frame, theme, now),
-            ModuleKind::Sphere => self.sphere.draw(ui, rect, frame, theme, now),
+            ModuleKind::Cymatics => camera::draw(
+                &mut self.cymatics,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                true,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::SpectralBloom => camera::draw(
+                &mut self.spectral_bloom,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                true,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::ParticleWaves => camera::draw(
+                &mut self.particle_waves,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                true,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::Orbital => camera::draw(
+                &mut self.orbital,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                true,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::Resonance => camera::draw(
+                &mut self.resonance,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                false,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::Rings => camera::draw(
+                &mut self.rings,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                false,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::Cylinder => camera::draw(
+                &mut self.cylinder,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                false,
+                |m, ui| m.draw(ui, rect, frame, theme, now),
+            ),
+            ModuleKind::Sphere => camera::draw(
+                &mut self.sphere,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                false,
+                |m, ui| m.draw(ui, rect, frame, theme, now),
+            ),
             ModuleKind::Waterfall => self.waterfall.draw(ui, rect, frame, theme, now, false),
             ModuleKind::Spectrum => self
                 .spectrum
@@ -1407,8 +1476,24 @@ impl ModulePane {
             ModuleKind::Stereometer => self.stereometer.draw(ui, rect, frame, theme, live),
             ModuleKind::Oscilloscope => self.oscilloscope.draw(ui, rect, frame, theme, live),
             ModuleKind::Veroni => self.veroni.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Strata => self.strata.draw(ui, rect, frame, theme, now, live),
-            ModuleKind::Flux => self.flux.draw(ui, rect, frame, theme, now, live),
+            ModuleKind::Strata => camera::draw(
+                &mut self.strata,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                true,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
+            ModuleKind::Flux => camera::draw(
+                &mut self.flux,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                true,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
         }
         if !restore.is_empty() {
             let mut settings = self.copy_settings();
@@ -1454,17 +1539,11 @@ enum TraceStyle {
 
 // Popups otherwise inherit the application's roomier menu defaults. Keep every
 // properties picker consistent and reserve enough height for its complete list.
-fn properties_combo(id: &str, width: f32, rows: usize) -> egui::ComboBox {
-    egui::ComboBox::from_id_salt(id)
+fn properties_combo(id: &str, width: f32, rows: usize) -> crate::dropdown::ComboBox {
+    crate::dropdown::ComboBox::from_id_salt(id)
         .width(width)
         .height(rows as f32 * 26.0)
         .truncate()
-        .popup_style(egui::style::StyleModifier::new(|style| {
-            style.spacing.item_spacing.y = 2.0;
-            style.spacing.interact_size.y = 24.0;
-            style.spacing.button_padding = egui::vec2(5.0, 2.0);
-            style.override_font_id = Some(FontId::proportional(13.0));
-        }))
 }
 
 impl TraceStyle {
@@ -1477,48 +1556,50 @@ impl TraceStyle {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui, bars: bool) {
-        properties_combo("trace-style", 176.0, 3)
-            .selected_text(self.label())
-            .show_ui(ui, |ui| {
-                for style in [Self::Bars, Self::Line, Self::Filled] {
-                    if style == Self::Bars && !bars {
-                        continue;
-                    }
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(176.0, 24.0), egui::Sense::click());
-                    if response.hovered() || *self == style {
-                        ui.painter()
-                            .rect_filled(rect, 3.0, ui.visuals().selection.bg_fill);
-                    }
-                    let icon_rect = Rect::from_min_size(rect.min, egui::vec2(24.0, 24.0));
-                    crate::icons::paint(
-                        ui,
-                        icon_rect,
-                        match style {
-                            Self::Bars => Icon::Bars,
-                            Self::Line => Icon::Waveform,
-                            Self::Filled => Icon::Surface,
-                        },
-                        ui.visuals().text_color(),
-                    );
-                    ui.painter().text(
-                        rect.left_center() + egui::vec2(30.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        style.label(),
-                        FontId::proportional(13.0),
-                        ui.visuals().text_color(),
-                    );
-                    if response.clicked() {
-                        *self = style;
-                        ui.close();
-                    }
-                    response.help_text(
+        property_row(ui, "Style", |ui| {
+            properties_combo("trace-style", ui.available_width(), 3)
+                .selected_text(self.label())
+                .show_ui(ui, |ui| {
+                    for style in [Self::Bars, Self::Line, Self::Filled] {
+                        if style == Self::Bars && !bars {
+                            continue;
+                        }
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(176.0, 22.0), egui::Sense::click());
+                        if response.hovered() || *self == style {
+                            ui.painter()
+                                .rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+                        }
+                        let icon_rect = Rect::from_min_size(rect.min, egui::vec2(24.0, 24.0));
+                        crate::icons::paint(
+                            ui,
+                            icon_rect,
+                            match style {
+                                Self::Bars => Icon::Bars,
+                                Self::Line => Icon::Waveform,
+                                Self::Filled => Icon::Surface,
+                            },
+                            ui.visuals().text_color(),
+                        );
+                        ui.painter().text(
+                            rect.left_center() + egui::vec2(30.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            style.label(),
+                            FontId::proportional(11.0),
+                            ui.visuals().text_color(),
+                        );
+                        if response.clicked() {
+                            *self = style;
+                            ui.close();
+                        }
+                        response.help_text(
                         "Choose a trace style. Its relevant appearance controls are shown below.",
                     );
-                }
-            })
-            .response
-            .help_text("Choose how the signal is drawn; does not change analysis.");
+                    }
+                })
+                .response
+                .help_text("Choose how the signal is drawn; does not change analysis.");
+        });
     }
 }
 
@@ -1563,6 +1644,61 @@ fn fill_trace(painter: &egui::Painter, points: &[Pos2], baseline: f32, color: Co
 }
 
 pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    if let Some((kind, tab)) = visual_inspector(ui) {
+        if matches!(
+            title,
+            "Signal Response" | "Audio mappings" | "Frequency Range" | "Channels"
+        ) {
+            return;
+        }
+        let split = kind == ModuleKind::Orbital && matches!(title, "Particles" | "Orbs")
+            || matches!(kind, ModuleKind::Spectrum | ModuleKind::Spectrogram)
+                && title == "Appearance";
+        let category = if title == "Particles"
+            && matches!(
+                kind,
+                ModuleKind::ParticleWaves | ModuleKind::SpectralBloom | ModuleKind::Flux
+            ) {
+            SettingsSection::Appearance
+        } else {
+            visual_category(title)
+        };
+        if tab != category && !(split && tab != SettingsSection::Camera) {
+            return;
+        }
+        ui.push_id(title, |ui| {
+            let old = ui.data(|d| d.get_temp::<String>(egui::Id::new(VISUAL_PANEL)));
+            ui.data_mut(|d| d.insert_temp(egui::Id::new(VISUAL_PANEL), title.to_owned()));
+            if matches!(
+                title,
+                "Flow & Motion"
+                    | "Particles"
+                    | "Rendering"
+                    | "Presets"
+                    | "Feedback"
+                    | "Time Window"
+                    | "Time & History"
+                    | "Amplitude"
+                    | "Synchronization"
+                    | "Correlation"
+                    | "Display"
+            ) && kind != ModuleKind::Orbital
+            {
+                settings_group(ui, title, body);
+            } else {
+                body(ui);
+            }
+            // The title is only used while rendering this block.
+            ui.data_mut(|d| {
+                if let Some(old) = old {
+                    d.insert_temp(egui::Id::new(VISUAL_PANEL), old);
+                } else {
+                    d.remove::<String>(egui::Id::new(VISUAL_PANEL));
+                }
+            });
+        });
+        return;
+    }
     let selected =
         ui.data(|data| data.get_temp::<SettingsSection>(ui.id().with("active-module-section")));
     if selected.is_some_and(|section| section.title() != title) {
@@ -1573,6 +1709,42 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
 }
 
 /// The inspector's outer bounds allow rules to span padding and the scroll gutter.
+pub(crate) const FLAT_INSPECTOR: &str = "visualizer-flat-inspector";
+const VISUAL_INSPECTOR: &str = "visualizer-inspector-tab";
+const VISUAL_PANEL: &str = "visualizer-inspector-source-section";
+
+fn visual_inspector(ui: &egui::Ui) -> Option<(ModuleKind, SettingsSection)> {
+    ui.data(|d| d.get_temp(egui::Id::new(VISUAL_INSPECTOR)))
+}
+
+fn visual_category(title: &str) -> SettingsSection {
+    match title {
+        "Camera" => SettingsSection::Camera,
+        "Appearance" | "Rendering" | "Feedback" | "Correlation" => SettingsSection::Appearance,
+        _ => SettingsSection::Geometry,
+    }
+}
+
+fn visual_category_for(kind: ModuleKind, title: &str) -> SettingsSection {
+    if title == "Particles"
+        && matches!(
+            kind,
+            ModuleKind::ParticleWaves | ModuleKind::SpectralBloom | ModuleKind::Flux
+        )
+    {
+        SettingsSection::Appearance
+    } else {
+        visual_category(title)
+    }
+}
+
+fn flat_inspector(ui: &egui::Ui) -> bool {
+    ui.data(|d| {
+        d.get_temp::<bool>(egui::Id::new(FLAT_INSPECTOR))
+            .unwrap_or(false)
+    })
+}
+
 pub(crate) fn inspector_bounds(ui: &egui::Ui) -> Option<Rect> {
     ui.data(|data| data.get_temp::<Rect>(egui::Id::new("inspector-bounds")))
 }
@@ -1583,6 +1755,10 @@ pub(crate) fn inspector_rule(ui: &mut egui::Ui) {
 
 /// Shared active-section framing for either inspector: rules reach the pane edges.
 pub(crate) fn inspector_section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    if flat_inspector(ui) {
+        settings_group(ui, title, body);
+        return;
+    }
     inspector_rule(ui);
     egui::Frame::new()
         .fill(ui.visuals().widgets.noninteractive.bg_fill)
@@ -1609,13 +1785,61 @@ pub(crate) fn settings_group_with_default(
     open: bool,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    if let Some((kind, tab)) = visual_inspector(ui) {
+        if kind != ModuleKind::Waterfall && matches!(title, "View presets" | "Auto-orbit") {
+            return;
+        }
+        let panel = ui
+            .data(|d| d.get_temp::<String>(egui::Id::new(VISUAL_PANEL)))
+            .unwrap_or_default();
+        let group_title = title.rsplit(" · ").next().unwrap_or(title);
+        let category = match (kind, panel.as_str(), group_title) {
+            (
+                ModuleKind::Orbital,
+                "Particles",
+                "Population & quality"
+                | "Flow & motion"
+                | "Flocking"
+                | "Turbulence"
+                | "Cloud boundaries",
+            ) => SettingsSection::Geometry,
+            (ModuleKind::Orbital, "Particles", _) => SettingsSection::Appearance,
+            (
+                ModuleKind::Orbital,
+                "Orbs",
+                "Arrangement & motion"
+                | "Size & shape"
+                | "Attraction & orbit"
+                | "Surface field"
+                | "Size pulsing",
+            ) => SettingsSection::Geometry,
+            (ModuleKind::Orbital, "Orbs", _) => SettingsSection::Appearance,
+            (ModuleKind::Spectrum, "Appearance", "Trace") => SettingsSection::Geometry,
+            (ModuleKind::Spectrogram, "Appearance", "Layout & detail") => SettingsSection::Geometry,
+            (
+                ModuleKind::ParticleWaves | ModuleKind::SpectralBloom | ModuleKind::Flux,
+                "Particles",
+                _,
+            ) => SettingsSection::Appearance,
+            _ => visual_category(&panel),
+        };
+        if tab != category {
+            return;
+        }
+    }
     if inspector_bounds(ui).is_some() {
         ui.add_space(3.0);
         inspector_rule(ui);
         egui::CollapsingHeader::new(egui::RichText::new(title).size(12.0).strong())
             .default_open(open)
             .show_unindented(ui, |ui| {
+                if flat_inspector(ui) {
+                    ui.add_space(5.0);
+                }
                 ui.push_id(title, body);
+                if flat_inspector(ui) {
+                    ui.add_space(8.0);
+                }
             });
         return;
     }
@@ -1654,7 +1878,7 @@ pub(crate) fn settings_group_with_default(
 }
 
 pub(crate) fn property_background(ui: &egui::Ui, rect: Rect) {
-    if inspector_bounds(ui).is_none() {
+    if inspector_bounds(ui).is_none() || flat_inspector(ui) {
         return;
     }
     let index = ui.data_mut(|d| {
@@ -1713,7 +1937,7 @@ fn label(painter: &egui::Painter, position: Pos2, text: impl ToString, color: Co
     );
 }
 
-fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
+pub(crate) fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
     let channel = |left: u8, right: u8| {
         (left as f32 + (right as f32 - left as f32) * amount.clamp(0.0, 1.0)) as u8
     };
@@ -1734,6 +1958,77 @@ fn frequency_label(hz: f32) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_input_and_insert_gain_preserve_waterfall_history_and_refresh_downstream_audio() {
+        use crate::signals::audio;
+        use crate::signals::{Bank, Input, Processor, inserts::Effect};
+        use std::sync::Arc;
+        for mode in 0..3 {
+            let mut bank = Bank::default();
+            let id = bank.add_source(Input::System).unwrap();
+            if mode > 0 {
+                let d = &mut bank.channels[0];
+                let chain = d.inserts.as_mut().unwrap();
+                chain
+                    .add(d.input, 0, Effect::AudioGain { db: 0.0 })
+                    .unwrap();
+                chain
+                    .add(d.input, 1, Effect::LowPass { hz: 1000.0 })
+                    .unwrap();
+            }
+            let mut p = Processor::default();
+            let settings = crate::analysis::AnalysisSettings {
+                smoothing: 0.0,
+                ..Default::default()
+            };
+            let samples: Vec<_> = (0..24000)
+                .map(|i| [0.1 * (std::f32::consts::TAU * 100.0 * i as f32 / 48000.0).sin(); 2])
+                .collect();
+            let mut f = crate::analysis::Analyzer::new(4096, settings.window)
+                .analyze(&samples, 0, 48000, 2, &settings, 1, 0);
+            f.capture_epoch = 3;
+            let first = p.step(&bank, &f, 0.01, true);
+            let original = first.audio[&id].clone();
+            let mut pane = ModulePane::new(ModuleKind::Waterfall);
+            pane.audio_input = audio::Connection::Input(id);
+            let mut routed = f.clone();
+            routed.signals = Some(Arc::new(first));
+            pane.ingest_input(&[], &routed);
+            assert_eq!(pane.waterfall.history_len(), 1);
+
+            if mode == 2 {
+                bank.channels[0].inserts.as_mut().unwrap().stages[0].effect =
+                    Effect::AudioGain { db: 6.0206 };
+            } else {
+                bank.audio_inputs[0].gain_db = 6.0206;
+            }
+            // Reuse the capture sequence: a live edit must not wait for another FFT.
+            let changed = p.step(&bank, &f, 0.02, true);
+            let feed = changed.audio[&id].clone();
+            assert_eq!(feed.revision, original.revision);
+            assert!(Arc::ptr_eq(&feed.history, &original.history));
+            assert!((feed.frame.mix_rms / original.frame.mix_rms - 2.0).abs() < 0.002);
+            routed.signals = Some(Arc::new(changed));
+            pane.ingest_input(&[], &routed);
+            assert_eq!(pane.waterfall.history_len(), 1);
+            assert_eq!(pane.last_capture, 1);
+
+            let mut next = f.clone();
+            next.sequence = 2;
+            let snapshot = p.step(&bank, &next, 0.06, true);
+            let feed = &snapshot.audio[&id];
+            // Supply deterministic archive time instead of sleeping in the test.
+            feed.history.lock().unwrap().push(
+                &feed.frame,
+                Instant::now() + std::time::Duration::from_millis(50),
+            );
+            routed.signals = Some(Arc::new(snapshot));
+            pane.ingest_input(&[], &routed);
+            assert_eq!(pane.waterfall.history_len(), 2);
+            assert_eq!(pane.last_capture, 2);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1941,96 +2236,52 @@ mod tests {
     }
 
     #[test]
-    fn icon_tabs_select_sections_and_all_properties_fit_compact_width() {
-        for kind in ModuleKind::ALL {
-            let context = egui::Context::default();
-            let mut pane = ModulePane::new(kind);
-            let render = |pane: &mut ModulePane, events| {
-                let mut output = context.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            Pos2::ZERO,
-                            egui::vec2(334.0, 2400.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        crate::workspace_ui::sidebar_style(ui, &AppTheme::default());
-                        let mut rail =
-                            ui.new_child(egui::UiBuilder::new().id_salt("rail").max_rect(
-                                Rect::from_min_size(egui::pos2(3.0, 4.0), egui::vec2(28.0, 2000.0)),
-                            ));
-                        rail.spacing_mut().button_padding = egui::vec2(2.0, 2.0);
-                        rail.spacing_mut().interact_size = egui::vec2(28.0, 28.0);
-                        pane.inspector_tabs(&mut rail);
-                        let bounds =
-                            Rect::from_min_size(egui::pos2(34.0, 0.0), egui::vec2(300.0, 2400.0));
-                        let mut body =
-                            ui.new_child(egui::UiBuilder::new().id_salt("body").max_rect(bounds));
-                        body.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), bounds));
-                        pane.inspector_controls(&mut body, &AnalysisFrame::default());
-                        assert!(
-                            body.min_rect().width() <= 301.0,
-                            "{kind:?} / {:?} fits",
-                            pane.active_section()
-                        );
-                    },
-                );
-                output.textures_delta.clear();
-                output
-            };
-            render(&mut pane, vec![]);
-            render(&mut pane, vec![]);
-            let last = *pane.sections().last().unwrap();
-            let visible = pane
-                .sections()
-                .iter()
-                .filter(|s| {
-                    !matches!(
-                        s,
-                        SettingsSection::Response
-                            | SettingsSection::Modulation
-                            | SettingsSection::Frequency
-                            | SettingsSection::Channels
-                    )
+    fn spectrum_keeps_measurement_guides_in_visual_inspector_and_processing_in_signals() {
+        let mut pane = ModulePane::new(ModuleKind::Spectrum);
+        pane.select_section(SettingsSection::Appearance);
+        let ctx = egui::Context::default();
+        let draw = |pane: &mut ModulePane, signal: bool| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(360.0, 3000.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::workspace_ui::sidebar_style(ui, &AppTheme::default());
+                    if signal {
+                        pane.input_controls(ui, &AnalysisFrame::default());
+                    } else {
+                        pane.inspector_controls(ui, &AnalysisFrame::default());
+                    }
+                },
+            );
+            out.textures_delta.clear();
+            out.shapes
+                .into_iter()
+                .filter_map(|s| match s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    _ => None,
                 })
-                .count();
-            let pos = egui::pos2(17.0, 18.0 + (visible - 1) as f32 * 31.0);
-            for pressed in [true, false] {
-                render(
-                    &mut pane,
-                    vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ],
-                );
-            }
-            assert_eq!(pane.active_section(), last, "{kind:?} tab click");
-            let restored = pane.snapshot();
-            let mut other = ModulePane::new(kind);
-            other.restore(&restored);
-            assert_eq!(other.active_section(), last);
-            for &section in pane.sections() {
-                if matches!(
-                    section,
-                    SettingsSection::Response
-                        | SettingsSection::Modulation
-                        | SettingsSection::Frequency
-                        | SettingsSection::Channels
-                ) {
-                    continue;
-                }
-                pane.select_section(section);
-                let output = render(&mut pane, vec![]);
-                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==section.title())));
-            }
+                .collect::<Vec<_>>()
+        };
+        draw(&mut pane, false);
+        let visual = draw(&mut pane, false);
+        for label in ["Peak markers", "Note labels", "Reference"] {
+            assert!(visual.iter().any(|text| text == label), "missing {label}");
         }
+        assert!(
+            !visual
+                .iter()
+                .any(|text| text == "Gain dB" || text == "Time smooth")
+        );
+        let signal = draw(&mut pane, true);
+        assert!(signal.iter().any(|text| text == "Gain dB"));
+        assert!(signal.iter().any(|text| text == "Time smooth"));
+        assert!(
+            !signal
+                .iter()
+                .any(|text| text == "Peak markers" || text == "Note labels")
+        );
     }
 
     #[test]
@@ -2076,7 +2327,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
-                            egui::vec2(216.0, 1000.0),
+                            egui::vec2(216.0, 12000.0),
                         )),
                         ..Default::default()
                     },

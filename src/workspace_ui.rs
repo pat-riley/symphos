@@ -145,31 +145,61 @@ pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
     }
 }
 
-/// Identical inspector tab rail geometry/styles for components and signal channels.
-pub fn inspector_rail(
+/// Shared skin for every inspector; applies locally to its child UI.
+pub fn inspector_style(ui: &mut egui::Ui, theme: &AppTheme) {
+    sidebar_style(ui, theme);
+    ui.painter()
+        .rect_filled(ui.max_rect(), 0.0, theme.navigation);
+    ui.spacing_mut().item_spacing = Vec2::new(7.0, 6.0);
+    ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+    ui.spacing_mut().scroll.bar_width = 9.0;
+    ui.style_mut().override_font_id = Some(FontId::proportional(12.0));
+    let widgets = &mut ui.visuals_mut().widgets;
+    for widget in [
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        widget.corner_radius = egui::CornerRadius::same(1);
+        widget.expansion = 0.0;
+    }
+}
+
+/// Untabbed properties below the pinned identity header. Context is restored so
+/// flat rows and edge-to-edge rules cannot leak into the mixer or plugin windows.
+pub fn inspector_scroll(
     ui: &mut egui::Ui,
-    bounds: Rect,
-    theme: &AppTheme,
     id: impl std::hash::Hash + std::fmt::Debug,
-    tabs: impl FnOnce(&mut egui::Ui),
-) -> Rect {
-    let rect = Rect::from_min_max(
-        bounds.min,
-        egui::pos2(bounds.left() + 34.0, bounds.bottom()),
-    );
-    ui.painter().rect_filled(rect, 0.0, theme.navigation);
-    let mut rail = ui.new_child(
-        egui::UiBuilder::new()
-            .id_salt(id)
-            .max_rect(rect.shrink2(Vec2::new(3.0, 4.0))),
-    );
-    rail.set_clip_rect(rect.intersect(ui.clip_rect()));
-    rail.spacing_mut().button_padding = Vec2::splat(2.0);
-    rail.spacing_mut().item_spacing = Vec2::new(0.0, 3.0);
-    rail.spacing_mut().interact_size = Vec2::splat(28.0);
-    rail.style_mut().interaction.tooltip_delay = 0.2;
-    tabs(&mut rail);
-    Rect::from_min_max(egui::pos2(rect.right(), bounds.top()), bounds.max)
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let bounds_id = egui::Id::new("inspector-bounds");
+    let flat_id = egui::Id::new(crate::modules::FLAT_INSPECTOR);
+    let bounds = ui.available_rect_before_wrap();
+    let previous = ui.data_mut(|d| {
+        let previous = (d.get_temp::<Rect>(bounds_id), d.get_temp::<bool>(flat_id));
+        d.insert_temp(bounds_id, bounds);
+        d.insert_temp(flat_id, true);
+        previous
+    });
+    egui::ScrollArea::vertical()
+        .id_salt(id)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, body);
+        });
+    ui.data_mut(|d| {
+        d.remove::<Rect>(bounds_id);
+        d.remove::<bool>(flat_id);
+        if let Some(value) = previous.0 {
+            d.insert_temp(bounds_id, value);
+        }
+        if let Some(value) = previous.1 {
+            d.insert_temp(flat_id, value);
+        }
+    });
 }
 
 pub fn sidebar_header(

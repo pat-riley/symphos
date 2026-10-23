@@ -187,49 +187,6 @@ impl Spectrum {
         });
         settings_panel(ui, "Signal Response", |ui| {
             self.data.settings.response_controls(ui);
-            super::settings_group(ui, "Reference", |ui| {
-                let capture = if self.reference.is_some() {
-                    "Replace live reference"
-                } else {
-                    "Capture live reference"
-                };
-                if ui
-                    .add_enabled(!frame.bins.is_empty(), egui::Button::new(capture))
-                    .help_text("Capture the current spectrum as a fixed comparison while live analysis continues.")
-                    .clicked()
-                {
-                    self.capture_reference(frame);
-                }
-                if ui
-                    .add_enabled(
-                        self.reference.is_some(),
-                        egui::Button::new("Clear reference"),
-                    )
-                    .help_text("Remove only the captured comparison trace.")
-                    .clicked()
-                {
-                    self.reference = None;
-                }
-            });
-            super::settings_group(ui, "Peak markers", |ui| {
-                if ui.checkbox(&mut self.peak_hold, "Peak hold")
-                .help_text("Track recent maxima above the live trace. Starts a fresh measurement when enabled.").changed() {
-                self.reset_peaks();
-            }
-                ui.add_enabled_ui(self.peak_hold, |ui| {
-                ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
-                    .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
-                ui.add_enabled_ui(!self.infinite_hold, |ui| {
-                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).key("hold_seconds").bounds(0.0..=60.0).text("Hold s"))
-                        .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
-                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).key("peak_falloff").bounds(0.0..=240.0).text("Fall dB/s"))
-                        .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
-                });
-                if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
-                    self.reset_peaks();
-                }
-            });
-            });
         });
         settings_panel(ui, "Appearance", |ui| {
             super::settings_group(ui, "Starting look", |ui| self.look_controls(ui));
@@ -271,16 +228,59 @@ impl Spectrum {
                 self.palette.contrast_controls(ui, &mut self.contrast);
                 self.data.settings.level_controls(ui);
             });
-            super::settings_group(ui, "Peaks & guides", |ui| {
-                if ui.checkbox(&mut self.peak_hold, "Peak markers").help_text("Floating markers retain recent maxima. Set hold time and release speed in Signal Response → Peak markers.").changed() { self.reset_peaks(); }
+            super::settings_group_with_default(ui, "Reference", false, |ui| {
+                let capture = if self.reference.is_some() {
+                    "Replace live reference"
+                } else {
+                    "Capture live reference"
+                };
+                if ui
+                    .add_enabled(!frame.bins.is_empty(), egui::Button::new(capture))
+                    .help_text("Capture the current spectrum as a fixed comparison while live analysis continues.")
+                    .clicked()
+                {
+                    self.capture_reference(frame);
+                }
+                if ui
+                    .add_enabled(
+                        self.reference.is_some(),
+                        egui::Button::new("Clear reference"),
+                    )
+                    .help_text("Remove only the captured comparison trace.")
+                    .clicked()
+                {
+                    self.reference = None;
+                }
+            });
+            super::settings_group_with_default(ui, "Peak markers", false, |ui| {
                 if self.peak_hold {
                     self.appearance
                         .peak_controls(ui, self.style == TraceStyle::Bars);
                 }
+                if ui.checkbox(&mut self.peak_hold, "Peak hold")
+                .help_text("Track recent maxima above the live trace. Starts a fresh measurement when enabled.").changed() {
+                self.reset_peaks();
+            }
+                ui.add_enabled_ui(self.peak_hold, |ui| {
+                ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
+                    .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
+                ui.add_enabled_ui(!self.infinite_hold, |ui| {
+                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).key("hold_seconds").bounds(0.0..=60.0).text("Hold s"))
+                        .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
+                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).key("peak_falloff").bounds(0.0..=240.0).text("Fall dB/s"))
+                        .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
+                });
+                if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
+                    self.reset_peaks();
+                }
+            });
+            });
+            self.data.settings.label_controls(ui);
+            super::settings_group(ui, "Guides", |ui| {
                 ui.checkbox(&mut self.grid, "Grid")
                     .help_text("Show horizontal dB reference lines.");
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
-                    "Show dB and frequency labels. Frequency Range can replace Hz with note names.",
+                    "Show dB and frequency labels. Musical labels can replace Hz with note names.",
                 );
                 if ui
                     .add_enabled(

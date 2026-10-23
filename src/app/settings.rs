@@ -343,7 +343,7 @@ impl SymphosApp {
             Category::Display => {
                 section(ui, "Display performance");
                 row(ui, "Target frame rate", |ui| {
-                    egui::ComboBox::from_id_salt("display-fps").selected_text(format!("{} FPS", self.render_fps)).show_ui(ui, |ui| {
+                    crate::dropdown::ComboBox::from_id_salt("display-fps").selected_text(format!("{} FPS", self.render_fps)).show_ui(ui, |ui| {
                         for rate in [30, 60, 90, 120] { ui.selectable_value(&mut self.render_fps, rate, format!("{rate} FPS")); }
                     }).response.help_text("Global display target, saved on this computer. Does not change audio analysis or project settings. Actual FPS depends on GPU load and display refresh rate.");
                 });
@@ -526,7 +526,7 @@ impl SymphosApp {
                 let before = (settings.fft_size, settings.window, settings.channel_mode);
                 section(ui, "Frequency analysis");
                 row(ui, "FFT size", |ui| {
-                    egui::ComboBox::from_id_salt("settings-fft")
+                    crate::dropdown::ComboBox::from_id_salt("settings-fft")
                         .selected_text(settings.fft_size.to_string())
                         .show_ui(ui, |ui| {
                             for size in FFT_SIZES {
@@ -535,7 +535,7 @@ impl SymphosApp {
                         });
                 });
                 row(ui, "FFT window", |ui| {
-                    egui::ComboBox::from_id_salt("settings-window")
+                    crate::dropdown::ComboBox::from_id_salt("settings-window")
                         .selected_text(settings.window.label())
                         .show_ui(ui, |ui| {
                             for w in WindowFunction::ALL {
@@ -551,7 +551,7 @@ impl SymphosApp {
                     );
                 });
                 row(ui, "Analysis rate", |ui| {
-                    egui::ComboBox::from_id_salt("settings-rate")
+                    crate::dropdown::ComboBox::from_id_salt("settings-rate")
                         .selected_text(format!("{} Hz", settings.analysis_fps))
                         .show_ui(ui, |ui| {
                             for rate in [30, 60, 90, 120] {

@@ -173,8 +173,8 @@ fn invalid_values_are_bounded_before_rendering_and_auto_rotation_is_not_an_edit(
     assert!(wave.settings.height.is_finite());
     assert_eq!(wave.settings.layers[0].size, 0.1);
     assert!(wave.settings.frequency.max_hz > wave.settings.frequency.min_hz);
-    let mut snapshot = ModuleSettings::ParticleWaves(Box::new(wave.settings_snapshot()));
-    assert!(snapshot.automatic_yaw().is_some());
+    let snapshot = ModuleSettings::ParticleWaves(Box::new(wave.settings_snapshot()));
+    assert!(matches!(snapshot, ModuleSettings::ParticleWaves(ref settings) if settings.auto_orbit));
     wave.clear();
     assert_eq!(wave.settings.layer_count, 8);
     assert!(wave.field.iter().all(|v| *v == 0.0));

@@ -5,7 +5,7 @@ macro_rules! numeric {
     ($name:ident { $($field:ident: $default:expr, $min:expr, $max:expr, $section:literal, $label:literal, $help:literal;)* }) => {
         impl $name {
             pub fn numeric_controls(&mut self, ui: &mut Ui, section: &str, prefix: &str) {
-                $(if section == $section || (section == "Bloom drift" && $section == "Drift and return" && stringify!($field) != "drift_fraction") || (section == "Bloom layout" && $section == "Layout" && !matches!(stringify!($field), "radius" | "turns" | "twist")) {
+                $(if !(section == "Camera" && stringify!($field) == "orbit_speed" && super::super::visual_inspector(ui).is_some()) && (section == $section || (section == "Bloom drift" && $section == "Drift and return" && stringify!($field) != "drift_fraction") || (section == "Bloom layout" && $section == "Layout" && !matches!(stringify!($field), "radius" | "turns" | "twist"))) {
                     ui.add(crate::parameter::Parameter::new(&mut self.$field, $min..=$max, $default)
                         .key(&format!("{prefix}{}", stringify!($field))).text($label)).help_text($help);
                 })*
@@ -72,6 +72,8 @@ numeric!(Layer {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
+    pub show_gizmo: bool,
+    pub camera_motion: super::super::camera_motion::Settings,
     pub bloom: Bloom,
     pub frequency: super::super::frequency::FrequencySettings,
     pub layers: [Layer; 8],
@@ -137,6 +139,8 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            camera_motion: super::super::camera_motion::Settings::y_up_default(),
+            show_gizmo: false,
             bloom: Bloom::default(),
             frequency: super::super::frequency::FrequencySettings {
                 floor: -72.0,
@@ -287,9 +291,6 @@ impl Settings {
         f.max_hz = f.max_hz.max(f.min_hz + 1.0);
         f.ceiling = f.ceiling.max(f.floor + 1.0);
         f.frequency_smoothing = f.frequency_smoothing.min(8);
-    }
-    pub fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        self.auto_orbit.then_some(&mut self.yaw)
     }
 }
 

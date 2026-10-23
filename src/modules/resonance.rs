@@ -35,6 +35,9 @@ enum ColorBy {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct ResonanceSettings {
+    camera_motion: super::camera_motion::Settings,
+    auto_orbit: bool,
+    orbit_speed: f32,
     layers: usize,
     petals: usize,
     radius: f32,
@@ -83,6 +86,9 @@ pub(crate) struct ResonanceSettings {
 impl Default for ResonanceSettings {
     fn default() -> Self {
         Self {
+            camera_motion: Default::default(),
+            auto_orbit: false,
+            orbit_speed: 10.0,
             layers: 9,
             petals: 2,
             radius: 0.28,
@@ -385,6 +391,31 @@ impl Resonance {
                 "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
                 theme.muted,
             );
+        }
+    }
+}
+
+impl super::camera::Controlled for Resonance {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan.x,
+            pan_y: &mut s.pan.y,
+            degrees: false,
+            y_up: false,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 10.0,
+            speed_limit: 360.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
         }
     }
 }

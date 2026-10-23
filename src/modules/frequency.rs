@@ -75,6 +75,9 @@ impl FrequencySettings {
             .help_text("Highest displayed frequency in Hz, limited by the source's sample rate.");
         });
         self.max_hz = self.max_hz.max(self.min_hz + 1.0);
+    }
+
+    pub fn label_controls(&mut self, ui: &mut egui::Ui) {
         super::settings_group(ui, "Musical labels", |ui| {
             ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
             if self.note_labels {

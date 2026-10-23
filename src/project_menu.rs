@@ -252,9 +252,18 @@ pub fn menus() -> &'static [Entry] {
                     ),
                     Menu(
                         "Signal Channel",
-                        Method::ALL
+                        [Method::Intensity, Method::Lfo, Method::Midi]
                             .into_iter()
-                            .map(|method| plain(Signal(method), method.label()))
+                            .map(|method| {
+                                plain(
+                                    Signal(method),
+                                    match method {
+                                        Method::Intensity => "Audio",
+                                        Method::Lfo => "LFO",
+                                        _ => "MIDI",
+                                    },
+                                )
+                            })
                             .collect(),
                     ),
                     Sep,
@@ -609,8 +618,16 @@ mod tests {
         for kind in ModuleKind::ALL {
             assert!(commands().any(|c| c.action == Action::Add(kind)));
         }
-        for method in Method::ALL {
+        for method in [Method::Intensity, Method::Lfo, Method::Midi] {
             assert!(commands().any(|c| c.action == Action::Signal(method)));
+        }
+        for method in [
+            Method::Band,
+            Method::BassHits,
+            Method::SpectralChange,
+            Method::Balance,
+        ] {
+            assert!(!commands().any(|c| c.action == Action::Signal(method)));
         }
         assert!(Action::from_code(0).is_none());
         assert!(Action::from_code(9999).is_none());

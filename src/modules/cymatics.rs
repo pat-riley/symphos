@@ -191,14 +191,7 @@ impl Cymatics {
                 &["8,192", "32,768", "65,536", "131,072"],
                 "GPU grain count. Higher counts resolve fine lines but cost more GPU time. The global display FPS remains unchanged. Changing count scatters a fresh population.",
             );
-            ui.checkbox(&mut s.soft_grains, "Soft luminous grains")
-                .help_text(
-                    "Use soft glowing sprites instead of crisp sand grains. Appearance only.",
-                );
             ui.checkbox(&mut s.recycle_edges, "Recycle grains at edges").help_text("Return grains that reach the outer edge to a scattered area near the center, with no leftover velocity. Enabled by default for continuous audio-driven flow. Turn off for natural settling at the boundary. Recycling stops when paused or the vibration has faded.");
-            settings_group(ui, "Grain appearance", |ui| {
-                s.numeric_controls(ui, "Particles")
-            });
             settings_group(ui, "Motion", |ui| s.numeric_controls(ui, "Motion"));
             settings_group(ui, "Lifecycle", |ui| s.numeric_controls(ui, "Lifecycle"));
             if ui.button("Scatter grains").help_text("Redistribute grains across the current plate with zero velocity. Keeps plate settings, audio response, camera, and mappings.").clicked(){self.reset=true;self.seed=self.seed.wrapping_add(1);}
@@ -236,6 +229,14 @@ impl Cymatics {
             ui.label("Input: selected Signals connection · no generated sound").help_text("Uses the existing captured input spectrum. Signals may modulate inspector parameters through scene macros; Cymatics does not create source channels or produce audio.");
         });
         settings_panel(ui, "Appearance", |ui| {
+            ui.checkbox(&mut s.soft_grains, "Soft luminous grains")
+                .help_text(
+                    "Use soft glowing sprites instead of crisp sand grains. Appearance only.",
+                );
+            settings_group(ui, "Grain appearance", |ui| {
+                s.numeric_controls(ui, "Particles")
+            });
+
             settings_group(ui, "Palette", |ui| {
                 property_row(ui, "Starting palette", |ui| {
                     properties_combo("cymatics-palette",ui.available_width(),5).selected_text("Choose…").show_ui(ui,|ui|{
@@ -275,7 +276,7 @@ impl Cymatics {
             );
             ui.checkbox(&mut s.guides,"XYZ axes").help_text("Show orientation axes through the origin. These are visual guides; rotating the camera does not tilt the physical plate under gravity.");
             ui.horizontal(|ui|{
-            if ui.button("Top view").help_text("Look straight down at the flat plane. Reset rotation, roll and framing while retaining zoom.").clicked(){s.yaw=0.0;s.elevation = -std::f32::consts::FRAC_PI_2;s.roll=0.0;s.pan_x=0.0;s.pan_y=0.0;}
+            if super::visual_inspector(ui).is_none() && ui.button("Top view").help_text("Look straight down at the flat plane. Reset rotation, roll and framing while retaining zoom.").clicked() {s.yaw=0.0;s.elevation = -std::f32::consts::FRAC_PI_2;s.roll=0.0;s.pan_x=0.0;s.pan_y=0.0;}
             if ui.button("Reset camera").help_text("Restore the initial angled camera and centered framing. Does not scatter grains.").clicked(){reset_camera(s);}
         });
             s.numeric_controls(ui, "Camera");
@@ -299,7 +300,7 @@ impl Cymatics {
         self.time += dt;
         let s = &mut self.settings;
         let response=ui.interact(rect,ui.id().with("cymatics-camera"),Sense::click_and_drag()).help_text("Cymatics · incoming audio drives plate resonances. Drag to rotate freely; right/Shift-drag to pan; scroll to zoom; double-click resets the camera. A narrow-band input gives clearer nodal patterns than dense music.");
-        if response.dragged() {
+        if response.dragged() && !super::camera::over_navigator(ui) {
             let delta = ui.input(|i| i.pointer.delta());
             if response.dragged_by(egui::PointerButton::Secondary)
                 || response.dragged_by(egui::PointerButton::Middle)
@@ -319,11 +320,11 @@ impl Cymatics {
                 );
             }
         }
-        if response.hovered() {
+        if response.hovered() && !super::camera::over_navigator(ui) {
             s.zoom =
                 (s.zoom * (ui.input(|i| i.smooth_scroll_delta.y) * 0.002).exp()).clamp(0.25, 4.0);
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !super::camera::over_navigator(ui) {
             reset_camera(s);
         }
         let Some(plate) = &self.plate else {
@@ -453,6 +454,7 @@ impl Cymatics {
     }
 }
 fn reset_camera(s: &mut CymaticsSettings) {
+    s.auto_orbit = false;
     s.yaw = 0.0;
     s.elevation = -0.95;
     s.roll = 0.0;
@@ -493,6 +495,31 @@ fn draw_guides(ui: &egui::Ui, rect: Rect, s: &CymaticsSettings, axes: [[f32; 4];
             egui::FontId::proportional(11.0),
             color,
         );
+    }
+}
+
+impl super::camera::Controlled for Cymatics {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan_x,
+            pan_y: &mut s.pan_y,
+            degrees: false,
+            y_up: true,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 10.0,
+            speed_limit: 360.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
+        }
     }
 }
 

@@ -98,6 +98,7 @@ impl Default for CylinderGeometry {
 }
 
 pub struct SpectralSurface {
+    camera_motion: super::camera_motion::Settings,
     shape: Shape,
     cylinder: CylinderGeometry,
     history: History,
@@ -159,6 +160,7 @@ struct MeshKey {
     sequence: Option<u64>,
 }
 module_settings!(SpectralSurface, SurfaceSettings, {
+    #[serde(default)] camera_motion: super::camera_motion::Settings => camera_motion,
     #[serde(default)] cylinder: CylinderGeometry => cylinder,
     frequency: super::frequency::FrequencySettings => history.data.settings,
     radius: f32 => radius, displacement: f32 => displacement,
@@ -186,6 +188,7 @@ module_settings!(SpectralSurface, SurfaceSettings, {
 impl Default for SpectralSurface {
     fn default() -> Self {
         Self {
+            camera_motion: Default::default(),
             shape: Shape::Sphere,
             cylinder: CylinderGeometry::default(),
             history: History::default(),
@@ -240,11 +243,7 @@ impl Default for SpectralSurface {
         }
     }
 }
-impl SurfaceSettings {
-    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        self.auto_orbit.then_some(&mut self.yaw)
-    }
-}
+impl SurfaceSettings {}
 
 impl SpectralSurface {
     fn cached_mesh(
@@ -400,7 +399,7 @@ impl SpectralSurface {
         }
         settings_panel(ui, "Geometry", |ui| {
             settings_group(ui, "Surface motion", |ui| {
-                egui::ComboBox::from_id_salt("sphere-motion")
+                crate::dropdown::ComboBox::from_id_salt("sphere-motion")
                     .selected_text(match self.motion {
                         Motion::WrappedSpectrum => "Wrapped spectrum",
                         Motion::PoleRipples => ripple_label,
@@ -612,14 +611,18 @@ impl SpectralSurface {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
+            self.history.data.settings.label_controls(ui);
             settings_group(ui, "Render style", |ui| {
-                egui::ComboBox::from_id_salt("sphere-style")
-                    .selected_text(self.style.label())
-                    .show_ui(ui, |ui| {
-                        for style in Style::ALL {
-                            ui.selectable_value(&mut self.style, style, style.label());
-                        }
-                    });
+                super::property_row(ui, "Style", |ui| {
+                    crate::dropdown::ComboBox::from_id_salt("sphere-style")
+                        .selected_text(self.style.label())
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            for style in Style::ALL {
+                                ui.selectable_value(&mut self.style, style, style.label());
+                            }
+                        });
+                });
                 match self.style {
                     Style::Points => {
                         p!(
@@ -690,7 +693,7 @@ impl SpectralSurface {
             });
             settings_group(ui, "Color & light", |ui| {
                 self.palette.controls(ui);
-                egui::ComboBox::from_id_salt("sphere-color")
+                crate::dropdown::ComboBox::from_id_salt("sphere-color")
                     .selected_text(match self.color_by {
                         ColorBy::Level => "Color by level",
                         ColorBy::Frequency => "Color by frequency",
@@ -2213,5 +2216,30 @@ mod preview {
             serde_json::to_vec(&value).unwrap(),
         )
         .unwrap();
+    }
+}
+
+impl super::camera::Controlled for SpectralSurface {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = self;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan.x,
+            pan_y: &mut s.pan.y,
+            degrees: false,
+            y_up: false,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 8.0,
+            speed_limit: 360.0,
+            speed_key: "orbit_speed",
+            reverse: Some(&mut s.orbit_reverse),
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
+        }
     }
 }

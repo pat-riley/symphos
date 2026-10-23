@@ -14,7 +14,7 @@ void symphos_window_chrome(uint8_t red, uint8_t green, uint8_t blue, bool dark) 
     if (styledWindow == window && styledPalette == palette) return;
 
     // An opaque, theme-colored backing prevents desktop tint from changing the
-    // title bar. Keep native title text, traffic lights and window dragging.
+    // title bar. The title stays hidden; traffic lights and window dragging remain native.
     window.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
     window.backgroundColor = [NSColor colorWithSRGBRed:red / 255.0
                                                green:green / 255.0

@@ -90,6 +90,8 @@ predictably across quiet and loud material.
   component layout, routing, mappings, and references to required assets.
 - Extend the shipped individual-component presets into the enclosing scene
   project workflow. Analyzer presets already save independently of layouts.
+- Shipped: preset saves suggest a fresh, editable three-word name and add a new
+  active library entry; subsequent creative edits display an `(edited)` marker.
 - Save reusable user-authored color maps and reference-spectrum definitions.
 - Add undo/redo and autosave before the editor becomes complex.
 

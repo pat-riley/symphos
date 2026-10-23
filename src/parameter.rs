@@ -77,6 +77,17 @@ impl<T: Numeric + Display> Widget for Parameter<'_, T> {
 
 impl<T: Numeric + Display> Parameter<'_, T> {
     fn render(self, ui: &mut egui::Ui) -> Response {
+        #[cfg(test)]
+        if let Some(key) = &self.key {
+            ui.data_mut(|d| {
+                let id = egui::Id::new("test-rendered-parameter-keys");
+                let mut keys = d
+                    .get_temp::<std::collections::BTreeSet<String>>(id)
+                    .unwrap_or_default();
+                keys.insert(key.clone());
+                d.insert_temp(id, keys);
+            });
+        }
         let before = self.value.to_f64();
         let low = self.range.start().to_f64();
         let high = self.range.end().to_f64();

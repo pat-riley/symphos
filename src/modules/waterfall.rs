@@ -12,6 +12,23 @@ use crate::help::HoverHelp;
 use crate::icons::{self, Icon};
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
+mod motion;
+mod texture;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum ColorSource {
+    #[default]
+    Gradient,
+    Image,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum ImageMapping {
+    #[default]
+    FrequencyTime,
+    FrequencyLevel,
+}
+
 const MAX_HEIGHT: f32 = 2.0;
 const MIN_LENGTH: f32 = 0.25;
 const MAX_LENGTH: f32 = 10.0;
@@ -118,9 +135,18 @@ pub struct Waterfall {
     auto_orbit: bool,
     orbit_speed: f32,
     orbit_reverse: bool,
+    motion: motion::Settings,
+    motion_runtime: motion::Runtime,
     last_draw: Option<Instant>,
     mode: RenderMode,
     palette: Palette,
+    color_source: ColorSource,
+    image: Option<texture::Asset>,
+    image_removed: bool,
+    image_mapping: ImageMapping,
+    image_flip_x: bool,
+    image_flip_y: bool,
+    image_runtime: texture::Runtime,
     mesh_cache: Option<(MeshKey, std::sync::Arc<egui::Mesh>)>,
 }
 
@@ -130,6 +156,9 @@ struct MeshKey {
     plot: Rect,
     samples: Vec<Option<u64>>,
     theme: AppTheme,
+    texture: egui::TextureId,
+    camera_angles: (f32, f32),
+    camera_center: Pos2,
 }
 
 module_settings!(Waterfall, WaterfallSettings, {
@@ -169,8 +198,22 @@ contrast: f32 => contrast,
 auto_orbit: bool => auto_orbit,
 orbit_speed: f32 => orbit_speed,
 orbit_reverse: bool => orbit_reverse,
+#[serde(default)]
+motion: motion::Settings => motion,
 mode: RenderMode => mode,
 palette: Palette => palette,
+#[serde(default)]
+color_source: ColorSource => color_source,
+#[serde(default)]
+image: Option<texture::Asset> => image,
+#[serde(default)]
+image_removed: bool => image_removed,
+#[serde(default)]
+image_mapping: ImageMapping => image_mapping,
+#[serde(default)]
+image_flip_x: bool => image_flip_x,
+#[serde(default)]
+image_flip_y: bool => image_flip_y,
 });
 
 impl Default for Waterfall {
@@ -211,21 +254,83 @@ impl Default for Waterfall {
             auto_orbit: false,
             orbit_speed: 10.0,
             orbit_reverse: false,
+            motion: Default::default(),
+            motion_runtime: Default::default(),
             last_draw: None,
             mode: RenderMode::Surface,
             palette: Palette::default(),
+            color_source: ColorSource::Gradient,
+            image: None,
+            image_removed: false,
+            image_mapping: ImageMapping::FrequencyTime,
+            image_flip_x: false,
+            image_flip_y: false,
+            image_runtime: Default::default(),
             mesh_cache: None,
         }
     }
 }
 
 impl WaterfallSettings {
-    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        self.auto_orbit.then_some(&mut self.yaw)
+    pub(super) fn without_image(&self) -> Self {
+        let mut settings = self.clone();
+        settings.image = None;
+        settings
+    }
+
+    pub(super) fn restore_image(&mut self, original: &Self) {
+        self.image = original.image.clone();
+        self.image_removed = original.image_removed;
     }
 }
 
 impl Waterfall {
+    pub(super) fn camera_angles(&self) -> (f32, f32) {
+        if self.auto_orbit && self.motion_runtime.active {
+            self.motion_runtime.angles
+        } else {
+            (self.yaw, self.elevation)
+        }
+    }
+
+    fn stop_auto_orbit(&mut self) {
+        (self.yaw, self.elevation) = self.camera_angles();
+        if self.auto_orbit && self.motion_runtime.active {
+            self.pan += self.motion_runtime.pan;
+        }
+        self.auto_orbit = false;
+        self.motion_runtime = Default::default();
+    }
+    fn image_uv(&self, frequency: f32, age: f32, level: f32) -> Pos2 {
+        let mut uv = Pos2::new(
+            frequency,
+            match self.image_mapping {
+                ImageMapping::FrequencyTime => age,
+                ImageMapping::FrequencyLevel => 1.0 - level,
+            },
+        );
+        if self.image_flip_x {
+            uv.x = 1.0 - uv.x;
+        }
+        if self.image_flip_y {
+            uv.y = 1.0 - uv.y;
+        }
+        uv
+    }
+
+    fn material(&self) -> Option<texture::Asset> {
+        (self.color_source == ColorSource::Image && !self.image_removed)
+            .then(|| self.image.clone().unwrap_or_else(texture::Asset::starter))
+    }
+
+    fn color_at(&self, frequency: f32, age: f32, level: f32, theme: &AppTheme) -> egui::Color32 {
+        if let Some(image) = self.material() {
+            image.sample(self.image_uv(frequency, age, level))
+        } else {
+            self.palette
+                .color_with_contrast(level, self.contrast, theme)
+        }
+    }
     pub fn ingest(&mut self, frame: &crate::capture_history::SpectralFrame, now: Instant) {
         self.history.ingest(frame, now);
     }
@@ -249,7 +354,7 @@ impl Waterfall {
     }
 
     fn reset_camera(&mut self) {
-        self.auto_orbit = false;
+        self.stop_auto_orbit();
         self.yaw = -0.35;
         self.elevation = 0.65;
         self.zoom = 1.0;
@@ -257,27 +362,34 @@ impl Waterfall {
     }
 
     fn orbit(&mut self, delta: Vec2) {
-        self.auto_orbit = false;
+        self.stop_auto_orbit();
         self.yaw = wrap_angle(self.yaw + delta.x * 0.008);
         self.elevation = wrap_angle(self.elevation + delta.y * 0.006);
     }
 
     fn zoom_by_scroll(&mut self, scroll: f32) {
         if scroll != 0.0 {
-            self.auto_orbit = false;
+            self.stop_auto_orbit();
         }
         self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
     fn camera(&self, plot: Rect) -> Camera {
+        let (yaw, elevation) = self.camera_angles();
         let mut camera = Camera::fit(
             plot,
-            self.yaw,
-            self.elevation,
+            yaw,
+            elevation,
             self.zoom,
             Vec2::new(self.length_x, self.length_y),
         );
-        camera.center += self.pan * plot.size();
+        camera.center += (self.pan
+            + if self.auto_orbit && self.motion_runtime.active {
+                self.motion_runtime.pan
+            } else {
+                Vec2::ZERO
+            })
+            * plot.size();
         camera
     }
 
@@ -320,9 +432,12 @@ impl Waterfall {
                         (z + half_depth).min(1.0) * self.length_y,
                     ),
                     height,
-                    color: self
-                        .palette
-                        .color_with_contrast(intensity, self.contrast, theme),
+                    color: self.color_at(
+                        (band + end - 1) as f32 * 0.5 / (BANDS - 1) as f32,
+                        row as f32 / (self.detail - 1) as f32,
+                        intensity,
+                        theme,
+                    ),
                     order: [
                         if view[2] >= 0.0 {
                             slices.len() - 1 - row
@@ -343,15 +458,16 @@ impl Waterfall {
     }
 
     fn view_direction(&self) -> [f32; 3] {
+        let (yaw, elevation) = self.camera_angles();
         [
-            -self.yaw.sin() * self.elevation.cos(),
-            self.elevation.sin(),
-            self.yaw.cos() * self.elevation.cos(),
+            -yaw.sin() * elevation.cos(),
+            elevation.sin(),
+            yaw.cos() * elevation.cos(),
         ]
     }
 
     fn snap_view(&mut self, angles: (f32, f32)) {
-        self.auto_orbit = false;
+        self.stop_auto_orbit();
         (self.yaw, self.elevation) = angles;
     }
 
@@ -363,7 +479,7 @@ impl Waterfall {
         )
     }
 
-    fn advance_camera(&mut self, now: Instant) {
+    pub(super) fn advance_camera(&mut self, now: Instant) {
         let dt = self
             .last_draw
             .map_or(0.0, |last| {
@@ -372,23 +488,32 @@ impl Waterfall {
             .min(0.1);
         self.last_draw = Some(now);
         if self.auto_orbit {
-            let direction = if self.orbit_reverse { -1.0 } else { 1.0 };
-            self.yaw = wrap_angle(self.yaw + self.orbit_speed.to_radians() * direction * dt);
+            self.motion_runtime.advance(
+                (self.yaw, self.elevation),
+                &self.motion,
+                self.orbit_speed,
+                self.orbit_reverse,
+                dt,
+            );
+        } else {
+            self.motion_runtime = Default::default();
         }
     }
 
     fn orientation_gizmo(&mut self, ui: &mut egui::Ui, rect: Rect, compact: bool) {
-        let action = camera_gizmo::draw(ui, rect, self.yaw, self.elevation, compact);
+        let (yaw, elevation) = self.camera_angles();
+        let action = camera_gizmo::draw(ui, rect, yaw, elevation, compact);
         if action.orbit != Vec2::ZERO {
             self.orbit(action.orbit);
         }
         if let Some((axis, positive)) = action.snap {
-            self.snap_view(axis.snap(positive, self.yaw, self.elevation));
+            self.snap_view(axis.snap(positive, yaw, elevation));
         }
     }
 
     fn matches_view(&self, (yaw, elevation): (f32, f32)) -> bool {
-        (wrap_angle(self.yaw - yaw)).abs() < 0.001 && (self.elevation - elevation).abs() < 0.001
+        let current = self.camera_angles();
+        (wrap_angle(current.0 - yaw)).abs() < 0.001 && (current.1 - elevation).abs() < 0.001
     }
 
     fn isometric_picker(&mut self, ui: &mut egui::Ui) {
@@ -447,23 +572,25 @@ impl Waterfall {
             });
             super::settings_group(ui, "Transform", |ui| {
                 // Parameters already lay out a complete label/value row.
+                let current = (self.yaw, self.elevation);
                 for (label, angle, default) in [
-                    ("Rotation °", &mut self.yaw, -0.35_f32),
-                    ("Elevation °", &mut self.elevation, 0.65_f32),
+                    ("Rotation °", current.0, -0.35_f32),
+                    ("Elevation °", current.1, 0.65_f32),
                 ] {
                     let mut degrees = angle.to_degrees();
                     if ui.add(crate::parameter::Parameter::new(
                         &mut degrees, -180.0..=180.0, default.to_degrees())
                         .key(if label=="Rotation °" {"yaw"} else {"elevation"}).raw_scale(std::f64::consts::PI/180.0).bounds(-3600.0..=3600.0).text(label))
-                        .help_text("Rotate the camera around the waterfall. Angles are in degrees; full rotation is supported.")
+                        .help_text("Set the camera's starting view in degrees. Auto-rotation and wobble animate around this saved view without changing it. Editing an angle stops the animation; full rotation is supported.")
                         .changed() {
-                        *angle = wrap_angle(degrees.to_radians());
-                        self.auto_orbit = false;
+                        self.stop_auto_orbit();
+                        if label == "Rotation °" { self.yaw = wrap_angle(degrees.to_radians()); }
+                        else { self.elevation = wrap_angle(degrees.to_radians()); }
                     }
                 }
                 if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).key("zoom").logarithmic(true).text("Zoom"))
                     .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
-                    self.auto_orbit = false;
+                    self.stop_auto_orbit();
                 }
                 ui.add_space(4.0);
                 let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
@@ -471,7 +598,7 @@ impl Waterfall {
                     if ui.add_sized([width, 24.0], egui::Button::new("Center view"))
                         .help_text("Center the floor grid in the viewport; keep rotation and zoom").clicked() {
                         self.pan = Vec2::ZERO;
-                        self.auto_orbit = false;
+                        self.stop_auto_orbit();
                     }
                     if ui.add_sized([width, 24.0], egui::Button::new("Reset camera"))
                         .help_text("Restore the default rotation, zoom, and pan. Audio history and geometry are unchanged.").clicked() {
@@ -480,11 +607,23 @@ impl Waterfall {
                 });
             });
             super::settings_group(ui, "Auto-orbit", |ui| {
-                ui.checkbox(&mut self.auto_orbit, "Enable auto-orbit").help_text("Slowly orbit around the vertical level axis while keeping elevation, zoom, and pan. Manual camera movement or choosing a view stops the orbit. Independent of history duration and analysis rate.");
+                let mut enabled = self.auto_orbit;
+                if ui.checkbox(&mut enabled, "Enable auto-rotation").help_text("Animate the camera around the waterfall's center. Choose an axis and motion below. Manual camera movement or a named view stops the animation at the current angle. Zoom, pan, audio and history stay independent.").changed() {
+                    if enabled { self.auto_orbit = true; self.motion_runtime = Default::default(); }
+                    else { self.stop_auto_orbit(); }
+                }
                 ui.add_enabled_ui(self.auto_orbit, |ui| {
-                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 1.0..=30.0, 10.0).key("orbit_speed").bounds(0.0..=360.0).text("Speed °/s")).help_text("Camera rotation in degrees per second. Does not affect waterfall scrolling or audio.");
+                self.motion.orbit_controls(ui);
+                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 0.0..=90.0, 10.0).key("orbit_speed").bounds(0.0..=360.0).text("Speed °/s")).help_text("Degrees per second for continuous rotation, or the fastest speed at the middle of a back-and-forth sweep. Zero holds the orbit so wobble can move on its own. Changing speed does not reset the motion phase.");
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
+                if ui.button("Restart motion").help_text("Return to the saved starting angle and restart the orbit and wobble phases. Keeps all motion settings, zoom, pan and audio history.").clicked() { self.motion_runtime = Default::default(); }
             });
+            });
+            super::settings_group(ui, "Wobble", |ui| {
+                ui.add_enabled_ui(self.auto_orbit, |ui| self.motion.wobble_controls(ui));
+            });
+            super::settings_group(ui, "Auto-pan", |ui| {
+                ui.add_enabled_ui(self.auto_orbit, |ui| self.motion.pan_controls(ui, "motion"));
             });
         });
         settings_panel(ui, "Geometry", |ui| {
@@ -518,9 +657,10 @@ impl Waterfall {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
+            self.history.data.settings.label_controls(ui);
             ui.spacing_mut().slider_width = 60.0;
             super::settings_group(ui, "Render style", |ui| {
-                render_style_picker(ui, &mut self.mode);
+                super::property_row(ui, "Style", |ui| render_style_picker(ui, &mut self.mode));
                 ui.add_space(4.0);
                 match self.mode {
                     RenderMode::Surface => {
@@ -615,15 +755,38 @@ impl Waterfall {
                 }
             });
             super::settings_group(ui, "Color & level", |ui| {
-                self.palette.controls(ui);
-                self.palette.contrast_controls(ui, &mut self.contrast);
+                super::property_row(ui, "Color source", |ui| {
+                    crate::dropdown::ComboBox::from_id_salt("waterfall-color-source")
+                        .selected_text(match self.color_source { ColorSource::Gradient => "Gradient", ColorSource::Image => "Image" })
+                        .width(ui.available_width()).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.color_source, ColorSource::Gradient, "Gradient");
+                            ui.selectable_value(&mut self.color_source, ColorSource::Image, "Image");
+                        }).response.help_text("Use a gradient based on signal level, or wrap an image over the waterfall. Image colors change appearance only; incoming audio still controls the height.");
+                });
+                if self.color_source == ColorSource::Image {
+                    self.image_runtime
+                        .controls(ui, &mut self.image, &mut self.image_removed);
+                    super::property_row(ui, "Mapping", |ui| {
+                        crate::dropdown::ComboBox::from_id_salt("waterfall-image-mapping")
+                            .selected_text(match self.image_mapping { ImageMapping::FrequencyTime => "Frequency × time", ImageMapping::FrequencyLevel => "Frequency × level" })
+                            .width(ui.available_width()).show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.image_mapping, ImageMapping::FrequencyTime, "Frequency × time");
+                                ui.selectable_value(&mut self.image_mapping, ImageMapping::FrequencyLevel, "Frequency × level");
+                            }).response.help_text("Frequency × time lays the whole image across the terrain: left to right is low to high frequency, top to bottom is newest to oldest audio. Frequency × level uses signal height for the image's vertical position, so peaks reveal different parts of the image.");
+                    });
+                    ui.checkbox(&mut self.image_flip_x, "Flip horizontal").help_text("Mirror the image across the frequency axis without changing the audio or geometry.");
+                    ui.checkbox(&mut self.image_flip_y, "Flip vertical").help_text("Mirror the image along time, or signal height when using Frequency × level.");
+                } else {
+                    self.palette.controls(ui);
+                    self.palette.contrast_controls(ui, &mut self.contrast);
+                }
                 self.history.data.settings.level_controls(ui);
             });
             super::settings_group(ui, "Viewport guides", |ui| {
                 ui.checkbox(&mut self.guides, "Show guides").help_text("Master switch: hide floor and surface grids, all axes and labels, navigation hints, and the viewport gizmo. Your individual guide settings are remembered.");
                 ui.add_enabled_ui(self.guides, |ui| {
                     ui.checkbox(&mut self.floor_grid, "Floor grid").help_text("Reference grid beneath the waterfall.");
-                    ui.checkbox(&mut self.axes, "Axes & labels").help_text("Frequency/time/level axis lines, tick labels, and navigation text. Note labels are configured under Frequency Range.");
+                    ui.checkbox(&mut self.axes, "Axes & labels").help_text("Frequency/time/level axis lines, tick labels, and navigation text. Note labels are configured under Appearance → Musical labels.");
                     ui.checkbox(&mut self.show_gizmo, "Navigation gizmo").help_text("Show the small clickable axis navigator in the viewport. The sidebar camera controls remain available when hidden.");
                 });
             });
@@ -638,6 +801,9 @@ impl Waterfall {
         theme: &AppTheme,
     ) -> std::sync::Arc<egui::Mesh> {
         let settings = self.settings_snapshot();
+        let texture = self.material().map_or(egui::TextureId::default(), |_| {
+            self.image_runtime.texture_id()
+        });
         let samples = (0..self.detail).map(|row| {
             self.history
                 .sample_row(now, row as f32 / (self.detail - 1) as f32 * self.seconds)
@@ -647,6 +813,9 @@ impl Waterfall {
             && previous.settings == settings
             && previous.plot == plot
             && previous.theme == *theme
+            && previous.texture == texture
+            && previous.camera_angles == (camera.yaw, camera.elevation)
+            && previous.camera_center == camera.center
             && samples.clone().eq(previous.samples.iter().copied())
         {
             return mesh.clone();
@@ -654,6 +823,9 @@ impl Waterfall {
         // Cache hits need neither a new sequence buffer nor an owned theme.
         let key = MeshKey {
             settings,
+            texture,
+            camera_angles: (camera.yaw, camera.elevation),
+            camera_center: camera.center,
             plot,
             theme: theme.clone(),
             samples: samples.collect(),
@@ -674,6 +846,7 @@ impl Waterfall {
                 self.history.sample(now, age)
             })
             .collect();
+        let material = self.material();
         let mut vertices = Vec::with_capacity(self.detail * BANDS);
         for (row, levels) in slices.iter().enumerate() {
             let z = 1.0 - row as f32 / (self.detail - 1) as f32 * 2.0;
@@ -687,8 +860,20 @@ impl Waterfall {
                 vertices.push((
                     pos,
                     depth,
-                    self.palette
-                        .color_with_contrast(intensity, self.contrast, theme),
+                    if let Some(image) = &material {
+                        if self.mode == RenderMode::Surface {
+                            egui::Color32::WHITE
+                        } else {
+                            image.sample(self.image_uv(
+                                band as f32 / (BANDS - 1) as f32,
+                                row as f32 / (self.detail - 1) as f32,
+                                intensity,
+                            ))
+                        }
+                    } else {
+                        self.palette
+                            .color_with_contrast(intensity, self.contrast, theme)
+                    },
                 ));
             }
         }
@@ -816,9 +1001,9 @@ impl Waterfall {
                     }
                 }
                 let cell_view = Vec2::new(
-                    -self.yaw.sin() * self.elevation.cos() * (BANDS - 1) as f32
+                    -camera.yaw.sin() * camera.elevation.cos() * (BANDS - 1) as f32
                         / (2.8 * self.length_x),
-                    self.yaw.cos() * self.elevation.cos() * (self.detail - 1) as f32
+                    camera.yaw.cos() * camera.elevation.cos() * (self.detail - 1) as f32
                         / (2.0 * self.length_y),
                 );
                 let valid: Vec<_> = slices.iter().map(Option::is_some).collect();
@@ -835,7 +1020,29 @@ impl Waterfall {
                         let offset = mesh.vertices.len() as u32;
                         for index in triangle {
                             let (pos, _, color) = vertices[index];
-                            mesh.colored_vertex(pos, color);
+                            if let Some(image) = &material {
+                                let sample = index % (self.detail * BANDS);
+                                let band = sample % BANDS;
+                                let row = sample / BANDS;
+                                let level = slices[row]
+                                    .map_or(0.0, |values| settings.intensity(values[band]));
+                                let uv = self.image_uv(
+                                    band as f32 / (BANDS - 1) as f32,
+                                    row as f32 / (self.detail - 1) as f32,
+                                    level,
+                                );
+                                mesh.vertices.push(egui::epaint::Vertex {
+                                    pos,
+                                    uv: image.uv(uv),
+                                    color: if index < self.detail * BANDS {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::from_gray(153)
+                                    },
+                                });
+                            } else {
+                                mesh.colored_vertex(pos, color);
+                            }
                         }
                         mesh.add_triangle(offset, offset + 1, offset + 2);
                         if let Some([a, b]) = edge {
@@ -844,6 +1051,11 @@ impl Waterfall {
                     }
                 }
             }
+        }
+        // Keep the default ID while using egui's colored-vertex helpers for
+        // guide strokes; those vertices address the atlas's white corner.
+        if material.is_some() && self.mode == RenderMode::Surface {
+            mesh.texture_id = self.image_runtime.texture_id();
         }
         mesh
     }
@@ -858,6 +1070,12 @@ impl Waterfall {
         live: bool,
     ) {
         self.history.update(frame, now, live);
+        if self.image_runtime.poll(ui.ctx(), &mut self.image) {
+            self.image_removed = false;
+        }
+        if let Some(image) = self.material() {
+            self.image_runtime.prepare(ui.ctx(), &image);
+        }
         self.advance_camera(now);
         let plot = rect.shrink2(Vec2::new(44.0, 32.0));
         let response = ui.interact(
@@ -870,7 +1088,7 @@ impl Waterfall {
             || response.dragged_by(egui::PointerButton::Middle)
             || (shift && response.dragged_by(egui::PointerButton::Primary));
         if panning {
-            self.auto_orbit = false;
+            self.stop_auto_orbit();
             self.pan += response.drag_delta() / plot.size().max(Vec2::splat(1.0));
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else if response.dragged_by(egui::PointerButton::Primary) {
@@ -971,10 +1189,11 @@ impl Waterfall {
 fn render_style_picker(ui: &mut egui::Ui, mode: &mut RenderMode) {
     const WIDTH: f32 = 176.0;
     const ROW_HEIGHT: f32 = 24.0;
+    let trigger_width = ui.available_width();
     let combo = ui
         .scope(|ui| {
-            ui.set_width(WIDTH);
-            super::properties_combo("render-mode", WIDTH, RenderMode::ALL.len())
+            ui.set_width(trigger_width);
+            super::properties_combo("render-mode", trigger_width, RenderMode::ALL.len())
                 .selected_text(format!("      {}", mode.label()))
                 .show_ui(ui, |ui| {
                     for value in RenderMode::ALL {
@@ -1292,6 +1511,175 @@ pub(super) fn mesh_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn image_material_maps_the_surface_without_changing_audio_history_or_geometry() {
+        let now = Instant::now();
+        let mut waterfall = populated_waterfall(now);
+        let context = egui::Context::default();
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        let baseline = waterfall.build_mesh(&waterfall.camera(plot), now, &theme);
+        let history_len = waterfall.history_len();
+        waterfall.color_source = ColorSource::Image;
+        let asset = texture::Asset::starter();
+        let texture = waterfall.image_runtime.prepare(&context, &asset);
+        let first = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+        assert_eq!(first.texture_id, texture);
+        assert!(first.is_valid());
+        assert_eq!(first.indices, baseline.indices);
+        assert_eq!(first.vertices.len(), baseline.vertices.len());
+        assert!(
+            first
+                .vertices
+                .iter()
+                .zip(&baseline.vertices)
+                .all(|(a, b)| a.pos == b.pos)
+        );
+        assert!(first.vertices.iter().all(|v| v.uv.is_finite()
+            && (0.0..=1.0).contains(&v.uv.x)
+            && (0.0..=1.0).contains(&v.uv.y)));
+        assert!(
+            first
+                .vertices
+                .iter()
+                .any(|v| v.uv == egui::epaint::WHITE_UV)
+        );
+        assert!(first.vertices.iter().any(|v| v.uv.y > 0.5));
+        assert!(std::sync::Arc::ptr_eq(
+            &first,
+            &waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme)
+        ));
+        waterfall.image_flip_x = true;
+        let flipped = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+        assert!(!std::sync::Arc::ptr_eq(&first, &flipped));
+        assert!(
+            first
+                .vertices
+                .iter()
+                .zip(&flipped.vertices)
+                .any(|(a, b)| a.uv != b.uv)
+        );
+        assert_eq!(waterfall.history_len(), history_len);
+        waterfall.image_mapping = ImageMapping::FrequencyLevel;
+        assert!(
+            waterfall
+                .image_uv(0.2, 0.8, 0.6)
+                .distance(Pos2::new(0.8, 0.4))
+                < 1.0e-6
+        );
+        for mode in RenderMode::ALL {
+            waterfall.mode = mode;
+            let mesh = waterfall.build_mesh(&waterfall.camera(plot), now, &theme);
+            assert!(mesh.is_valid());
+            assert!(!mesh.vertices.is_empty());
+            assert!(mesh.vertices.iter().all(|v| v.pos.is_finite()));
+        }
+    }
+
+    #[test]
+    fn image_settings_survive_presets_and_parameter_modulation_and_legacy_defaults() {
+        let waterfall = Waterfall {
+            color_source: ColorSource::Image,
+            image: Some(texture::Asset::starter()),
+            image_flip_y: true,
+            ..Default::default()
+        };
+        let mut settings = super::super::ModuleSettings::Waterfall(waterfall.settings_snapshot());
+        let encoded = serde_json::to_value(&settings).unwrap();
+        let restored: super::super::ModuleSettings =
+            serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(restored, settings);
+        assert!(settings.parameter_document().unwrap()["Waterfall"]["image"].is_null());
+        assert!(crate::macros::set(&mut settings, "height", 1.25));
+        let super::super::ModuleSettings::Waterfall(updated) = &settings else {
+            unreachable!()
+        };
+        assert_eq!(updated.image, waterfall.image);
+        assert_eq!(updated.height, 1.25);
+        assert!(updated.image_flip_y);
+        let mut old = encoded;
+        for field in [
+            "color_source",
+            "image",
+            "image_mapping",
+            "image_flip_x",
+            "image_flip_y",
+        ] {
+            old["Waterfall"].as_object_mut().unwrap().remove(field);
+        }
+        let super::super::ModuleSettings::Waterfall(legacy) = serde_json::from_value(old).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(legacy.color_source, ColorSource::Gradient);
+        assert!(legacy.image.is_none());
+        assert!(!legacy.image_flip_x && !legacy.image_flip_y);
+    }
+
+    #[test]
+    fn removed_images_stay_empty_across_save_reload_and_modulation() {
+        let mut waterfall = Waterfall {
+            color_source: ColorSource::Image,
+            image: Some(texture::Asset::starter()),
+            ..Default::default()
+        };
+        waterfall
+            .image_runtime
+            .remove(&mut waterfall.image, &mut waterfall.image_removed);
+        assert!(
+            waterfall.material().is_none(),
+            "removal must not fall back to the stock image"
+        );
+        assert!(waterfall.image.is_none());
+        let mut settings = super::super::ModuleSettings::Waterfall(waterfall.settings_snapshot());
+        assert!(crate::macros::set(&mut settings, "height", 1.25));
+        let encoded = serde_json::to_vec(&settings).unwrap();
+        let super::super::ModuleSettings::Waterfall(restored) =
+            serde_json::from_slice(&encoded).unwrap()
+        else {
+            unreachable!()
+        };
+        let mut reopened = Waterfall::default();
+        reopened.apply_settings(&restored);
+        assert!(reopened.image_removed && reopened.material().is_none());
+        reopened.image_removed = false;
+        assert!(
+            reopened.material().is_some(),
+            "starter can be restored explicitly"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual material CPU benchmark"]
+    fn benchmark_image_waterfall_material() {
+        let now = Instant::now();
+        let mut waterfall = populated_waterfall(now);
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0));
+        let camera = waterfall.camera(plot);
+        let theme = AppTheme::default();
+        waterfall
+            .image_runtime
+            .prepare(&egui::Context::default(), &texture::Asset::starter());
+        for source in [ColorSource::Gradient, ColorSource::Image] {
+            waterfall.color_source = source;
+            let start = Instant::now();
+            for _ in 0..100 {
+                std::hint::black_box(waterfall.build_mesh(&camera, now, &theme));
+            }
+            eprintln!("Waterfall {source:?}: {:?} per mesh", start.elapsed() / 100);
+            let start = Instant::now();
+            let settings = super::super::ModuleSettings::Waterfall(waterfall.settings_snapshot());
+            for _ in 0..100 {
+                std::hint::black_box(settings.parameter_document().unwrap());
+            }
+            eprintln!(
+                "Waterfall {source:?}: {:?} per parameter snapshot",
+                start.elapsed() / 100
+            );
+        }
+    }
 
     #[test]
     fn cached_mesh_reuses_unchanged_views_and_invalidates_data_camera_style_and_size() {
@@ -1587,7 +1975,7 @@ mod tests {
                         child.spacing_mut().interact_size.y = 24.0;
                         child.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
                         render_style_picker(&mut child, &mut mode);
-                        assert!(child.min_rect().width() <= 176.1);
+                        assert!(child.min_rect().width() <= 190.1);
                     },
                 );
                 output.textures_delta.clear();
@@ -2348,15 +2736,19 @@ mod tests {
             for step in 1..=fps {
                 waterfall.advance_camera(now + Duration::from_secs_f64(step as f64 / fps as f64));
             }
-            assert!((waterfall.yaw - initial - 12.0_f32.to_radians()).abs() < 0.0001);
+            assert!((waterfall.camera_angles().0 - initial - 12.0_f32.to_radians()).abs() < 0.0001);
+            assert_eq!(
+                waterfall.yaw, initial,
+                "animation does not edit the saved starting view"
+            );
             assert_eq!(waterfall.elevation, elevation);
             waterfall.orbit_reverse = true;
             waterfall.advance_camera(now + Duration::from_millis(1100));
-            assert!((waterfall.yaw - initial - 10.8_f32.to_radians()).abs() < 0.0001);
-            let before_gap = waterfall.yaw;
+            assert!((waterfall.camera_angles().0 - initial - 10.8_f32.to_radians()).abs() < 0.0001);
+            let before_gap = waterfall.camera_angles().0;
             waterfall.advance_camera(now + Duration::from_secs(60));
             assert!(
-                (waterfall.yaw - before_gap).abs() < 0.022,
+                (waterfall.camera_angles().0 - before_gap).abs() < 0.022,
                 "no jump after hidden pane or suspend"
             );
             waterfall.orbit(Vec2::new(1.0, 1.0));
@@ -2369,6 +2761,110 @@ mod tests {
             assert!(!waterfall.auto_orbit);
             assert_eq!(waterfall.seconds, DEFAULT_HISTORY_SECONDS);
         }
+    }
+
+    #[test]
+    fn camera_animation_invalidates_geometry_but_never_edits_saved_settings_or_history() {
+        let now = Instant::now();
+        let mut waterfall = populated_waterfall(now);
+        waterfall.auto_orbit = true;
+        waterfall.motion.axis = motion::Axis::Time;
+        waterfall.motion.wobble = true;
+        let saved = waterfall.settings_snapshot();
+        let history = waterfall.history_len();
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let theme = AppTheme::default();
+        waterfall.advance_camera(now);
+        let first = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+        let later = now + Duration::from_millis(80);
+        waterfall.advance_camera(later);
+        let next = waterfall.cached_mesh(&waterfall.camera(plot), plot, now, &theme);
+        assert!(!std::sync::Arc::ptr_eq(&first, &next));
+        assert!(
+            first
+                .vertices
+                .iter()
+                .zip(&next.vertices)
+                .any(|(a, b)| a.pos != b.pos)
+        );
+        assert_eq!(
+            saved,
+            waterfall.settings_snapshot(),
+            "runtime camera motion is not a creative edit"
+        );
+        assert_eq!(history, waterfall.history_len());
+        let visible = waterfall.camera_angles();
+        waterfall.stop_auto_orbit();
+        assert_eq!(
+            waterfall.camera_angles(),
+            visible,
+            "stopping holds the visible pose"
+        );
+        waterfall.auto_orbit = true;
+        waterfall.advance_camera(later + Duration::from_secs(1));
+        assert!(wrap_angle(waterfall.camera_angles().0 - visible.0).abs() < 1.0e-5);
+        assert!(wrap_angle(waterfall.camera_angles().1 - visible.1).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn auto_pan_updates_cached_projection_without_editing_the_saved_view() {
+        let mut waterfall = Waterfall {
+            auto_orbit: true,
+            orbit_speed: 0.0,
+            motion: motion::Settings {
+                pan: true,
+                pan_horizontal: 0.2,
+                pan_hz: 0.25,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let now = Instant::now();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0));
+        let theme = AppTheme::default();
+        let saved = waterfall.settings_snapshot();
+        waterfall.advance_camera(now);
+        let initial = waterfall.camera(rect);
+        let first = waterfall.cached_mesh(&initial, rect, now, &theme);
+        for step in 1..=120 {
+            waterfall.advance_camera(now + Duration::from_secs_f64(step as f64 / 120.0));
+        }
+        let moved = waterfall.camera(rect);
+        assert!((moved.center.x - initial.center.x - 120.0).abs() < 0.01);
+        let next = waterfall.cached_mesh(&moved, rect, now, &theme);
+        assert!(!std::sync::Arc::ptr_eq(&first, &next));
+        assert_eq!(waterfall.settings_snapshot(), saved);
+        waterfall.stop_auto_orbit();
+        assert!((waterfall.camera(rect).center - moved.center).length() < 0.001);
+    }
+
+    #[test]
+    fn camera_motion_presets_roundtrip_and_legacy_orbits_keep_their_original_behavior() {
+        let source = Waterfall {
+            auto_orbit: true,
+            orbit_speed: 42.0,
+            orbit_reverse: true,
+            motion: motion::Settings {
+                axis: motion::Axis::Custom,
+                custom_x: 1.0,
+                custom_y: 0.7,
+                path: motion::Path::Swing,
+                swing_degrees: 65.0,
+                wobble: true,
+                wobble_horizontal: 12.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let settings = source.settings_snapshot();
+        let mut encoded = serde_json::to_value(&settings).unwrap();
+        let restored: WaterfallSettings = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(settings, restored);
+        encoded.as_object_mut().unwrap().remove("motion");
+        let legacy: WaterfallSettings = serde_json::from_value(encoded).unwrap();
+        assert_eq!(legacy.motion, motion::Settings::default());
+        assert!(legacy.auto_orbit && legacy.orbit_reverse);
+        assert_eq!(legacy.orbit_speed, 42.0);
     }
 
     #[test]

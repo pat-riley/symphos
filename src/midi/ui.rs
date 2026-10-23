@@ -91,7 +91,7 @@ pub fn binding_editor(
     }
     settings_group(ui, "MIDI mapping", |ui| {
         property_row(ui, "MIDI input", |ui| {
-            egui::ComboBox::from_id_salt("midi-port").width(ui.available_width()).truncate()
+            crate::dropdown::ComboBox::from_id_salt("midi-port").width(ui.available_width()).truncate()
                 .selected_text(binding.port.map_or("All enabled inputs".into(),|id|snapshot.port_name(id)))
                 .show_ui(ui,|ui| {
                     ui.selectable_value(&mut binding.port,None,"All enabled inputs");
@@ -103,7 +103,7 @@ pub fn binding_editor(
                 }).response.help_text("Filter this signal to one enabled MIDI input or listen to all enabled inputs. Configure input availability in Settings → MIDI.");
         });
         property_row(ui, "MIDI channel", |ui| {
-            egui::ComboBox::from_id_salt("midi-channel")
+            crate::dropdown::ComboBox::from_id_salt("midi-channel")
                 .width(ui.available_width())
                 .selected_text(
                     binding
@@ -158,7 +158,7 @@ pub fn binding_editor(
     binding.sanitize();
 }
 pub fn message_picker(ui: &mut egui::Ui, message: &mut Message) {
-    egui::ComboBox::from_id_salt("midi-message")
+    crate::dropdown::ComboBox::from_id_salt("midi-message")
         .width(ui.available_width())
         .truncate()
         .selected_text(message.label())

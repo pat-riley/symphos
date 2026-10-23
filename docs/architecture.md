@@ -74,6 +74,11 @@ The inspector reserves space on the right and resizes from its left edge. A pane
 eye button opens it; its header X closes it. Parameter sections are independent
 collapsible headers in one scrollable surface that meets the navbar and window edges. Pane assignment and sizing live in
 the UI; capture and analysis remain independent of layout and rendering.
+The component browser and inspector slide over 220 ms using egui's frame clock
+and symmetric easing. Their contents retain full width and clip at the window
+edge, while the dashboard and footer reserve the animated visible width. Resize
+grips activate after opening; persisted widths and open states remain independent
+of the transition, including when reversing it mid-slide.
 
 Per-pane freeze holds a cloned analysis snapshot and a fixed virtual timestamp.
 Resume accumulates the paused duration into that pane's clock offset, so old
@@ -103,23 +108,36 @@ Frequency-cell reduction takes the loudest constituent band. Spectrum peak
 hold uses per-band deadlines and elapsed-time dB release, independent of paint
 rate; reprocessing a paused spectrum applies the new gain/range immediately.
 
-Sidebar controls use a shared section filter and a persistent icon rail.
-Only the selected section renders. Tab selections belong to each pane/module,
-so changing modules or panes restores that module's previous tab. The rail has
-its own collapse chevron and stays available while details are hidden. No shared
-settings or meters remain in the sidebar.
-The rail and details touch edge-to-edge and share a single background spanning
-their union. The background is placed before the controls and sized after tab
-interaction, so expanding/collapsing does not briefly show separate panels.
-Waterfall tabs start with Geometry (including history duration/time detail),
-followed by Frequency, Response, Appearance, and Camera last.
+Visualizer inspectors share the Photoshop-inspired horizontal Geometry,
+Appearance and Camera tabs, compact theme-matched dropdowns, unstriped property
+rows and a top-right component-actions menu. Identity and audio routing stay
+pinned above the tabs while only the parameter body scrolls. Flat visualizers
+omit Camera. Existing section IDs remain readable and map onto these categories;
+parameter keys and the audio-processing inspector in Signals are unchanged.
+Geometry includes structure, population and simulation/flow; Appearance includes
+materials, particle rendering, color, light and feedback. Orbital's particle and
+orb groups retain explicit prefixes. No extra visualizer tabs are needed.
+
+All 3D visualizers share the camera motion math in `modules/camera_motion.rs`:
+world/custom axes, continuous or eased sweeps, reversal, wobble and independent
+framing pan. Waterfall preserves its existing serialized `motion` recipe; other
+visualizers save a defaulted `camera_motion` recipe with their existing camera
+fields. `modules/camera.rs` adapts radians/degrees and Y-up/Z-up conventions,
+applies transient render poses, and restores the exact saved values after drawing.
+Manual navigation cancels motion and commits the displayed pose; pause holds the
+same virtual timestamp. Camera animation therefore does not dirty presets or
+consume Undo history. CPU and GPU renderers retain their lenses and simulation
+state. All 3D views expose the same graphical axis navigator and six views;
+Flux and Strata also support free trackball rotation, pan and optional XYZ grids.
+Signals retain their separate processing rail.
 Each pane/module/tab also has an independent scroll-area identity, avoiding
 scroll offsets carrying across unrelated sections. Appearance uses grouped
 render-style, color/level, and viewport-guide controls; Geometry groups
 dimensions, history duration, and time-slice detail. Render styles have vector icons and retain
 independent per-style settings when switching.
-The Appearance tab uses a vector paintbrush glyph. The render-style picker is
-176 points wide with 24-point rows and a 2-point gap. Its scroll-area height is
+The render-style picker fills
+the inspector's right-hand control column; its compact menu uses 176-point rows
+with compact rows and flush selection styling. Its scroll-area height is
 sized for the full seven-item list, while viewport constraints permit scrolling
 only when the list cannot fit; both above/below placement and constrained-height
 scrolling have interaction coverage.
@@ -139,9 +157,19 @@ time to Y, and level to Z. Axis clicks align or flip the view without changing
 pan, zoom, or history. Gizmo dragging retains unrestricted orbit.
 Named presets explicitly select all six orthographic sides without toggling.
 Eight isometric presets use ±35.264° elevation and 45° corner increments for
-equal axis foreshortening. Camera auto-orbit integrates elapsed visible-frame
-time, caps long resume gaps, and keeps pitch/framing unchanged. Manual camera
-actions and presets stop auto-orbit; capture timing and history are unaffected.
+equal axis foreshortening. Waterfall camera motion stores a starting view and a
+motion recipe separately from runtime angles/phases, so animation cannot create
+undo entries or dirty a preset. It integrates elapsed visible-frame time with
+f64 phases and caps long resume gaps. Rotation supports the fixed frequency X,
+time Y and level Z axes or a normalized custom direction. Rodrigues rotation of
+the viewing direction and continuous Euler-branch selection keep the gizmos,
+surface ordering and camera synchronized, including pole crossings. Continuous
+orbits or sinusoidal bounded sweeps combine with optional figure-eight yaw/pitch
+wobble. Speed/reverse changes preserve phase; zero orbit speed allows wobble
+alone. The mesh cache includes rendered camera angles independently of saved
+settings. Stopping or manually moving the camera captures the visible pose;
+named views/reset stop animation. Legacy settings default to the original
+level-axis orbit with no wobble. Capture timing and history are unaffected.
 Gizmos retain invisible endpoint hit targets with colored arms and plain labels,
 without endpoint discs. `help::HoverHelp` preserves descriptions at control call
 sites and sends hovered/dragged response text to the docked Info View instead of
@@ -187,6 +215,28 @@ theme. Navigation, new data, style edits, expiry, and resizing invalidate it.
 Cheap guides and interactive gizmos still draw normally. An ignored benchmark
 compares cached requests with the identical uncached mesh builder, not total
 GPU frame time.
+
+Waterfall Appearance can use a gradient or a portable image material. Surface
+mode interpolates image UVs across the frequency/time terrain on the existing
+GPU mesh; Frequency × level mapping uses signal height instead of age. Both
+axes can be mirrored. Base walls/floor inherit the material, while a two-row
+white atlas gutter keeps mesh guides independent of image colors. Other render
+styles sample the same image coordinates for their traces, points and bars.
+The supplied starter landscape is bundled; custom PNG/JPEG/BMP files import via
+the native macOS picker (Zenity on Linux). Import decoding, EXIF orientation,
+resizing and PNG encoding run on a worker, bounded to 32 MB input, 8192 pixels
+per source edge, 256 MB decode allocation, and 1024 pixels per stored edge.
+Saved settings embed the normalized PNG rather than a machine-specific path;
+decoded pixels and the GPU handle are never serialized. An additive
+`image_removed` setting distinguishes an intentionally empty slot from the
+legacy default starter. Removing an image cancels pending imports and releases
+its GPU handle; replacing one retains the previous image on import failure.
+An empty slot renders gradient colors until an explicit upload or starter restore.
+Snapshots share an
+immutable asset and reuse the upload until the image changes. Numeric parameter
+documents omit the binary asset and restore it after modulation, avoiding image
+encoding/decoding or payload copies on the per-frame control path. Selecting a
+material never clears or reprocesses captured audio history.
 
 The waterfall projects a bounded frequency/time surface on the UI lane and
 submits one mesh to egui's existing GPU renderer. Surface cells are ordered
@@ -299,6 +349,17 @@ for current coverage and unresolved device/permission scenarios.
 
 ## Tiled workspace and preset state
 
+Scene preset saves prefill a fresh, editable three-word name and append a new
+library entry atomically. Only a successful save adopts that name in the scene
+bar. Optional scene metadata retains its preset identity and a stable creative
+state fingerprint, so subsequent changes show `(edited)` and Undo can return to
+the clean state. Inspector navigation, dock visibility and automatic camera
+motion are excluded. Fingerprints are checked only during edit transactions,
+at most ten times per second while dragging; idle rendering does no extra work.
+Preset fingerprints serialize as fixed-width hexadecimal metadata. Legacy u64
+fingerprints remain readable. This prevents opaque identifiers from failing
+the bounded numeric-parameter checks used by workspace recovery.
+
 `workspace.rs` models pane placement as a binary split tree with stable component
 slot IDs. Closing a leaf promotes its sibling; moves keep the same component
 instance and its settings. Open panes ingest the shared capture stream even while
@@ -309,6 +370,10 @@ Full-view presets add explicit settings-only pane snapshots. Component presets
 apply a matching module snapshot without changing geometry or shared analysis.
 `workspace_ui.rs` provides the component library, drag payloads, preset browser,
 and save/manage dialogs; pane mutations occur after dashboard rendering.
+`dropdown::ComboBox` applies the shared panel-derived trigger/popup colors,
+compact text and flush menu rows through a scoped style. Visualizers, Signals,
+MIDI, settings and recording use this same wrapper without changing unrelated
+buttons or fields.
 
 Versioned session and preset JSON files are stored separately and replaced
 atomically. Collection, tree, and allocation bounds are checked before restoring

@@ -4,12 +4,13 @@ macro_rules! settings {
  #[derive(Clone,Debug,PartialEq,serde::Serialize,serde::Deserialize)]
  #[serde(default)]
  pub(crate) struct CymaticsSettings {
+ pub camera_motion: super::super::camera_motion::Settings, pub show_gizmo:bool, pub auto_orbit:bool, pub orbit_speed:f32,
  $(pub $field:f32,)*
  pub mode:u32,pub shape:u32,pub edge:u32,pub center_support:bool,pub material:u32,
  pub quality:u32,pub artistic:bool,pub auto_sensitivity:bool,pub recycle_edges:bool,pub emitters:u32,pub color_mode:u32,pub soft_grains:bool,
  pub color_a:[u8;3],pub color_b:[u8;3],pub plate_color:[u8;3],pub orthographic:bool,pub guides:bool,
  }
- impl Default for CymaticsSettings { fn default()->Self { Self { $($field:$default,)*mode:0,shape:0,edge:0,center_support:false,material:0,quality:1,artistic:false,auto_sensitivity:true,recycle_edges:true,emitters:3,color_mode:0,soft_grains:false,color_a:[238,219,171],color_b:[255,252,239],plate_color:[20,24,30],orthographic:false,guides:false } } }
+ impl Default for CymaticsSettings { fn default()->Self { Self { camera_motion:super::super::camera_motion::Settings::y_up_default(),show_gizmo:false,auto_orbit:false,orbit_speed:10.0,$($field:$default,)*mode:0,shape:0,edge:0,center_support:false,material:0,quality:1,artistic:false,auto_sensitivity:true,recycle_edges:true,emitters:3,color_mode:0,soft_grains:false,color_a:[238,219,171],color_b:[255,252,239],plate_color:[20,24,30],orthographic:false,guides:false } } }
  impl CymaticsSettings {
  pub fn sanitize(&mut self){$(self.$field=if self.$field.is_finite(){self.$field.clamp($min,$max)}else{$default};)*self.mode=self.mode.min(3);self.shape=self.shape.min(2);self.edge=self.edge.min(2);self.material=self.material.min(2);self.quality=self.quality.min(3);self.emitters=self.emitters.clamp(1,6);self.color_mode=self.color_mode.min(1);self.high_hz=self.high_hz.max(self.low_hz+1.0);}
  #[cfg(test)]

@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 pub mod audio;
+pub mod inserts;
+mod migration;
 pub mod shaping;
 pub mod ui;
 
@@ -27,7 +29,7 @@ pub const CHANNEL_COLORS: [[u8; 3]; 8] = [
     [161, 116, 255],
     [183, 224, 65],
 ];
-pub const MAX_SIGNALS: usize = 512;
+pub const MAX_SIGNALS: usize = 520;
 pub const STALE_SECONDS: f64 = 0.5;
 pub const FADE_SECONDS: f32 = 0.25;
 
@@ -238,6 +240,8 @@ impl Normalization {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Definition {
     #[serde(default)]
+    pub inserts: Option<inserts::Chain>,
+    #[serde(default)]
     pub audio_input: audio::Connection,
     pub id: u64,
     pub name: String,
@@ -284,6 +288,7 @@ impl Definition {
             response.source = Source::Stereo;
         }
         Self {
+            inserts: None,
             audio_input: audio::Connection::Main,
             id,
             name: method.label().into(),
@@ -342,7 +347,64 @@ impl Definition {
         }
         self.influence = self.influence.clamp(0.0, 2.0);
     }
+    pub fn detector_label(&self) -> &'static str {
+        self.inserts.as_ref().map_or_else(
+            || self.method.label(),
+            |chain| {
+                chain
+                    .stages
+                    .iter()
+                    .find(|s| s.effect.input() != s.effect.output())
+                    .map_or(
+                        match self.input {
+                            Input::System => "Audio only",
+                            Input::Lfo => "LFO",
+                            _ => "MIDI control",
+                        },
+                        |s| s.effect.label(),
+                    )
+            },
+        )
+    }
+    pub fn has_control_output(&self) -> bool {
+        self.inserts
+            .as_ref()
+            .is_none_or(|chain| chain.data_at(self.input, usize::MAX) == inserts::Data::Control)
+    }
     pub fn kind(&self) -> OutputKind {
+        if let Some(chain) = &self.inserts {
+            let mut signed = self.input == Input::Lfo && self.lfo.bipolar
+                || self.input == Input::Midi
+                    && self.midi.message == crate::midi::Message::PitchBend;
+            let mut events = false;
+            for insert in &chain.stages {
+                match &insert.effect {
+                    inserts::Effect::Detect(d) => {
+                        signed = d.detector == inserts::Detector::Balance;
+                        events = d.response.response == Response::Transient
+                            || matches!(
+                                d.detector,
+                                inserts::Detector::Hits | inserts::Detector::Beat
+                            );
+                    }
+                    inserts::Effect::Beat { .. } => {
+                        signed = false;
+                        events = true;
+                    }
+                    inserts::Effect::Normalize { .. } | inserts::Effect::Threshold { .. } => {
+                        signed = false
+                    }
+                    _ => {}
+                }
+            }
+            return if signed {
+                OutputKind::Bipolar
+            } else if events {
+                OutputKind::EventsAndEnvelope
+            } else {
+                OutputKind::Unipolar
+            };
+        }
         if self.input == Input::Midi {
             if self.midi.message == crate::midi::Message::PitchBend && !self.normalization.enabled {
                 OutputKind::Bipolar
@@ -389,6 +451,7 @@ impl Default for Bank {
     }
 }
 impl Bank {
+    #[cfg(test)]
     pub fn add_audio_input(&mut self) -> Option<u64> {
         if self.audio_inputs.len() >= audio::MAX_INPUTS {
             return None;
@@ -396,19 +459,33 @@ impl Bank {
         let id = self.allocate()?;
         self.audio_inputs.push(audio::InputBus {
             id,
-            name: format!("Audio input {}", self.audio_inputs.len() + 1),
+            name: if self.audio_inputs.is_empty() {
+                "Main audio".into()
+            } else {
+                format!("Main audio {}", self.audio_inputs.len() + 1)
+            },
             ..Default::default()
         });
         Some(id)
     }
     pub fn sync_slots(&mut self) {
+        self.sync_audio_channels();
         // Older projects contain vacant mixer slots. Preserve occupied order,
         // but show only actual channels and append newly created sources.
-        self.slots
-            .retain(|slot| slot.is_some_and(|id| self.channels.iter().any(|d| d.id == id)));
+        self.slots.retain(|slot| {
+            slot.is_some_and(|id| {
+                self.channels.iter().any(|d| d.id == id)
+                    || self.audio_inputs.iter().any(|b| b.id == id)
+            })
+        });
         for d in &self.channels {
             if !self.slots.contains(&Some(d.id)) {
                 self.slots.push(Some(d.id));
+            }
+        }
+        for bus in &self.audio_inputs {
+            if !self.slots.contains(&Some(bus.id)) {
+                self.slots.push(Some(bus.id));
             }
         }
     }
@@ -430,6 +507,12 @@ impl Bank {
                     .position(|s| *s == Some(d.id))
                     .unwrap_or(usize::MAX)
             });
+            self.audio_inputs.sort_by_key(|b| {
+                self.slots
+                    .iter()
+                    .position(|s| *s == Some(b.id))
+                    .unwrap_or(usize::MAX)
+            });
         }
     }
     pub fn remove_channel(&mut self, id: u64) -> Option<(Definition, usize)> {
@@ -442,11 +525,51 @@ impl Bank {
         if slot < self.slots.len() {
             self.slots.remove(slot);
         }
+        self.audio_inputs.retain(|b| b.id != id);
+        for d in &mut self.channels {
+            if d.audio_input == audio::Connection::Input(id) {
+                d.audio_input = audio::Connection::Off;
+            }
+        }
         Some((self.channels.remove(index), slot))
+    }
+    pub fn remove_audio_input(&mut self, id: u64) -> Option<(audio::InputBus, usize)> {
+        let index = self.audio_inputs.iter().position(|b| b.id == id)?;
+        let slot = self
+            .slots
+            .iter()
+            .position(|s| *s == Some(id))
+            .unwrap_or(index);
+        self.slots.retain(|s| *s != Some(id));
+        for d in &mut self.channels {
+            if d.audio_input == audio::Connection::Input(id) {
+                d.audio_input = audio::Connection::Off;
+            }
+        }
+        Some((self.audio_inputs.remove(index), slot))
+    }
+    pub fn duplicate_audio_input(&mut self, id: u64) -> Option<u64> {
+        if self.audio_inputs.len() >= audio::MAX_INPUTS {
+            return None;
+        }
+        let mut bus = self.audio_inputs.iter().find(|b| b.id == id)?.clone();
+        bus.color = Some(bus.color_rgb());
+        bus.id = self.allocate()?;
+        bus.name = format!("{} copy", bus.name.chars().take(70).collect::<String>());
+        let new = bus.id;
+        self.audio_inputs.push(bus);
+        Some(new)
     }
 
     pub fn allocate(&mut self) -> Option<u64> {
-        if self.channels.len() >= MAX_SIGNALS {
+        if self.channels.len()
+            + self
+                .audio_inputs
+                .iter()
+                .filter(|b| self.channels.iter().all(|d| d.id != b.id))
+                .count()
+            >= MAX_SIGNALS
+        {
             return None;
         }
         let id = self.next_id;
@@ -462,6 +585,13 @@ impl Bank {
         let mut d = self.channels.iter().find(|d| d.id == source)?.clone();
         d.color = Some(d.color_rgb());
         d.id = self.allocate()?;
+        if d.audio_input == audio::Connection::Input(source) {
+            d.audio_input = audio::Connection::Input(d.id);
+        }
+        if let Some(mut bus) = self.audio_inputs.iter().find(|b| b.id == source).cloned() {
+            bus.id = d.id;
+            self.audio_inputs.push(bus);
+        }
         d.name = format!("{} copy", d.name.chars().take(70).collect::<String>());
         let id = d.id;
         self.channels.push(d);
@@ -481,12 +611,20 @@ impl Bank {
     pub fn valid(&self) -> bool {
         let mut ids = std::collections::HashSet::new();
         let mut slots = std::collections::HashSet::new();
+        let mut controls = std::collections::HashSet::new();
         self.slots.len() <= MAX_SIGNALS + 2
-            && self
-                .slots
-                .iter()
-                .flatten()
-                .all(|id| slots.insert(*id) && self.channels.iter().any(|d| d.id == *id))
+            && self.channels.len()
+                + self
+                    .audio_inputs
+                    .iter()
+                    .filter(|b| self.channels.iter().all(|d| d.id != b.id))
+                    .count()
+                <= MAX_SIGNALS
+            && self.slots.iter().flatten().all(|id| {
+                slots.insert(*id)
+                    && (self.channels.iter().any(|d| d.id == *id)
+                        || self.audio_inputs.iter().any(|b| b.id == *id))
+            })
             && self.channels.len() <= MAX_SIGNALS
             && self.next_id > 0
             && self.audio_inputs.len() <= audio::MAX_INPUTS
@@ -496,9 +634,14 @@ impl Bank {
                 .all(|b| b.id > 0 && b.id < self.next_id && ids.insert(b.id) && b.valid())
             && self.channels.iter().all(|d| {
                 d.id > 0
+                    && controls.insert(d.id)
                     && d.id < self.next_id
                     && d.audio_input.valid()
-                    && ids.insert(d.id)
+                    && (ids.insert(d.id)
+                        || (d.input == Input::System
+                            && d.inserts.is_some()
+                            && self.audio_inputs.iter().any(|b| b.id == d.id)))
+                    && d.inserts.as_ref().is_none_or(|chain| chain.valid(d.input))
                     && crate::workspace::valid_name(&d.name)
                     && (0.0..=2.0).contains(&d.influence)
                     && d.response.signal.is_none()
@@ -577,6 +720,7 @@ pub struct Snapshot {
     pub audio: BTreeMap<u64, Arc<audio::Feed>>,
     pub time: f64,
     pub values: BTreeMap<u64, Sample>,
+    pub inserts: BTreeMap<u64, Vec<inserts::Monitor>>,
 }
 /// A time-based one-pole smoother shared by every provider. Its value is
 /// transient; changing the amount does not reset it or restart the detector.
@@ -612,6 +756,7 @@ struct ChannelState {
 #[derive(Default)]
 pub struct Processor {
     inputs: audio::Inputs,
+    chains: BTreeMap<u64, inserts::Runtime>,
     states: BTreeMap<u64, ChannelState>,
     epoch: Option<(u64, u32, usize)>,
     sequence: Option<u64>,
@@ -673,7 +818,19 @@ impl Processor {
         self.states
             .retain(|id, _| bank.channels.iter().any(|d| d.id == *id));
         let any_solo = bank.channels.iter().any(|d| d.solo);
-        let audio = self.inputs.process(&bank.audio_inputs, frame);
+        let mut buses = bank.audio_inputs.clone();
+        for bus in &mut buses {
+            if let Some(d) = bank
+                .channels
+                .iter()
+                .find(|d| d.id == bus.id && d.inserts.is_some())
+            {
+                bus.enabled =
+                    d.enabled && (!any_solo || d.solo) && d.audio_input != audio::Connection::Off;
+                bus.solo = d.solo;
+            }
+        }
+        let mut audio = self.inputs.process(&buses, frame);
         for d in &bank.channels {
             let routed = match d.audio_input {
                 audio::Connection::Input(id) => audio.get(&id).map(|f| f.frame.as_ref()),
@@ -758,7 +915,11 @@ impl Processor {
                     d.shaping.map(
                         d.normalization.map(s.sample.raw),
                         d.kind() == OutputKind::Bipolar,
-                    ) * d.influence,
+                    ) * if d.inserts.is_some() {
+                        1.0
+                    } else {
+                        d.influence
+                    },
                     d.smoothing_ms,
                     dt,
                 );
@@ -778,12 +939,20 @@ impl Processor {
                     d.shaping.map(
                         d.normalization.map(s.sample.raw),
                         d.kind() == OutputKind::Bipolar,
-                    ) * d.influence,
+                    ) * if d.inserts.is_some() {
+                        1.0
+                    } else {
+                        d.influence
+                    },
                     d.smoothing_ms,
                     dt,
                 );
                 s.sample.input = s.sample.raw.abs();
                 s.sample.level = s.sample.input;
+                s.sample.availability = 1.0;
+                continue;
+            }
+            if d.inserts.is_some() && d.input == Input::System {
                 s.sample.availability = 1.0;
                 continue;
             }
@@ -846,8 +1015,103 @@ impl Processor {
             );
             s.sample.availability = 1.0;
         }
+        self.chains.retain(|id, _| {
+            bank.channels
+                .iter()
+                .any(|d| d.id == *id && d.inserts.is_some())
+        });
+        let mut monitors = BTreeMap::new();
+        // Resolve upstream audio channels first; invalid/cyclic routes are silent.
+        let mut pending: Vec<_> = bank
+            .channels
+            .iter()
+            .filter(|d| d.inserts.is_some())
+            .collect();
+        let mut finished = std::collections::BTreeSet::new();
+        for _ in 0..=pending.len() {
+            let mut progress = false;
+            pending.retain(|d| {
+                if let audio::Connection::Input(id) = d.audio_input
+                    && id != d.id
+                    && bank
+                        .channels
+                        .iter()
+                        .any(|s| s.id == id && s.inserts.is_some())
+                    && !finished.contains(&id)
+                {
+                    return true;
+                }
+                let feed = if d.input == Input::System {
+                    match d.audio_input {
+                        audio::Connection::Main => audio.get(&d.id).cloned(),
+                        audio::Connection::Input(id) => audio.get(&id).cloned(),
+                        audio::Connection::Off => None,
+                    }
+                } else {
+                    None
+                };
+                let dependency_status = if d.input == Input::System {
+                    match d.audio_input {
+                        audio::Connection::Input(parent) if parent != d.id => {
+                            self.states.get(&parent).map(|s| s.sample.status)
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let state = self.states.get_mut(&d.id).unwrap();
+                if state.sample.status == Status::Live
+                    && let Some(status) = dependency_status.filter(|s| *s != Status::Live)
+                {
+                    state.sample.status = status;
+                    let fade = (1.0 - dt / FADE_SECONDS).max(0.0);
+                    state.sample.value *= fade;
+                    state.sample.availability *= fade;
+                    state.sample.raw = 0.0;
+                    state.sample.input = 0.0;
+                    state.sample.level = 0.0;
+                    if state.sample.availability < 0.001 {
+                        state.sample.value = 0.0;
+                        state.sample.availability = 0.0;
+                    }
+                }
+                let result = self.chains.entry(d.id).or_default().process(
+                    d,
+                    feed,
+                    frame,
+                    &state.sample,
+                    time,
+                    dt,
+                    fresh,
+                    frame_dt,
+                    &mut self.next_event,
+                );
+                state.sample = result.sample;
+                if let Some(feed) = result.audio {
+                    audio.insert(d.id, feed);
+                }
+                monitors.insert(d.id, result.monitors);
+                finished.insert(d.id);
+                progress = true;
+                false
+            });
+            if pending.is_empty() || !progress {
+                break;
+            }
+        }
+        for d in pending {
+            if let Some(s) = self.states.get_mut(&d.id) {
+                s.sample = Sample {
+                    status: Status::Muted,
+                    ..Default::default()
+                };
+            }
+            audio.remove(&d.id);
+        }
         Snapshot {
             audio,
+            inserts: monitors,
             time,
             values: self
                 .states

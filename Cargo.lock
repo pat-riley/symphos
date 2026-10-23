@@ -1204,6 +1204,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2703,6 +2705,7 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "image",
  "log",
  "pipewire",
  "realfft",

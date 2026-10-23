@@ -251,7 +251,7 @@ impl Component {
         label: String,
     ) -> Self {
         Self {
-            document: serde_json::to_value(&settings).unwrap_or_default(),
+            document: settings.parameter_document().unwrap_or_default(),
             original: settings.clone(),
             settings,
             target,

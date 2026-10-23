@@ -5,6 +5,7 @@ mod capture_history;
 mod colors;
 #[cfg(feature = "development")]
 mod development;
+mod dropdown;
 mod global_bar;
 mod help;
 mod icons;
@@ -56,6 +57,7 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("Symphos")
+            .with_title_shown(false)
             .with_app_id("io.github.riley.Symphos")
             .with_inner_size([1440.0, 940.0])
             .with_min_inner_size([1024.0, 700.0])

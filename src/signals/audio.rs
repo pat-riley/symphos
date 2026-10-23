@@ -5,7 +5,7 @@ use crate::capture_history::CaptureHistory;
 use crate::help::HoverHelp;
 use std::sync::Mutex;
 
-pub const MAX_INPUTS: usize = 8;
+pub const MAX_INPUTS: usize = super::MAX_SIGNALS;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Connection {
@@ -16,15 +16,15 @@ pub enum Connection {
 }
 pub fn connection_picker(ui: &mut egui::Ui, value: &mut Connection, buses: &[InputBus]) {
     let label = match value {
-        Connection::Main => "Main audio",
+        Connection::Main => "System audio",
         Connection::Off => "Unassigned",
         Connection::Input(id) => buses
             .iter()
             .find(|b| b.id == *id)
             .map_or("Unavailable", |b| b.name.as_str()),
     };
-    egui::ComboBox::from_id_salt("audio-input-connection").selected_text(label).show_ui(ui, |ui| {
-        ui.selectable_value(value, Connection::Main, "Main audio");
+    crate::dropdown::ComboBox::from_id_salt("audio-input-connection").width(ui.available_width().min(240.0)).selected_text(label).show_ui(ui, |ui| {
+        ui.selectable_value(value, Connection::Main, "System audio · direct");
         ui.selectable_value(value, Connection::Off, "Unassigned");
         for bus in buses { ui.selectable_value(value, Connection::Input(bus.id), &bus.name); }
     }).response.help_text("Choose the waveform, spectrum and measurements feeding this consumer. Unassigned disables built-in audio response; separate modulation mappings continue.");
@@ -60,6 +60,8 @@ impl Connection {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputBus {
+    pub color: Option<[u8; 3]>,
+    pub solo: bool,
     pub id: u64,
     pub name: String,
     pub enabled: bool,
@@ -75,6 +77,8 @@ pub struct InputBus {
 impl Default for InputBus {
     fn default() -> Self {
         Self {
+            color: None,
+            solo: false,
             id: 0,
             name: "Audio input".into(),
             enabled: true,
@@ -90,10 +94,13 @@ impl Default for InputBus {
     }
 }
 impl InputBus {
-    fn same_processing(&self, other: &Self) -> bool {
+    pub fn color_rgb(&self) -> [u8; 3] {
+        self.color
+            .unwrap_or(super::CHANNEL_COLORS[(self.id.saturating_sub(1) % 8) as usize])
+    }
+    fn same_history(&self, other: &Self) -> bool {
         self.enabled == other.enabled
             && self.channels == other.channels
-            && self.gain_db == other.gain_db
             && self.high_pass == other.high_pass
             && self.low_hz == other.low_hz
             && self.low_pass == other.low_pass
@@ -128,7 +135,8 @@ struct State {
     settings: Arc<AnalysisSettings>,
     epoch: u64,
     sequence: u64,
-    analyzer: Analyzer,
+    source_bins: Arc<[crate::analysis::FrequencyBin]>,
+    analyzer: Option<Analyzer>,
     feed: Arc<Feed>,
 }
 #[derive(Default)]
@@ -148,9 +156,13 @@ impl Inputs {
         self.states
             .retain(|id, _| buses.iter().any(|b| b.id == *id && b.valid()));
         let now = Instant::now();
+        let solo = buses.iter().any(|b| b.solo);
         for bus in buses.iter().take(MAX_INPUTS).filter(|b| b.valid()) {
+            let mut effective = bus.clone();
+            effective.enabled &= !solo || bus.solo;
+            let bus = &effective;
             let replace = self.states.get(&bus.id).is_none_or(|s| {
-                !s.definition.same_processing(bus)
+                !s.definition.same_history(bus)
                     || s.epoch != source.capture_epoch
                     || s.feed.frame.sample_rate != source.sample_rate
                     || *s.settings != *source.analysis_settings
@@ -167,7 +179,8 @@ impl Inputs {
                         settings: source.analysis_settings.clone(),
                         epoch: source.capture_epoch,
                         sequence: u64::MAX,
-                        analyzer: Analyzer::new(source.fft_size, source.analysis_settings.window),
+                        source_bins: source.bins.clone(),
+                        analyzer: None,
                         feed: Arc::new(Feed {
                             frame: Arc::new(silence(source)),
                             history: Arc::new(Mutex::new(history)),
@@ -177,10 +190,18 @@ impl Inputs {
                 );
             }
             let state = self.states.get_mut(&bus.id).unwrap();
-            if state.sequence == source.sequence {
+            // Gain is a live level edit, not a new source. Recompute the current
+            // frame without replacing the archive or its consumer revision.
+            // Upstream gains can also change an insert's input at the same sequence.
+            if state.sequence == source.sequence
+                && state.definition.gain_db == bus.gain_db
+                && Arc::ptr_eq(&state.source_bins, &source.bins)
+            {
                 continue;
             }
             state.sequence = source.sequence;
+            state.definition.gain_db = bus.gain_db;
+            state.source_bins = source.bins.clone();
             let frame = if !bus.enabled || source.sequence == 0 {
                 silence(source)
             } else if bus.channels == Channels::Stereo
@@ -236,15 +257,20 @@ impl Inputs {
                         samples.fill([0.0; 2]);
                     }
                 }
-                let mut frame = state.analyzer.analyze(
-                    &samples,
-                    0,
-                    source.sample_rate,
-                    source.channels,
-                    &source.analysis_settings,
-                    source.sequence,
-                    source.dropped_samples,
-                );
+                let mut frame = state
+                    .analyzer
+                    .get_or_insert_with(|| {
+                        Analyzer::new(source.fft_size, source.analysis_settings.window)
+                    })
+                    .analyze(
+                        &samples,
+                        0,
+                        source.sample_rate,
+                        source.channels,
+                        &source.analysis_settings,
+                        source.sequence,
+                        source.dropped_samples,
+                    );
                 frame.capture_epoch = source.capture_epoch;
                 frame
             };

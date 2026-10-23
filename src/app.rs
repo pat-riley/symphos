@@ -17,11 +17,13 @@ mod input_routing;
 mod menu;
 mod scene_library;
 mod settings;
+mod visualizer_inspector;
 use crate::workspace::{self, Axis, Edge, MAX_PANES, PresetContent, Session, Storage, Tile};
 use crate::workspace_ui::{self, DragPayload, Manager, Scope};
 
 const THEME_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
+const DRAWER_ANIMATION_SECONDS: f32 = 0.22;
 
 pub struct SymphosApp {
     history: history::History,
@@ -77,9 +79,6 @@ pub struct SymphosApp {
     sidebar_width: f32,
     library_width: f32,
     signals_height: f32,
-    signals_page: usize,
-    selected_audio_input: Option<u64>,
-    selected_input_sketch: Option<usize>,
     inspecting_signal: bool,
     inspecting_macro: Option<usize>,
     help_open: bool,
@@ -154,9 +153,6 @@ impl SymphosApp {
             sidebar_width: DEFAULT_SETTINGS_WIDTH,
             library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
-            signals_page: 0,
-            selected_audio_input: None,
-            selected_input_sketch: None,
             inspecting_signal: false,
             inspecting_macro: None,
             help_open: false,
@@ -737,7 +733,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui, frame: &AnalysisFrame) {
-        workspace_ui::sidebar_style(ui, &self.theme);
+        visualizer_inspector::style(ui, &self.theme);
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(crate::modules::FLAT_INSPECTOR), true));
         ui.data_mut(|data| data.insert_temp(egui::Id::new("inspector-bounds"), ui.max_rect()));
         let state = if self.panes[self.selected_pane].is_frozen() {
             "Paused"
@@ -762,62 +759,29 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
-                if ui
-                    .button("Audio & modulation…")
-                    .help_text("Open this sketch's input and response settings in Signals.")
-                    .clicked()
-                {
-                    self.signals_page = 2;
-                    self.selected_input_sketch = Some(self.selected_pane);
-                    self.signal_ui
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .show_signals = true;
-                    self.inspecting_signal = false;
-                }
-                ui.menu_button("Component actions", |ui| {
-                    if ui.button("Browse component presets…").clicked() {
-                        self.manager.open_presets(Scope::Component);
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Copy settings").clicked() {
-                        self.settings_clipboard =
-                            Some(self.panes[self.selected_pane].export_settings());
-                        ui.close();
-                    }
-                    let compatible = self
-                        .settings_clipboard
-                        .as_ref()
-                        .is_some_and(|s| s.kind() == self.panes[self.selected_pane].kind);
-                    if ui
-                        .add_enabled(compatible, egui::Button::new("Paste settings"))
-                        .clicked()
-                    {
-                        self.paste_module_settings();
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui
-                        .button("Reset component")
-                        .help_text("Restore component defaults. Undo is available from Edit.")
-                        .clicked()
-                    {
-                        self.panes[self.selected_pane].reset_settings();
-                        ui.close();
-                    }
+                let audio_inputs = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner()).bank.audio_inputs.clone();
+                crate::modules::property_row(ui, "Driven by", |ui| {
+                    crate::signals::audio::connection_picker(ui, &mut self.panes[self.selected_pane].audio_input, &audio_inputs);
                 });
+                ui.add_space(4.0);
+                let connected = {
+                    let panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+                    matches!(self.panes[self.selected_pane].audio_input, crate::signals::audio::Connection::Input(id)
+                        if panel.bank.audio_inputs.iter().any(|bus| bus.id == id))
+                };
+                if ui.add_enabled(connected, egui::Button::new("Inspect audio signal…"))
+                    .help_text(if connected {
+                        "Select the connected audio channel in Signals. Its inspector contains processing, frequency range and sketch response."
+                    } else {
+                        "Connect this sketch from a System audio channel in Signals to edit its audio response there."
+                    }).clicked() {
+                    self.inspect_audio_signal(self.selected_pane);
+                }
             });
-        let bounds = ui.available_rect_before_wrap();
-        let content_rect = workspace_ui::inspector_rail(
-            ui,
-            bounds,
-            &self.theme,
-            ("inspector-tabs", self.selected_pane),
-            |rail| {
-                self.panes[self.selected_pane].inspector_tabs(rail);
-            },
-        );
+        // Identity and routing stay pinned above the shared tabs and body.
+        let menu = visualizer_inspector::tabs(ui, &mut self.panes[self.selected_pane]);
+        egui::Popup::menu(&menu).show(|ui| self.component_actions_contents(ui));
+        let content_rect = ui.available_rect_before_wrap();
         let mut properties = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("inspector-properties")
@@ -844,6 +808,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             },
         );
         ui.data_mut(|data| {
+            data.remove::<bool>(egui::Id::new(crate::modules::FLAT_INSPECTOR));
             data.remove::<Rect>(egui::Id::new("inspector-bounds"));
             data.remove::<crate::macros::InspectorIndicators>(egui::Id::new(
                 crate::macros::INDICATORS,
@@ -881,6 +846,23 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         use crate::shortcuts::Action;
         if self.scene_library.busy() || self.settings_window.open {
             return; // The modal owns Escape and blocks workspace shortcuts.
+        }
+        if self.inspecting_signal
+            && self.panel_fullscreen.is_none()
+            && !self.workspace_menu_blocked(ctx)
+            && !crate::shortcuts::editing_text(ctx)
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| {
+                input.focused
+                    && (input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                        || input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
+            })
+        {
+            self.signal_ui
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .delete_selection();
+            return;
         }
         // Always provide an exit even if a hidden inspector or dialog held focus.
         if self.panel_fullscreen.is_some()
@@ -997,8 +979,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             ),
             egui::StrokeKind::Inside,
         );
+        // A camera drag must not switch inspector context at pointer-down.
+        // Only a completed click selects the visual component's inspector.
         if ui.input(|input| {
-            input.pointer.any_pressed()
+            input.pointer.any_click()
                 && input
                     .pointer
                     .interact_pos()
@@ -1575,6 +1559,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 .toolbar(
                     &mut workspace_ui::navigation_region(ui, center, "scene-toolbar", &self.theme),
                     &self.scenes,
+                    &self.theme,
                 )
                 .or(self.pending_scene.take());
         }
@@ -1627,34 +1612,44 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         });
         let inspector_open = self.sidebar_open
             && (self.tiles.is_some() || self.inspecting_signal || self.inspecting_macro.is_some());
+        let browser_openness =
+            drawer_openness(ui.ctx(), "component-browser", self.manager.library_open);
+        let inspector_openness = drawer_openness(ui.ctx(), "inspector", inspector_open);
         let browser_bounds =
             Rect::from_min_max(Pos2::new(rect.left(), navigation.bottom()), rect.max);
-        if self.manager.library_open {
-            let width = library_width(browser_bounds, inspector_open, self.library_width);
+        let browser_width = egui::lerp(
+            library_width(browser_bounds, false, self.library_width)
+                ..=library_width(browser_bounds, true, self.library_width),
+            inspector_openness,
+        );
+        if browser_openness > 0.0 {
+            let width = browser_width;
             let library = Rect::from_min_max(
                 browser_bounds.min,
                 Pos2::new(browser_bounds.left() + width, browser_bounds.bottom()),
+            )
+            .translate(Vec2::new(-width * (1.0 - browser_openness), 0.0));
+            let mut drawer = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("browser-drawer")
+                    .max_rect(library),
             );
+            drawer.set_clip_rect(browser_bounds.intersect(ui.clip_rect()));
             let actions = self.manager.library(
-                ui,
+                &mut drawer,
                 library,
                 &self.theme,
                 self.open_panes().len() < MAX_PANES,
             );
             self.manager_actions(actions);
             // Register the boundary after the list/scrollbar so it owns edge gestures.
-            resize_library(ui, browser_bounds, inspector_open, &mut self.library_width);
+            if self.manager.library_open && browser_openness == 1.0 {
+                resize_library(ui, browser_bounds, inspector_open, &mut self.library_width);
+            }
         }
-        let browser_width = library_width(browser_bounds, inspector_open, self.library_width);
         let content_bounds = Rect::from_min_max(
             Pos2::new(
-                rect.left()
-                    + 12.0
-                    + if self.manager.library_open {
-                        browser_width
-                    } else {
-                        0.0
-                    },
+                rect.left() + 12.0 + browser_width * browser_openness,
                 rect.top() + workspace_ui::NAV_HEIGHT,
             ),
             rect.max,
@@ -1662,15 +1657,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let footer = Rect::from_min_max(
             Pos2::new(content_bounds.left(), rect.bottom() - 42.0),
             Pos2::new(
-                if self.sidebar_open
-                    && (self.tiles.is_some()
-                        || self.inspecting_signal
-                        || self.inspecting_macro.is_some())
-                {
-                    rect.right() - settings_width(content_bounds, self.sidebar_width) - 10.0
-                } else {
-                    rect.right() - 12.0
-                },
+                drawer_dashboard_right(content_bounds, self.sidebar_width, inspector_openness),
                 rect.bottom() - 2.0,
             ),
         );
@@ -1712,19 +1699,13 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         resize_settings(
             ui,
             content,
-            self.sidebar_open
-                && (self.tiles.is_some()
-                    || self.inspecting_signal
-                    || self.inspecting_macro.is_some()),
+            inspector_open && inspector_openness == 1.0,
             self.help_open,
             &mut self.sidebar_width,
         );
-        let mut layout = workspace_layout(
+        let mut layout = workspace_layout_animated(
             content,
-            self.sidebar_open
-                && (self.tiles.is_some()
-                    || self.inspecting_signal
-                    || self.inspecting_macro.is_some()),
+            inspector_openness,
             self.help_open,
             self.sidebar_width,
         );
@@ -1811,11 +1792,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     pane.set_scene_macros(&self.scene_macros);
                 }
             } else if self.inspecting_signal {
-                let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                panel.show_inspector(&mut sidebar, sidebar_rect, snapshot, &self.theme);
-                if std::mem::take(&mut panel.close_inspector) {
-                    self.sidebar_open = false;
-                }
+                self.signal_inspector(&mut sidebar, sidebar_rect, snapshot);
             } else {
                 self.sidebar(&mut sidebar, snapshot);
             }
@@ -2224,9 +2201,6 @@ mod workspace_interaction_tests {
             sidebar_width: 236.0,
             library_width: workspace_ui::LIBRARY_WIDTH,
             signals_height: workspace::default_signals_height(),
-            signals_page: 0,
-            selected_audio_input: None,
-            selected_input_sketch: None,
             inspecting_signal: false,
             inspecting_macro: None,
             help_open: false,
@@ -2263,55 +2237,118 @@ mod workspace_interaction_tests {
     }
 
     #[test]
-    fn signals_routes_show_response_controls_and_create_inputs_only_on_request() {
+    fn audio_shortcut_selects_the_signal_channel_without_a_separate_sketch_inspector() {
         let mut app = app();
         let ctx = egui::Context::default();
         let now = Instant::now();
-        app.signal_ui.lock().unwrap().show_signals = true;
-        app.signals_page = 2;
-        app.selected_input_sketch = Some(0);
-        let position = |out: &egui::FullOutput, name: &str| {
-            out.shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::Text(t) if t.galley.job.text == name => {
-                        Some(t.pos + t.galley.size() * 0.5)
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("missing {name}"))
-        };
+        app.inspect_audio_signal(0);
+        assert!(app.signal_ui.lock().unwrap().bank.audio_inputs.is_empty());
+        let audio = app
+            .signal_ui
+            .lock()
+            .unwrap()
+            .bank
+            .add_audio_input()
+            .unwrap();
+        app.panes[0].audio_input = crate::signals::audio::Connection::Input(audio);
+        app.inspect_audio_signal(0);
+        assert_eq!(app.signal_ui.lock().unwrap().selected, Some(audio));
+        assert!(app.inspecting_signal && app.sidebar_open);
         workspace_frame(&mut app, &ctx, now, vec![]);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
-        position(&out, "Signal Response");
-        position(&out, "Frequency Range");
-        assert!(app.signal_ui.lock().unwrap().bank.audio_inputs.is_empty());
-        let p = position(&out, "Audio inputs");
-        workspace_frame(
-            &mut app,
-            &ctx,
-            now,
-            vec![egui::Event::PointerMoved(p), button(p, true)],
-        );
-        workspace_frame(&mut app, &ctx, now, vec![button(p, false)]);
-        assert_eq!(app.signals_page, 1);
-        let out = workspace_frame(&mut app, &ctx, now, vec![]);
-        let p = position(&out, "+ Audio input");
-        workspace_frame(
-            &mut app,
-            &ctx,
-            now,
-            vec![egui::Event::PointerMoved(p), button(p, true)],
-        );
-        workspace_frame(&mut app, &ctx, now, vec![button(p, false)]);
-        assert_eq!(app.signal_ui.lock().unwrap().bank.audio_inputs.len(), 1);
-        assert!(app.signal_ui.lock().unwrap().bank.channels.is_empty());
-        assert!(
-            app.panes
+        let contains = |name: &str| {
+            out.shapes
                 .iter()
-                .all(|p| p.audio_input == crate::signals::audio::Connection::Main)
+                .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == name))
+        };
+        assert!(contains("Audio input") && contains("Connected sketches"));
+        assert!(!contains("Sketch audio connection") && !contains("Audio & modulation…"));
+        assert!(
+            !contains("Modulation") && !contains("Audio inputs") && !contains("Sketch connections")
         );
+        assert_eq!(app.signal_ui.lock().unwrap().bank.audio_inputs.len(), 1);
     }
+
+    #[test]
+    fn waterfall_camera_gestures_work_without_switching_away_from_signal_inspector() {
+        for expanded_response in [false, true] {
+            let mut app = app();
+            app.tiles = Some(Tile::Pane(0));
+            let audio = app
+                .signal_ui
+                .lock()
+                .unwrap()
+                .bank
+                .add_audio_input()
+                .unwrap();
+            app.panes[0].audio_input = crate::signals::audio::Connection::Input(audio);
+            app.inspect_audio_signal(0);
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            workspace_frame(&mut app, &ctx, now, vec![]);
+            let out = workspace_frame(&mut app, &ctx, now, vec![]);
+            if expanded_response {
+                let pos = out
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text == "Sketch response" => {
+                            Some(t.pos + t.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                workspace_frame(
+                    &mut app,
+                    &ctx,
+                    now,
+                    vec![egui::Event::PointerMoved(pos), button(pos, true)],
+                );
+                workspace_frame(&mut app, &ctx, now, vec![button(pos, false)]);
+                let out = workspace_frame(&mut app, &ctx, now, vec![]);
+                assert!(out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Frequency Range")));
+            }
+            let camera = |app: &SymphosApp| {
+                let settings = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
+                (
+                    settings["Waterfall"]["yaw"].clone(),
+                    settings["Waterfall"]["elevation"].clone(),
+                )
+            };
+            let initial = camera(&app);
+            let start = Pos2::new(200.0, 180.0);
+            let end = start + Vec2::new(40.0, 30.0);
+            workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(start)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(start, true)]);
+            workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(end)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(end, false)]);
+            assert_ne!(initial, camera(&app));
+            assert!(
+                app.inspecting_signal,
+                "camera drags must retain the Signals inspector"
+            );
+            assert_eq!(app.signal_ui.lock().unwrap().selected, Some(audio));
+            // Double-click resets; a subsequent click-hold-drag still rotates.
+            for _ in 0..40 {
+                workspace_frame(&mut app, &ctx, now, vec![]);
+            }
+            for _ in 0..2 {
+                workspace_frame(
+                    &mut app,
+                    &ctx,
+                    now,
+                    vec![egui::Event::PointerMoved(start), button(start, true)],
+                );
+                workspace_frame(&mut app, &ctx, now, vec![button(start, false)]);
+            }
+            assert_eq!(initial, camera(&app));
+            workspace_frame(&mut app, &ctx, now, vec![button(start, true)]);
+            workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(end)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(end, false)]);
+            assert_ne!(initial, camera(&app));
+        }
+    }
+
     #[test]
     fn undo_scene_creation_and_grouped_parameter_drag() {
         let mut app = app();
@@ -2383,23 +2420,29 @@ mod workspace_interaction_tests {
         let mut app = app();
         let mut settings = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
         settings["Waterfall"]["auto_orbit"] = true.into();
+        settings["Waterfall"]["motion"] = serde_json::json!({"axis":"Time", "wobble":true});
         app.panes[0].paste_settings(&serde_json::from_value(settings).unwrap());
         app.scenes = crate::scenes::Book::new(app.capture_scene());
+        let now = Instant::now();
+        let initial = app.panes[0].advance_waterfall_camera(now);
         app.begin_edit(true);
         let mut settings = app.panes[0].copy_settings();
-        *settings.automatic_yaw().unwrap() = 1.5;
-        app.panes[0].paste_settings(&settings);
+        let animated = app.panes[0].advance_waterfall_camera(now + Duration::from_millis(100));
+        assert_ne!(initial, animated);
+        assert_eq!(app.panes[0].copy_settings(), settings);
         app.finish_edit();
         assert!(!app.history.can_undo());
         app.begin_edit(true);
         crate::macros::set_many(&mut settings, &[("height".into(), 1.4)]);
         app.panes[0].paste_settings(&settings);
         app.finish_edit();
-        *settings.automatic_yaw().unwrap() = 2.0;
-        app.panes[0].paste_settings(&settings);
+        let before_undo = app.panes[0].advance_waterfall_camera(now + Duration::from_millis(200));
         app.undo_edit(false);
-        let mut restored = app.panes[0].copy_settings();
-        assert_eq!(*restored.automatic_yaw().unwrap(), 2.0);
+        let restored = app.panes[0].copy_settings();
+        assert_eq!(
+            app.panes[0].advance_waterfall_camera(now + Duration::from_millis(200)),
+            before_undo
+        );
         assert_eq!(
             crate::macros::get(&restored, "height"),
             Some(f64::from(0.85_f32))
@@ -2612,6 +2655,82 @@ mod workspace_interaction_tests {
         output
     }
 
+    #[test]
+    fn delete_key_targets_selected_insert_or_signal_and_respects_text_and_modals() {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            app.inspecting_signal = true;
+            let (id, insert) = {
+                let mut panel = app.signal_ui.lock().unwrap();
+                let id = panel.bank.add_source(crate::signals::Input::Lfo).unwrap();
+                let d = panel.bank.channels.iter_mut().find(|d| d.id == id).unwrap();
+                let insert = d
+                    .inserts
+                    .as_mut()
+                    .unwrap()
+                    .add(d.input, 0, crate::signals::inserts::Effect::Invert)
+                    .unwrap();
+                panel.selected = Some(id);
+                panel.selected_insert = Some((id, insert));
+                (id, insert)
+            };
+            let event = || egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let render = |app: &mut SymphosApp, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.handle_shortcut(ui.ctx(), &AnalysisFrame::default(), Instant::now()),
+                );
+                output.textures_delta.clear();
+            };
+            app.settings_window.open = true;
+            render(&mut app, vec![event()]);
+            assert_eq!(
+                app.signal_ui.lock().unwrap().selected_insert,
+                Some((id, insert))
+            );
+            app.settings_window.open = false;
+            render(&mut app, vec![]);
+            let field = egui::Id::new("delete-test-text");
+            ctx.data_mut(|d| d.insert_temp(field, String::new()));
+            ctx.memory_mut(|m| m.request_focus(field));
+            render(&mut app, vec![event()]);
+            assert_eq!(
+                app.signal_ui.lock().unwrap().selected_insert,
+                Some((id, insert))
+            );
+            ctx.memory_mut(|m| m.surrender_focus(field));
+            ctx.data_mut(|d| d.remove::<String>(field));
+            render(&mut app, vec![]);
+            render(&mut app, vec![event()]);
+            {
+                let panel = app.signal_ui.lock().unwrap();
+                let channel = panel.bank.channels.iter().find(|d| d.id == id).unwrap();
+                assert!(channel.inserts.as_ref().unwrap().stages.is_empty());
+            }
+            render(&mut app, vec![]);
+            render(&mut app, vec![event()]);
+            assert!(
+                !app.signal_ui
+                    .lock()
+                    .unwrap()
+                    .bank
+                    .channels
+                    .iter()
+                    .any(|d| d.id == id)
+            );
+        }
+    }
+
     fn component_browser_toggle(ctx: &egui::Context) -> Pos2 {
         // Linux has an in-window Menu button before +; macOS uses its native
         // menu bar. Read the actual response bounds instead of guessing a pixel.
@@ -2620,6 +2739,12 @@ mod workspace_interaction_tests {
                 .expect("component browser toggle was rendered")
                 .center()
         })
+    }
+
+    fn settle_drawers(app: &mut SymphosApp, ctx: &egui::Context, now: Instant) {
+        for _ in 0..20 {
+            workspace_frame(app, ctx, now, vec![]);
+        }
     }
 
     #[test]
@@ -2708,6 +2833,7 @@ mod workspace_interaction_tests {
         click(&mut app, label(&out, "Macro 1"));
         assert_eq!(app.inspecting_macro, Some(0));
         assert!(app.sidebar_open && !app.inspecting_signal);
+        settle_drawers(&mut app, &ctx, now);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
         label(&out, "Macro inspector");
         click(&mut app, label(&out, "Macro 2"));
@@ -2779,12 +2905,21 @@ mod workspace_interaction_tests {
             now,
             vec![egui::Event::PointerMoved(toggle), button(toggle, true)],
         );
-        let hidden = workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
+        workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
         assert!(!app.sidebar_open);
+        // The closing inspector remains visible until the slide finishes.
+        for _ in 0..20 {
+            workspace_frame(&mut app, &ctx, now, vec![]);
+        }
+        let hidden = workspace_frame(&mut app, &ctx, now, vec![]);
         assert!(!visible(&hidden));
         workspace_frame(&mut app, &ctx, now, vec![button(toggle, true)]);
-        let restored = workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
+        workspace_frame(&mut app, &ctx, now, vec![button(toggle, false)]);
         assert!(app.sidebar_open);
+        for _ in 0..20 {
+            workspace_frame(&mut app, &ctx, now, vec![]);
+        }
+        let restored = workspace_frame(&mut app, &ctx, now, vec![]);
         assert!(visible(&restored));
     }
 
@@ -2831,6 +2966,7 @@ mod workspace_interaction_tests {
         click(&mut app, channel);
         assert!(app.inspecting_signal && app.sidebar_open);
         assert_eq!(app.signal_ui.lock().unwrap().selected, Some(source));
+        settle_drawers(&mut app, &ctx, now);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
         let _channel = label(&out, "1 Overall intensity");
         let grip = ctx
@@ -2875,6 +3011,7 @@ mod workspace_interaction_tests {
         workspace_frame(&mut app, &ctx, now, vec![]);
         click(&mut app, component_browser_toggle(&ctx));
         assert!(app.manager.library_open);
+        settle_drawers(&mut app, &ctx, now);
         workspace_frame(&mut app, &ctx, now, vec![]);
         let out = workspace_frame(&mut app, &ctx, now, vec![]);
         click(&mut app, label(&out, "3D Rings"));
@@ -3318,7 +3455,7 @@ mod workspace_interaction_tests {
             .lock()
             .unwrap()
             .bank
-            .add(crate::signals::Method::Lfo)
+            .add_source(crate::signals::Input::Lfo)
             .unwrap();
         app.scene_macros.slots[0].name = Some("My macro".into());
         app.scenes.store(app.capture_scene());
@@ -3385,6 +3522,111 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn saving_presets_activates_names_tracks_real_edits_and_keeps_every_library_version() {
+        use crate::scenes::library::{Command, Presets, Selection};
+        let mut app = app();
+        let dir = std::env::temp_dir().join(format!(
+            "symphos-preset-versions-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        app.storage.dir = dir.clone();
+        app.scene_library_command(Command::Save("Velvet Lunar Drift".into()));
+        let first = app.scene_library.presets.entries[0].id;
+        assert_eq!(
+            app.scenes.current().unwrap().display_name(),
+            "Velvet Lunar Drift"
+        );
+        assert_eq!(
+            app.scenes.current().unwrap().preset.as_ref().unwrap().id,
+            first
+        );
+        app.panes[0].select_section(crate::modules::SettingsSection::Camera);
+        app.scene_macros.open = !app.scene_macros.open;
+        app.refresh_scene_preset_edited();
+        assert!(
+            !app.scenes
+                .current()
+                .unwrap()
+                .preset
+                .as_ref()
+                .unwrap()
+                .edited
+        );
+        app.begin_edit(true);
+        app.scene_macros.slots[0].name = Some("Changed brightness".into());
+        app.finish_edit();
+        assert_eq!(
+            app.scenes.current().unwrap().display_name(),
+            "Velvet Lunar Drift (edited)"
+        );
+        app.undo_edit(false);
+        assert_eq!(
+            app.scenes.current().unwrap().display_name(),
+            "Velvet Lunar Drift"
+        );
+        app.undo_edit(true);
+        assert!(
+            app.scenes
+                .current()
+                .unwrap()
+                .preset
+                .as_ref()
+                .unwrap()
+                .edited
+        );
+        app.scene_library_command(Command::Save("Quiet Coral Echo".into()));
+        let second = app.scene_library.presets.entries[1].id;
+        assert_ne!(first, second);
+        assert_eq!(
+            app.scenes.current().unwrap().display_name(),
+            "Quiet Coral Echo"
+        );
+        assert_eq!(
+            app.scenes.current().unwrap().preset.as_ref().unwrap().id,
+            second
+        );
+        assert_ne!(
+            app.scene_library.presets.entries[0]
+                .state
+                .macros
+                .as_ref()
+                .unwrap()
+                .slots[0]
+                .name,
+            app.scene_library.presets.entries[1]
+                .state
+                .macros
+                .as_ref()
+                .unwrap()
+                .slots[0]
+                .name
+        );
+        assert_eq!(Presets::load(&dir).unwrap().entries.len(), 2);
+        app.scene_library.open(&app.scenes);
+        assert_eq!(app.scene_library.selection, Some(Selection::Preset(second)));
+        let book: crate::scenes::Book =
+            serde_json::from_slice(&serde_json::to_vec(&app.scenes).unwrap()).unwrap();
+        assert_eq!(book.current().unwrap().display_name(), "Quiet Coral Echo");
+        assert_eq!(book.current().unwrap().preset.as_ref().unwrap().id, second);
+        app.scene_library_command(Command::Load(Selection::Preset(first)));
+        assert_eq!(
+            app.scenes.current().unwrap().display_name(),
+            "Velvet Lunar Drift"
+        );
+        assert_eq!(app.scene_macros.slots[0].name, None);
+        app.scene_library_command(Command::Save("Soft River Bloom".into()));
+        assert_eq!(
+            Presets::load(&dir).unwrap().entries.len(),
+            3,
+            "even an unchanged preset saves a new library entry"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn scene_library_write_failure_retains_existing_presets() {
         use crate::scenes::library::Command;
         let mut app = app();
@@ -3392,8 +3634,13 @@ mod workspace_interaction_tests {
             std::env::temp_dir().join(format!("symphos-scene-library-file-{}", std::process::id()));
         std::fs::write(&path, b"not a directory").unwrap();
         app.storage.dir = path.clone();
+        app.scenes.store(app.capture_scene());
+        let previous_name = app.scenes.current().unwrap().display_name();
+        let previous_preset = app.scenes.current().unwrap().preset.clone();
         app.scene_library_command(Command::Save("Cannot save here".into()));
         assert!(app.scene_library.presets.entries.is_empty());
+        assert_eq!(app.scenes.current().unwrap().display_name(), previous_name);
+        assert!(app.scenes.current().unwrap().preset == previous_preset);
         assert!(
             app.scene_library
                 .notice
@@ -3594,7 +3841,7 @@ fn audio_source_picker(
         // ComboBox::width is a minimum, not a maximum. Constrain the child UI
         // so long selected names truncate instead of moving the settings button.
         ui.set_width(180.0);
-        egui::ComboBox::from_id_salt("audio-source")
+        crate::dropdown::ComboBox::from_id_salt("audio-source")
             .width(180.0).height(300.0).truncate().selected_text(label)
             .show_ui(ui, |ui| {
                 ui.set_width(360.0);
@@ -3719,23 +3966,57 @@ fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool
     }
 }
 
+fn drawer_openness(ctx: &egui::Context, name: &str, open: bool) -> f32 {
+    // Symmetric easing keeps rapid reversals continuous. egui starts restored
+    // drawers at their saved endpoint and requests repaint only while moving.
+    ctx.animate_bool_with_time_and_easing(
+        egui::Id::new(("workspace-drawer", name)),
+        open,
+        DRAWER_ANIMATION_SECONDS,
+        |t| t * t * (3.0 - 2.0 * t),
+    )
+}
+
+fn drawer_dashboard_right(content: Rect, requested_width: f32, openness: f32) -> f32 {
+    egui::lerp(
+        (content.right() - 12.0)
+            ..=(content.right() - settings_width(content, requested_width) - 10.0),
+        openness,
+    )
+}
+
 fn workspace_layout(
     content: Rect,
     sidebar_open: bool,
     help_open: bool,
     requested_width: f32,
 ) -> WorkspaceLayout {
+    workspace_layout_animated(
+        content,
+        if sidebar_open { 1.0 } else { 0.0 },
+        help_open,
+        requested_width,
+    )
+}
+
+fn workspace_layout_animated(
+    content: Rect,
+    inspector_openness: f32,
+    help_open: bool,
+    requested_width: f32,
+) -> WorkspaceLayout {
     let settings_width = settings_width(content, requested_width);
-    let sidebar = sidebar_open.then(|| {
+    let sidebar = (inspector_openness > 0.0).then(|| {
         Rect::from_min_max(
             Pos2::new(content.right() - settings_width, content.top()),
             content.max,
         )
+        .translate(Vec2::new(settings_width * (1.0 - inspector_openness), 0.0))
     });
     let mut dashboard = Rect::from_min_max(
         content.min + Vec2::new(0.0, 12.0),
         Pos2::new(
-            sidebar.map_or(content.right() - 12.0, |rect| rect.left() - 10.0),
+            drawer_dashboard_right(content, requested_width, inspector_openness),
             content.bottom() - 50.0,
         ),
     );
@@ -4314,6 +4595,78 @@ mod layout_tests {
                     assert!(content.contains_rect(bar));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn drawer_motion_is_time_based_reversible_and_keeps_inspector_controls_full_width() {
+        for fps in [30, 60, 120] {
+            let ctx = egui::Context::default();
+            let content = Rect::from_min_max(Pos2::new(12.0, 40.0), Pos2::new(1200.0, 800.0));
+            let width = 320.0;
+            let mut time = 0.0;
+            let mut step = |open| {
+                time += 1.0 / f64::from(fps);
+                let mut openness = 0.0;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        predicted_dt: 1.0 / fps as f32,
+                        ..Default::default()
+                    },
+                    |ui| openness = drawer_openness(ui.ctx(), "inspector", open),
+                );
+                output.textures_delta.clear();
+                openness
+            };
+            assert_eq!(step(false), 0.0, "restored closed drawer stays closed");
+            let mut previous = 0.0;
+            for _ in 0..fps / 10 {
+                let p = step(true);
+                assert!(
+                    p > previous && p < 1.0,
+                    "opening must slide over several frames"
+                );
+                let layout = workspace_layout_animated(content, p, true, width);
+                let drawer = layout.sidebar.unwrap();
+                assert!(
+                    (drawer.width() - width).abs() < 0.001,
+                    "controls must not squeeze while sliding"
+                );
+                assert!(drawer.right() > content.right());
+                assert!(layout.dashboard.right() < drawer.left());
+                assert!(!layout.help.unwrap().intersects(drawer));
+                previous = p;
+            }
+            assert!(
+                (previous - 0.43).abs() < 0.07,
+                "same motion at every frame rate"
+            );
+            let reversed = step(false);
+            assert!(
+                reversed > 0.0 && reversed < previous,
+                "mid-slide close must reverse in place"
+            );
+            for _ in 0..fps {
+                step(false);
+            }
+            assert_eq!(step(false), 0.0);
+            assert!(
+                workspace_layout_animated(content, 0.0, false, width)
+                    .sidebar
+                    .is_none()
+            );
+            for _ in 0..fps {
+                step(true);
+            }
+            assert_eq!(step(true), 1.0);
+            assert_eq!(
+                workspace_layout_animated(content, 1.0, false, width)
+                    .sidebar
+                    .unwrap()
+                    .right(),
+                content.right()
+            );
         }
     }
 

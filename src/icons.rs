@@ -26,6 +26,7 @@ pub enum Icon {
     Restore,
     Close,
     Stereo,
+    #[cfg(feature = "development")]
     Settings,
     Surface,
     Lines,
@@ -34,8 +35,11 @@ pub enum Icon {
     Dots,
     Stems,
     Bars,
+    #[cfg(feature = "development")]
     Palette,
+    #[cfg(feature = "development")]
     Camera,
+    #[cfg(feature = "development")]
     Clock,
     AudioMappings,
 }
@@ -131,6 +135,7 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             line(&[(6.0, 2.0), (6.0, 8.0), (13.0, 8.0), (13.0, 2.0)]);
             line(&[(6.0, 18.0), (6.0, 12.0), (14.0, 12.0), (14.0, 18.0)]);
         }
+        #[cfg(feature = "development")]
         Icon::Palette => {
             painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
             for (x, y) in [(6.0, 5.0), (11.0, 4.0), (15.0, 8.0), (6.0, 11.0)] {
@@ -138,6 +143,7 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             }
             painter.circle_stroke(p(12.0, 14.0), 2.0, stroke);
         }
+        #[cfg(feature = "development")]
         Icon::Camera => {
             painter.rect_stroke(
                 Rect::from_min_max(p(2.0, 5.0), p(18.0, 17.0)),
@@ -148,6 +154,7 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_stroke(p(10.0, 11.0), 3.4, stroke);
             line(&[(5.0, 5.0), (6.0, 2.0), (12.0, 2.0), (14.0, 5.0)]);
         }
+        #[cfg(feature = "development")]
         Icon::Clock => {
             painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
             line(&[(10.0, 4.0), (10.0, 10.0), (14.0, 12.0)]);
@@ -428,6 +435,7 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_stroke(p(6.0, 10.0), 5.0, stroke);
             painter.circle_stroke(p(14.0, 10.0), 5.0, stroke);
         }
+        #[cfg(feature = "development")]
         Icon::Settings => {
             for (y, knob) in [(4.0, 6.0), (10.0, 14.0), (16.0, 8.0)] {
                 line(&[(2.0, y), (18.0, y)]);

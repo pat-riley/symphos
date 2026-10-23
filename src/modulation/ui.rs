@@ -115,7 +115,7 @@ impl Modulator {
             Source::label,
         );
         if r.target.layered() {
-            egui::ComboBox::from_id_salt("mapping-layer")
+            crate::dropdown::ComboBox::from_id_salt("mapping-layer")
                 .selected_text(if r.layer == 0 {
                     if r.source == Source::Band {
                         "All layers · auto bands".into()
@@ -236,7 +236,7 @@ pub(crate) fn combo<T: Copy + PartialEq>(
     name: impl Fn(T) -> &'static str,
 ) {
     crate::modules::property_row(ui, label, |ui| {
-        egui::ComboBox::from_id_salt(id)
+        crate::dropdown::ComboBox::from_id_salt(id)
             .selected_text(name(*value))
             .width(ui.available_width())
             .truncate()

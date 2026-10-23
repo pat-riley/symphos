@@ -5,8 +5,59 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Hide the macOS window title text beside the native window controls.
+
+- Scene navigation, preset name, Library and Save now form one continuous
+  toolbar with thin separators and softer theme-derived contrast.
+
+- Signals, insert editors and Macros now share the visualizer inspector skin,
+  pinned headers, spacing, aligned fields and flat disclosure groups without
+  tabs. Older signal inspectors show their processing groups in one scroll view.
+
+- Standardized every visualizer inspector on the Waterfall layout: pinned
+  identity/audio source, Geometry and Appearance tabs, Camera for 3D views,
+  flat property groups, compact dropdowns and a shared actions menu. Existing
+  parameter addresses and Signals processing remain available.
+- Shared axis/custom-axis orbit, sweeps, reversal, wobble, auto-pan, view buttons
+  and orientation navigators across 3D visualizers. Flux and Strata gain full
+  trackball/pan navigation and XYZ reference grids. Camera animation preserves
+  saved starting views and does not create preset edits or Undo transactions.
+
+- Component and inspector drawers now slide in and out with a smooth workspace
+  resize. Waterfall property tabs have a thin divider below the pinned header.
+
+- Fixed workspace recovery rejecting scenes linked to saved presets: change
+  fingerprints now use hexadecimal metadata instead of passing through numeric
+  parameter limits. Older numeric fingerprints remain readable, and invalid
+  parameter values still retain the previous good recovery file.
+
+- Unified dropdowns across visualizers, signals and settings with compact text,
+  panel-matched theme surfaces and flush selection rows. Waterfall images now
+  have explicit upload/replace and remove actions; an empty image slot persists
+  in scenes and presets without restoring the stock image automatically.
+
+- Expanded Waterfall auto-rotation with X/Y/Z or custom axes, continuous or
+  eased back-and-forth motion, sweep range, independent horizontal/vertical
+  wobble and rate, and motion restart. Animation preserves saved starting views
+  and stops at the visible pose when controlled manually.
+
+- Added image materials for 3D Waterfall with a bundled starter image, custom
+  PNG/JPEG/BMP import, frequency/time or frequency/level mapping, and horizontal
+  and vertical flips. Images travel with scenes and presets; Surface mode uses
+  GPU texture mapping, and the other styles inherit the image colors.
+
+- Prefill preset saves with fresh, memorable three-word names; activate each
+  saved preset in the scene bar, mark creative changes as `(edited)`, and retain
+  every save as a separate, searchable library entry.
+- Signal channels now use Audio, LFO and MIDI sources with ordered visual inserts,
+  built-in beat detection and compatible audio/control processors. Existing
+  detector channels and mappings migrate in place.
+
 ### Experimental signal input routing
 
+- Integrate System audio channels into the Signals mixer with live spectrum
+  previews, shared channel actions and inspector-based sketch connections;
+  remove the separate Modulation, Audio inputs and Sketch connections tabs.
 - Add manually created named audio inputs in Signals, sharing processed stereo
   waveform, spectrum and measurements across sketches and modulation detectors.
 - Add input gain, stereo/Mid/Side routing, high/low-pass filters, noise gate and

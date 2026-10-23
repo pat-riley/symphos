@@ -378,6 +378,7 @@ impl Resonance {
                     );
                 }
                 if ui.button("Reset camera").clicked() {
+                    s.auto_orbit = false;
                     s.yaw = -0.45;
                     s.elevation = 0.3;
                     s.roll = 0.35;

@@ -29,6 +29,7 @@ rtrb = "0.4.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0" }
 egui = { version = "0.36.1", features = ["serde"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Keep the API baseline compatible with Ubuntu 24.04's PipeWire 1.0 headers.

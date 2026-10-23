@@ -153,6 +153,7 @@ impl Spectrogram {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
+            self.history.data.settings.label_controls(ui);
             super::settings_group(ui, "Starting look", |ui| {
                 if let Some(look) = super::retro::look_controls(ui) {
                     self.apply_look(look);
@@ -184,7 +185,7 @@ impl Spectrogram {
                 ui.checkbox(&mut self.grid, "Grid")
                     .help_text("Overlay time and frequency reference divisions.");
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
-                "Show frequency and time labels. Note names are available under Frequency Range.",
+                "Show frequency and time labels. Note names are available under Appearance → Musical labels.",
             );
                 if ui
                     .add_enabled(

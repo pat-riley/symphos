@@ -130,6 +130,7 @@ impl Presets {
         self.entries.push(Scene {
             id,
             name: name.trim().into(),
+            preset: None,
             state,
             preview,
         });
@@ -187,9 +188,15 @@ pub struct Library {
     query: String,
     dialog: Option<Dialog>,
     focus_dialog: bool,
+    last_suggested_name: Option<String>,
     textures: HashMap<Selection, egui::TextureHandle>,
 }
 impl Library {
+    pub fn select_saved(&mut self, id: u64) {
+        self.preset_tab = true;
+        self.query.clear();
+        self.selection = Some(Selection::Preset(id));
+    }
     pub fn ensure_loaded(&mut self, dir: &Path) {
         if self.loaded {
             return;
@@ -218,14 +225,24 @@ impl Library {
     }
     pub fn open(&mut self, book: &Book) {
         self.open = true;
-        self.preset_tab = false;
         self.query.clear();
-        self.selection = Some(Selection::Scene(book.active_scene));
+        let preset = book.current().and_then(|s| {
+            s.preset.as_ref().and_then(|link| {
+                self.presets
+                    .entries
+                    .iter()
+                    .find(|p| p.id == link.id && p.name == s.name)
+            })
+        });
+        self.preset_tab = preset.is_some();
+        self.selection = Some(preset.map_or(Selection::Scene(book.active_scene), |p| {
+            Selection::Preset(p.id)
+        }));
     }
     pub fn save_dialog(&mut self, book: &Book) {
-        self.dialog = Some(Dialog::Save(
-            book.current().map_or("Scene preset", |s| &s.name).into(),
-        ));
+        let name = super::names::suggest(book, &self.presets, self.last_suggested_name.as_deref());
+        self.last_suggested_name = Some(name.clone());
+        self.dialog = Some(Dialog::Save(name));
         self.focus_dialog = true;
     }
     pub fn finish_dialog(&mut self) {
@@ -344,6 +361,53 @@ mod tests {
             selected_pane: 0,
             analysis: Default::default(),
         }
+    }
+
+    #[test]
+    fn save_dialog_prefills_three_words_regenerates_and_accepts_enter() {
+        let book = Book::new(state());
+        let mut library = Library::default();
+        library.save_dialog(&book);
+        let first = match &library.dialog {
+            Some(Dialog::Save(name)) => name.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(first.split_whitespace().count(), 3);
+        library
+            .presets
+            .insert(first.clone(), state(), None)
+            .unwrap();
+        library.finish_dialog();
+        library.save_dialog(&book);
+        let second = match &library.dialog {
+            Some(Dialog::Save(name)) => name.clone(),
+            _ => panic!(),
+        };
+        assert_ne!(first, second);
+        assert_eq!(second.split_whitespace().count(), 3);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            library.dialogs(ui.ctx());
+        });
+        out.textures_delta.clear();
+        let mut command = None;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                command = library.dialogs(ui.ctx());
+            },
+        );
+        out.textures_delta.clear();
+        assert!(matches!(command, Some(Command::Save(name)) if name == second));
     }
     #[test]
     fn presets_roundtrip_complete_scene_and_reject_corrupt_library_without_rewriting() {
