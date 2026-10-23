@@ -138,7 +138,14 @@ consume Undo history. CPU and GPU renderers retain their lenses and simulation
 state. All 3D views expose the same graphical axis navigator and six views;
 Flux and Strata also support free trackball rotation, pan and optional XYZ grids.
 Signals retain their separate processing rail.
-3D Rings wraps signed time-domain samples around each orbit. Its Geometry tab
+3D Rings wraps signed time-domain samples around each orbit. Geometry → Trace
+source selects Waveform (a fixed time window) or Oscilloscope (1–8 pitch-locked
+cycles, using the standalone scope’s normalized autocorrelation and rising zero
+crossing). Unpitched audio falls back to the adjustable time window; stereo rings
+share Left’s timing and retain their relative phase and amplitude. Pitch windows
+are cached per immutable audio buffer, channel, rate and capture epoch, and
+short cycles interpolate to the ring resolution. Existing presets retain Waveform.
+Its Geometry tab
 owns visual displacement, waveform visibility/detail, outline interpolation, and
 level-driven expansion. Visibility uses a bounded, shared stereo display boost
 with a quiet floor; the signed detail curve retains zero crossings. A separate

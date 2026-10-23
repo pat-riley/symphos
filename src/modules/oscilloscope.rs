@@ -483,57 +483,73 @@ impl Oscilloscope {
     }
 
     fn select_window(&self, signal: &[f32], sample_rate: u32) -> ScopeSelection {
-        let rate = sample_rate.max(1) as f32;
-        let pitch = (self.sync_mode == SyncMode::Pitch)
-            .then(|| estimate_period(signal, sample_rate))
-            .flatten();
-        let count = if let Some(estimate) = pitch {
+        if self.sync_mode == SyncMode::Pitch {
             let cycles = if self.cycle_mode == CycleMode::Single {
-                1.0
+                1
             } else {
-                self.cycles.clamp(2, 16) as f32
+                self.cycles.clamp(2, 16) as usize
             };
-            (estimate.period_samples * cycles).round() as usize + 1
-        } else {
-            (self.timebase_ms * rate / 1_000.0).round() as usize
+            return pitch_window(signal, sample_rate, cycles, self.timebase_ms);
         }
-        .clamp(2, signal.len().max(2))
-        .min(signal.len());
-        if count < 2 {
-            return ScopeSelection {
-                range: 0..signal.len(),
-                pitch,
-                triggered: false,
-            };
-        }
-        let latest_start = signal.len() - count;
-        let trigger = match self.sync_mode {
-            SyncMode::Pitch => Some((0.0, true)),
-            SyncMode::Trigger => Some((self.trigger_level, self.rising)),
-            SyncMode::Free => None,
-        };
-        let start = trigger
-            .and_then(|(level, rising)| find_crossing_before(signal, latest_start, level, rising))
-            .unwrap_or(latest_start);
-        ScopeSelection {
-            range: start..start + count,
+        let count = (self.timebase_ms * sample_rate.max(1) as f32 / 1_000.0).round() as usize;
+        let trigger =
+            (self.sync_mode == SyncMode::Trigger).then_some((self.trigger_level, self.rising));
+        aligned_window(signal, count, None, trigger)
+    }
+}
+
+/// Shared by the flat oscilloscope and the cycle-locked orbital trace.
+pub(super) fn pitch_window(
+    signal: &[f32],
+    sample_rate: u32,
+    cycles: usize,
+    fallback_ms: f32,
+) -> ScopeSelection {
+    let pitch = estimate_period(signal, sample_rate);
+    let count = if let Some(estimate) = pitch {
+        (estimate.period_samples * cycles.clamp(1, 16) as f32).round() as usize + 1
+    } else {
+        (fallback_ms * sample_rate.max(1) as f32 / 1_000.0).round() as usize
+    };
+    aligned_window(signal, count, pitch, Some((0.0, true)))
+}
+
+fn aligned_window(
+    signal: &[f32],
+    count: usize,
+    pitch: Option<PitchEstimate>,
+    trigger: Option<(f32, bool)>,
+) -> ScopeSelection {
+    let count = count.clamp(2, signal.len().max(2)).min(signal.len());
+    if count < 2 {
+        return ScopeSelection {
+            range: 0..signal.len(),
             pitch,
-            triggered: trigger.is_some() && start != latest_start,
-        }
+            triggered: false,
+        };
+    }
+    let latest_start = signal.len() - count;
+    let start = trigger
+        .and_then(|(level, rising)| find_crossing_before(signal, latest_start, level, rising))
+        .unwrap_or(latest_start);
+    ScopeSelection {
+        range: start..start + count,
+        pitch,
+        triggered: trigger.is_some() && start != latest_start,
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct PitchEstimate {
+pub(super) struct PitchEstimate {
     period_samples: f32,
-    frequency_hz: f32,
+    pub(super) frequency_hz: f32,
     confidence: f32,
 }
 
 #[derive(Clone, Debug)]
-struct ScopeSelection {
-    range: Range<usize>,
-    pitch: Option<PitchEstimate>,
+pub(super) struct ScopeSelection {
+    pub(super) range: Range<usize>,
+    pub(super) pitch: Option<PitchEstimate>,
     triggered: bool,
 }
 
@@ -584,7 +600,7 @@ fn estimate_period(samples: &[f32], sample_rate: u32) -> Option<PitchEstimate> {
         .iter_mut()
         .enumerate()
         .take(max_lag + 1)
-        .skip(min_lag)
+        .skip(min_lag - 1)
     {
         let (mut cross, mut left_energy, mut right_energy) = (0.0_f64, 0.0_f64, 0.0_f64);
         for index in lag..reduced.len() {
@@ -607,30 +623,38 @@ fn estimate_period(samples: &[f32], sample_rate: u32) -> Option<PitchEstimate> {
     if best < 0.55 {
         return None;
     }
+    let refined_peak = |lag: usize| {
+        let peak = correlations[lag];
+        if lag < min_lag || lag >= max_lag {
+            return (0.0, peak);
+        }
+        let before = correlations[lag - 1];
+        let after = correlations[lag + 1];
+        let curvature = before - 2.0 * peak + after;
+        let offset = if curvature.abs() > 1.0e-6 {
+            (0.5 * (before - after) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        (offset, peak - 0.25 * (before - after) * offset)
+    };
     let threshold = (best * 0.9).max(0.55);
-    let lag = (min_lag + 1..max_lag)
+    let lag = (min_lag..max_lag)
         .find(|&lag| {
-            correlations[lag] >= threshold
+            // Compare interpolated peaks too: near the upper frequency limit,
+            // a period between integer lags otherwise loses to its octave.
+            correlations[lag] >= 0.55
                 && correlations[lag] >= correlations[lag - 1]
                 && correlations[lag] >= correlations[lag + 1]
+                && refined_peak(lag).1 >= threshold
         })
         .unwrap_or(best_lag);
-    let (before, peak, after) = (
-        correlations[lag - 1],
-        correlations[lag],
-        correlations[lag + 1],
-    );
-    let curvature = before - 2.0 * peak + after;
-    let offset = if curvature.abs() > 1.0e-6 {
-        (0.5 * (before - after) / curvature).clamp(-0.5, 0.5)
-    } else {
-        0.0
-    };
+    let (offset, confidence) = refined_peak(lag);
     let period_samples = (lag as f32 + offset) * step as f32;
     Some(PitchEstimate {
         period_samples,
         frequency_hz: sample_rate as f32 / period_samples,
-        confidence: peak.clamp(0.0, 1.0),
+        confidence: confidence.clamp(0.0, 1.0),
     })
 }
 
@@ -921,7 +945,7 @@ mod tests {
 
     #[test]
     fn pitch_follow_estimates_known_tones_and_rejects_silence() {
-        for frequency in [55.0, 110.0, 440.0, 1_200.0] {
+        for frequency in [30.0, 55.0, 110.0, 440.0, 1_200.0, 2_000.0] {
             let estimate = estimate_period(&sine(frequency, 48_000, 0.5), 48_000).unwrap();
             assert!((estimate.frequency_hz - frequency).abs() / frequency < 0.025);
             assert!(estimate.confidence > 0.8);

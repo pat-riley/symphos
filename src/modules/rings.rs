@@ -2,13 +2,15 @@
 use super::{
     Palette,
     camera_gizmo::{self, Axis},
-    label, settings_group, settings_panel, trackball,
+    label,
+    oscilloscope::{self, ScopeSelection},
+    settings_group, settings_panel, trackball,
     waterfall::mesh_segment,
     waveform::{WaveformChannel, capture_window},
 };
 use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, theme::AppTheme};
 use egui::{self, Color32, Pos2, Rect, Sense, Vec2};
-use std::{f32::consts::TAU, time::Instant};
+use std::{f32::consts::TAU, sync::Arc, time::Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Arrangement {
@@ -32,6 +34,20 @@ enum ColorBy {
     Position,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum TraceSource {
+    Waveform,
+    Oscilloscope,
+}
+impl TraceSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Waveform => "Waveform",
+            Self::Oscilloscope => "Oscilloscope",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct RingsSettings {
@@ -50,6 +66,8 @@ pub(crate) struct RingsSettings {
     channel: WaveformChannel,
     stereo: bool,
     window_ms: f32,
+    trace_source: TraceSource,
+    scope_cycles: usize,
     trigger: bool,
     rising: bool,
     threshold: f32,
@@ -105,6 +123,8 @@ impl Default for RingsSettings {
             channel: WaveformChannel::Mid,
             stereo: true,
             window_ms: 45.0,
+            trace_source: TraceSource::Waveform,
+            scope_cycles: 3,
             trigger: true,
             rising: true,
             threshold: 0.0,
@@ -149,11 +169,71 @@ pub struct Rings {
     settings: RingsSettings,
     waves: [Vec<f32>; 4],
     levels: [f32; 4],
+    trace_source: Option<TraceSource>,
+    scope_cache: Option<ScopeCache>,
     last_draw: Option<Instant>,
     epoch: Option<u64>,
     orbit_phase: f32,
     spin_phase: f32,
 }
+// Immutable snapshots let a paused pane / repeated repaint reuse its pitch
+// estimate. Retaining the Arcs also prevents pointer reuse from hiding a change.
+struct ScopeCache {
+    left: Arc<[f32]>,
+    right: Arc<[f32]>,
+    sample_rate: u32,
+    epoch: u64,
+    channel: WaveformChannel,
+    cycles: usize,
+    fallback_ms: f32,
+    selection: ScopeSelection,
+}
+impl ScopeCache {
+    fn matches(
+        &self,
+        frame: &AnalysisFrame,
+        settings: &RingsSettings,
+        channel: WaveformChannel,
+    ) -> bool {
+        Arc::ptr_eq(&self.left, &frame.waveform_left)
+            && Arc::ptr_eq(&self.right, &frame.waveform_right)
+            && self.sample_rate == frame.sample_rate
+            && self.epoch == frame.capture_epoch
+            && self.channel == channel
+            && self.cycles == settings.scope_cycles
+            && self.fallback_ms == settings.window_ms
+    }
+    fn new(frame: &AnalysisFrame, settings: &RingsSettings, channel: WaveformChannel) -> Self {
+        let len = frame.waveform_left.len().min(frame.waveform_right.len());
+        let mixed;
+        let samples = match channel {
+            WaveformChannel::Left => &frame.waveform_left[..len],
+            WaveformChannel::Right => &frame.waveform_right[..len],
+            WaveformChannel::Mid | WaveformChannel::Side => {
+                mixed = (0..len)
+                    .map(|index| channel.sample(frame, index))
+                    .collect::<Vec<_>>();
+                &mixed
+            }
+        };
+        Self {
+            left: frame.waveform_left.clone(),
+            right: frame.waveform_right.clone(),
+            sample_rate: frame.sample_rate,
+            epoch: frame.capture_epoch,
+            channel,
+            cycles: settings.scope_cycles,
+            fallback_ms: settings.window_ms,
+            selection: oscilloscope::pitch_window(
+                samples,
+                frame.sample_rate,
+                settings.scope_cycles,
+                settings.window_ms.clamp(10.0, 500.0),
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Vertex {
     position: Pos2,
@@ -173,6 +253,8 @@ impl Rings {
     pub fn clear(&mut self) {
         self.waves = Default::default();
         self.levels = [0.0; 4];
+        self.trace_source = None;
+        self.scope_cache = None;
         self.last_draw = None;
         self.epoch = None;
         self.orbit_phase = 0.0;
@@ -191,6 +273,33 @@ impl Rings {
             };
         }
         settings_panel(ui, "Geometry", |ui| {
+            settings_group(ui, "Trace source", |ui| {
+                super::property_row(ui, "Mode", |ui| {
+                    super::properties_combo("rings-trace-source", ui.available_width(), 2)
+                        .selected_text(s.trace_source.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [TraceSource::Waveform, TraceSource::Oscilloscope] {
+                                ui.selectable_value(&mut s.trace_source, mode, mode.label());
+                            }
+                        });
+                });
+                match s.trace_source {
+                    TraceSource::Waveform => {
+                        ui.small("Wrap a time window of live audio around each ring.");
+                    }
+                    TraceSource::Oscilloscope => {
+                        p!(
+                            scope_cycles,
+                            1..=8,
+                            3,
+                            "Cycles / ring",
+                            "Pitch-following cycles around each ring, before Waveform repeats. Uses the same 30 Hz–2 kHz pitch lock as Oscilloscope; unpitched audio uses the fallback window. Stereo rings share the Left channel's timing.",
+                            ui
+                        );
+                        ui.small("Follow pitch and align cycles to a rising zero crossing.");
+                    }
+                }
+            });
             settings_group(ui, "Ring arrangement", |ui| {
                 super::properties_combo("rings-arrangement", 180.0, 3)
                     .selected_text(s.arrangement.label())
@@ -389,9 +498,9 @@ impl Rings {
                     Parameter::new(&mut s.window_ms, 10.0..=500.0, 45.0)
                         .key("window_ms")
                         .logarithmic(true)
-                        .text("Window ms"),
+                        .text(if s.trace_source == TraceSource::Oscilloscope { "Fallback window ms" } else { "Window ms" }),
                 )
-                .help_text("Audio duration around one ring, independent of the FFT size.");
+                .help_text("Audio duration around one ring in Waveform mode, or the fallback when Oscilloscope cannot detect a stable pitch. Independent of the FFT size.");
                 p!(
                     repeats,
                     1..=8,
@@ -409,23 +518,25 @@ impl Rings {
                     ui
                 );
             });
-            settings_group(ui, "Trigger", |ui| {
-                ui.checkbox(&mut s.trigger, "Stabilize repeating signals");
-                ui.add_enabled_ui(s.trigger, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut s.rising, true, "Rising");
-                        ui.selectable_value(&mut s.rising, false, "Falling");
+            if s.trace_source == TraceSource::Waveform {
+                settings_group(ui, "Trigger", |ui| {
+                    ui.checkbox(&mut s.trigger, "Stabilize repeating signals");
+                    ui.add_enabled_ui(s.trigger, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut s.rising, true, "Rising");
+                            ui.selectable_value(&mut s.rising, false, "Falling");
+                        });
+                        p!(
+                            threshold,
+                            -1.0..=1.0,
+                            0.0,
+                            "Threshold",
+                            "Crossing level in original sample amplitude; stereo rings remain aligned.",
+                            ui
+                        );
                     });
-                    p!(
-                        threshold,
-                        -1.0..=1.0,
-                        0.0,
-                        "Threshold",
-                        "Crossing level in original sample amplitude; stereo rings remain aligned.",
-                        ui
-                    );
                 });
-            });
+            }
         });
         settings_panel(ui, "Signal Response", |ui| {
             settings_group(ui, "Amplitude", |ui| {
@@ -585,8 +696,13 @@ impl Rings {
             self.waves = Default::default();
             self.levels = [0.0; 4];
             self.epoch = Some(frame.capture_epoch);
+            self.scope_cache = None;
         }
         let s = &self.settings;
+        if self.trace_source != Some(s.trace_source) {
+            self.waves = Default::default();
+            self.trace_source = Some(s.trace_source);
+        }
         self.orbit_phase = (self.orbit_phase + dt * s.motion_speed.clamp(-90.0, 90.0).to_radians())
             .rem_euclid(TAU);
         self.spin_phase =
@@ -596,14 +712,29 @@ impl Rings {
         } else {
             s.channel
         };
-        let (window, _) = capture_window(
-            frame,
-            s.window_ms.clamp(10.0, 500.0),
-            channel,
-            s.trigger,
-            s.rising,
-            s.threshold,
-        );
+        let window = match s.trace_source {
+            TraceSource::Waveform => {
+                capture_window(
+                    frame,
+                    s.window_ms.clamp(10.0, 500.0),
+                    channel,
+                    s.trigger,
+                    s.rising,
+                    s.threshold,
+                )
+                .0
+            }
+            TraceSource::Oscilloscope => {
+                if self
+                    .scope_cache
+                    .as_ref()
+                    .is_none_or(|cache| !cache.matches(frame, s, channel))
+                {
+                    self.scope_cache = Some(ScopeCache::new(frame, s, channel));
+                }
+                self.scope_cache.as_ref().unwrap().selection.range.clone()
+            }
+        };
         let count = s.resolution.clamp(128, 2048);
         let alpha = if s.smoothing_ms <= 0.0 {
             1.0
@@ -621,7 +752,23 @@ impl Rings {
                     .max(a + 1)
                     .min(window.end);
                 let mut peak = 0.0_f32;
-                if live {
+                if live
+                    && s.trace_source == TraceSource::Oscilloscope
+                    && window.len() > 1
+                    && window.len() < count
+                {
+                    let position = i as f32 * (window.len() - 1) as f32 / (count - 1) as f32;
+                    let index = position.floor() as usize;
+                    let first = channel.sample(frame, window.start + index);
+                    let second =
+                        channel.sample(frame, (window.start + index + 1).min(window.end - 1));
+                    let value = first + (second - first) * position.fract();
+                    if value.is_finite() {
+                        peak = value.clamp(-16.0, 16.0);
+                        power += peak * peak;
+                        samples += 1;
+                    }
+                } else if live {
                     for index in a..b {
                         let value = channel.sample(frame, index);
                         if value.is_finite() {
@@ -958,7 +1105,25 @@ impl Rings {
             label(
                 &painter,
                 rect.left_top() + Vec2::new(12.0, 10.0),
-                "ORBITAL WAVEFORMS · SIGNED AUDIO AMPLITUDE",
+                match self.settings.trace_source {
+                    TraceSource::Waveform => {
+                        "ORBITAL WAVEFORMS · SIGNED AUDIO AMPLITUDE".to_owned()
+                    }
+                    TraceSource::Oscilloscope => self
+                        .scope_cache
+                        .as_ref()
+                        .and_then(|cache| cache.selection.pitch)
+                        .map_or_else(
+                            || "ORBITAL OSCILLOSCOPE · PITCH UNLOCKED · WINDOW FALLBACK".to_owned(),
+                            |pitch| {
+                                format!(
+                                    "ORBITAL OSCILLOSCOPE · {:.1} Hz · {} CYCLES",
+                                    pitch.frequency_hz,
+                                    self.settings.scope_cycles.clamp(1, 16)
+                                )
+                            },
+                        ),
+                },
                 theme.muted,
             );
             label(
@@ -1035,6 +1200,179 @@ mod tests {
         rings.settings.waveform_detail = 0.0;
         rings.settings.pulse_amount = 0.0;
         rings
+    }
+
+    fn tone(frequency: f32, sample_rate: u32) -> AnalysisFrame {
+        let left: Arc<[f32]> = (0..sample_rate / 2)
+            .map(|i| 0.4 * (TAU * frequency * i as f32 / sample_rate as f32).sin())
+            .collect();
+        AnalysisFrame {
+            sample_rate,
+            waveform_right: left.iter().map(|v| -v * 0.5).collect(),
+            waveform_left: left,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn oscilloscope_follows_cycles_and_preserves_stereo_phase_and_level() {
+        for rate in [44_100, 48_000, 96_000] {
+            for hz in [30.0, 110.0, 440.0, 2000.0] {
+                let frame = tone(hz, rate);
+                let mut rings = direct();
+                rings.settings.trace_source = TraceSource::Oscilloscope;
+                rings.settings.scope_cycles = 1;
+                rings.update(&frame, Instant::now(), true);
+                let selection = &rings.scope_cache.as_ref().unwrap().selection;
+                let pitch = selection.pitch.unwrap();
+                assert!(
+                    (pitch.frequency_hz - hz).abs() / hz < 0.03,
+                    "{rate}: {hz} vs {}",
+                    pitch.frequency_hz
+                );
+                assert!((selection.range.len() as f32 - rate as f32 / hz - 1.0).abs() < 3.0);
+                assert!(selection.range.start > 0);
+                assert!(frame.waveform_left[selection.range.start - 1] < 0.0);
+                assert!(frame.waveform_left[selection.range.start] >= 0.0);
+                for (&left, &right) in rings.waves[0].iter().zip(&rings.waves[1]) {
+                    assert!((right + left * 0.5).abs() < 1e-5);
+                }
+                // One cycle remains a recognizable signed shape, even when
+                // there are fewer captured samples than ring vertices.
+                assert!(rings.wave(0, 0.25, 1.0) > 0.35);
+                assert!(rings.wave(0, 0.75, 1.0) < -0.35);
+                let mesh = rings.build_mesh(rect(), &AppTheme::default());
+                assert!(!mesh.vertices.is_empty());
+                assert!(mesh.vertices.iter().all(|v| v.pos.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn mode_switch_and_scope_changes_use_the_current_routed_audio() {
+        let now = Instant::now();
+        let frame = tone(220.0, 48_000);
+        let mut rings = direct();
+        rings.update(&frame, now, true);
+        let waveform = rings.waves.clone();
+        rings.settings.trace_source = TraceSource::Oscilloscope;
+        rings.update(&frame, now, true);
+        assert_ne!(waveform, rings.waves);
+        assert_eq!(frame.waveform_left.len(), 24_000);
+        let old_window = rings.scope_cache.as_ref().unwrap().selection.range.clone();
+        rings.settings.scope_cycles = 6;
+        rings.update(&frame, now, true);
+        assert!(rings.scope_cache.as_ref().unwrap().selection.range.len() > old_window.len());
+        let changed = tone(440.0, 48_000); // Same sequence and epoch, different routed samples.
+        rings.update(&changed, now, true);
+        let cache = rings.scope_cache.as_ref().unwrap();
+        assert!(cache.matches(&changed, &rings.settings, WaveformChannel::Left));
+        assert!(!cache.matches(&frame, &rings.settings, WaveformChannel::Left));
+        assert!((cache.selection.pitch.unwrap().frequency_hz - 440.0).abs() < 2.0);
+        rings.settings.trace_source = TraceSource::Waveform;
+        rings.update(&frame, now, true);
+        assert_eq!(waveform, rings.waves);
+    }
+
+    #[test]
+    fn unpitched_empty_and_invalid_scope_inputs_fall_back_safely() {
+        for len in [0, 1, 512, 24_000] {
+            for value in [0.0, 0.1, f32::NAN, f32::INFINITY] {
+                let frame = AnalysisFrame {
+                    sample_rate: 48_000,
+                    waveform_left: vec![value; len].into(),
+                    waveform_right: vec![value; len / 2].into(),
+                    ..Default::default()
+                };
+                let mut rings = direct();
+                rings.settings.trace_source = TraceSource::Oscilloscope;
+                rings.update(&frame, Instant::now(), true);
+                let selection = &rings.scope_cache.as_ref().unwrap().selection;
+                assert!(selection.pitch.is_none());
+                assert_eq!(selection.range.len(), (len / 2).min(3840));
+                assert!(rings.waves.iter().flatten().all(|v| v.is_finite()));
+            }
+        }
+        let mut rings = direct();
+        rings.settings.trace_source = TraceSource::Oscilloscope;
+        rings.update(&tone(440.0, 48_000), Instant::now(), false);
+        assert!(rings.waves.iter().flatten().all(|v| *v == 0.0));
+        rings.clear();
+        assert!(rings.scope_cache.is_none());
+    }
+
+    #[test]
+    fn geometry_mode_picker_exposes_scope_cycles_and_hides_waveform_trigger() {
+        let ctx = egui::Context::default();
+        let mut pane = super::super::ModulePane::new(super::super::ModuleKind::Rings);
+        pane.select_inspector_section(super::super::SettingsSection::Geometry);
+        let render = |pane: &mut super::super::ModulePane, events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(440.0, 1200.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| pane.inspector_controls(ui, &AnalysisFrame::default()),
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let text_position = |out: &egui::FullOutput, needle: &str| {
+            out.shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == needle => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {needle}"))
+        };
+        let click = |pane: &mut super::super::ModulePane, pos| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            render(pane, vec![egui::Event::PointerMoved(pos), button(true)]);
+            render(pane, vec![button(false)])
+        };
+        render(&mut pane, vec![]);
+        let initial = render(&mut pane, vec![]);
+        let pos = text_position(&initial, "Waveform");
+        click(&mut pane, pos);
+        let menu = render(&mut pane, vec![]);
+        let pos = text_position(&menu, "Oscilloscope");
+        click(&mut pane, pos);
+        let out = render(&mut pane, vec![]);
+        assert_eq!(pane.rings.settings.trace_source, TraceSource::Oscilloscope);
+        text_position(&out, "Cycles / ring");
+        assert!(!out.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.job.text == "Stabilize repeating signals")));
+    }
+
+    #[test]
+    fn scope_settings_save_and_old_presets_keep_waveform_mode() {
+        let mut settings = RingsSettings {
+            trace_source: TraceSource::Oscilloscope,
+            scope_cycles: 5,
+            ..Default::default()
+        };
+        let mut value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RingsSettings>(value.clone()).unwrap(),
+            settings
+        );
+        for key in ["trace_source", "scope_cycles"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        settings.trace_source = TraceSource::Waveform;
+        settings.scope_cycles = 3;
+        assert_eq!(
+            serde_json::from_value::<RingsSettings>(value).unwrap(),
+            settings
+        );
     }
 
     #[test]
@@ -1341,18 +1679,22 @@ mod tests {
     #[test]
     #[ignore = "manual CPU timing for default 3D Rings waveform update and mesh generation"]
     fn benchmark_audio_reactive_rings() {
-        let frame = audio();
         let theme = AppTheme::default();
         let start = Instant::now();
-        for enhanced in [false, true] {
+        for (mode, fresh) in [
+            (TraceSource::Waveform, true),
+            (TraceSource::Oscilloscope, true),
+            (TraceSource::Oscilloscope, false),
+        ] {
             let mut rings = Rings::default();
-            if !enhanced {
-                rings.settings.waveform_visibility = 0.0;
-                rings.settings.waveform_detail = 0.0;
-                rings.settings.pulse_amount = 0.0;
-            }
+            rings.settings.trace_source = mode;
+            let mut frame = tone(110.0, 48_000);
             let mut timings = Vec::new();
             for i in 0..180 {
+                if fresh {
+                    frame.waveform_left = frame.waveform_left.to_vec().into();
+                    frame.waveform_right = frame.waveform_right.to_vec().into();
+                }
                 let began = Instant::now();
                 rings.update(
                     &frame,
@@ -1366,7 +1708,7 @@ mod tests {
             }
             timings.sort();
             eprintln!(
-                "3D Rings, 4 × 768 samples, enhanced={enhanced}: CPU median {:?}, p95 {:?}",
+                "3D Rings, 4 × 768, 48 kHz, {mode:?}, fresh={fresh}: CPU median {:?}, p95 {:?}",
                 timings[timings.len() / 2],
                 timings[timings.len() * 95 / 100]
             );
