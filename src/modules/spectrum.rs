@@ -352,7 +352,15 @@ impl Spectrum {
         }
         self.refresh_reference(frame.sample_rate);
         let painter = ui.painter_at(rect);
-        if self.appearance.black_background {
+        if self.appearance.black_background
+            && ui
+                .data(|d| {
+                    d.get_temp::<crate::background::Background>(egui::Id::new(
+                        crate::background::CONTEXT,
+                    ))
+                })
+                .is_none()
+        {
             painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
         }
         let plot = Rect::from_min_max(

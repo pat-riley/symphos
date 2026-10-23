@@ -1,6 +1,7 @@
 mod analysis;
 mod app;
 mod audio;
+mod background;
 mod capture_history;
 mod colors;
 #[cfg(feature = "development")]

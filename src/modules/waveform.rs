@@ -384,7 +384,15 @@ impl Waveform {
         live: bool,
     ) {
         let painter = ui.painter_at(rect);
-        if self.appearance.black_background {
+        if self.appearance.black_background
+            && ui
+                .data(|d| {
+                    d.get_temp::<crate::background::Background>(egui::Id::new(
+                        crate::background::CONTEXT,
+                    ))
+                })
+                .is_none()
+        {
             painter.rect_filled(rect, 0.0, Color32::BLACK);
         }
         let plot = rect.shrink2(Vec2::new(10.0, if self.labels { 22.0 } else { 10.0 }));

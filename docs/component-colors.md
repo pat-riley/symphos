@@ -17,6 +17,16 @@ Signals, inserts, and Macros use this same inspector skin and pinned identity
 header, without tabs. Their properties scroll through full-width collapsible
 groups; values and source pickers share the same column alignment and field sizes.
 
+## Scene background
+
+The first group in **Appearance** sets the background for every sketch in the
+current scene. Choose Black (the default), Solid color, Linear gradient, or
+Radial gradient. Gradients expose two color swatches; linear gradients also
+have an angle (0° left to right, 90° top to bottom). This setting is independent
+of the application theme and travels with scenes, full-view presets, project
+files, recovery and recordings. Component-only presets leave it unchanged.
+Milkdrop presets paint their own opaque full-frame canvas and keep that behavior.
+
 ## Palette browser
 
 Choose **Appearance**, then open **Palette**. There are twenty

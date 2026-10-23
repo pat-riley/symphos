@@ -53,6 +53,7 @@ struct RasterKey {
     appearance: Appearance,
     settings: FrequencySettings,
     theme: AppTheme,
+    background: Option<crate::background::Background>,
 }
 
 module_settings!(Spectrogram, SpectrogramSettings, {
@@ -201,7 +202,16 @@ impl Spectrogram {
         });
     }
 
+    #[cfg(test)]
     fn image(&self, now: Instant, theme: &AppTheme) -> egui::ColorImage {
+        self.image_on_canvas(now, theme, None)
+    }
+    fn image_on_canvas(
+        &self,
+        now: Instant,
+        theme: &AppTheme,
+        canvas: Option<crate::background::Background>,
+    ) -> egui::ColorImage {
         let times = self.time_pixels.clamp(64, 1024);
         let bands = self.frequency_pixels.clamp(24, BANDS);
         let [width, height] = if self.vertical {
@@ -214,7 +224,17 @@ impl Spectrogram {
         } else {
             theme.background
         };
-        let mut pixels = vec![background; width * height];
+        let sample = |x: usize, y: usize| {
+            canvas.map_or(background, |c| {
+                c.sample([
+                    x as f32 / (width - 1) as f32,
+                    y as f32 / (height - 1) as f32,
+                ])
+            })
+        };
+        let mut pixels = (0..width * height)
+            .map(|i| sample(i % width, i / width))
+            .collect::<Vec<_>>();
         for time in 0..times {
             let age = self.seconds * (1.0 - time as f32 / (times - 1) as f32);
             if let Some(levels) = self.history.sample(now, age) {
@@ -225,6 +245,11 @@ impl Spectrogram {
                         .iter()
                         .copied()
                         .fold(-120.0_f32, f32::max);
+                    let (x, y) = if self.vertical {
+                        (band, time)
+                    } else {
+                        (time, bands - band - 1)
+                    };
                     let color = self.appearance.color(
                         [
                             self.history.data.settings.intensity(db),
@@ -234,13 +259,8 @@ impl Spectrogram {
                         self.palette,
                         self.contrast,
                         theme,
-                        background,
+                        sample(x, y),
                     );
-                    let (x, y) = if self.vertical {
-                        (band, time)
-                    } else {
-                        (time, bands - band - 1)
-                    };
                     pixels[y * width + x] = color;
                 }
             }
@@ -265,7 +285,11 @@ impl Spectrogram {
         }
         let ModuleRenderState { live, frozen } = render_state;
         self.history.update(frame, now, live);
+        let canvas = ui.data(|d| {
+            d.get_temp::<crate::background::Background>(egui::Id::new(crate::background::CONTEXT))
+        });
         let key = RasterKey {
+            background: canvas,
             newest: self.history.rows.back().map(|row| (row.sequence, row.time)),
             oldest: self.history.rows.front().map(|row| row.time),
             time_cell: self.history.rows.back().map_or(0, |row| {
@@ -285,7 +309,7 @@ impl Spectrogram {
             theme: theme.clone(),
         };
         if self.raster_key.as_ref() != Some(&key) {
-            let image = self.image(now, theme);
+            let image = self.image_on_canvas(now, theme, canvas);
             let options =
                 if self.smooth && self.appearance.texture.finish == super::retro::Finish::Smooth {
                     egui::TextureOptions::LINEAR
@@ -305,7 +329,7 @@ impl Spectrogram {
             self.raster_key = Some(key);
         }
         let painter = ui.painter_at(rect);
-        if self.appearance.texture.black_background {
+        if self.appearance.texture.black_background && canvas.is_none() {
             painter.rect_filled(rect, 0.0, Color32::BLACK);
         }
         let plot = Rect::from_min_max(

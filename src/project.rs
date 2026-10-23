@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneState {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::background::Background::is_default"
+    )]
+    pub background: crate::background::Background,
     #[serde(default)]
     pub macros: Option<crate::macros::scene::SceneMacros>,
     pub signals: Bank,
@@ -51,6 +56,7 @@ impl SceneState {
 
     pub fn capture(session: Session) -> Self {
         Self {
+            background: session.background,
             macros: Some(session.macros.unwrap_or_else(|| {
                 crate::macros::scene::SceneMacros::from_legacy(
                     &session.panes,
@@ -66,6 +72,7 @@ impl SceneState {
     }
     pub fn validate(&self) -> bool {
         let session = Session {
+            background: self.background,
             render_fps: 60,
             macros: self.macros.clone(),
             project_path: None,
@@ -398,6 +405,7 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
                 .map(|id| session.panes[*id].clone())
                 .collect();
             PresetContent::View {
+                background: session.background,
                 macros: session
                     .macros
                     .as_ref()
@@ -508,6 +516,7 @@ mod tests {
         let mut pane = crate::modules::ModulePane::new(crate::modules::ModuleKind::Waterfall);
         pane.audio_input = Connection::Input(id);
         let original = PresetContent::View {
+            background: Default::default(),
             layout: Tile::Pane(0),
             panes: vec![pane.snapshot()],
             macros: None,
@@ -550,6 +559,7 @@ mod tests {
         let restored: SceneState = serde_json::from_slice(&saved).unwrap();
         assert!(scene == restored);
         let mut content = PresetContent::View {
+            background: scene.background,
             panes: scene.panes.clone(),
             layout: Tile::Pane(0),
             macros: None,
@@ -576,6 +586,38 @@ mod tests {
         };
         assert_eq!(panes[0].audio_input, Connection::Off);
     }
+    #[test]
+    fn scene_background_roundtrips_and_legacy_scenes_default_to_black() {
+        let mut scene = example();
+        let fingerprint = scene.creative_fingerprint();
+        let original = serde_json::to_value(&scene).unwrap();
+        assert!(original.get("background").is_none());
+        assert!(
+            serde_json::from_value::<SceneState>(original)
+                .unwrap()
+                .background
+                .is_default()
+        );
+        scene.background = crate::background::Background {
+            mode: crate::background::Mode::Radial,
+            start: [20, 40, 80],
+            end: [200, 100, 70],
+            angle: 30.0,
+        };
+        assert!(scene.validate());
+        let restored: SceneState =
+            serde_json::from_slice(&serde_json::to_vec(&scene).unwrap()).unwrap();
+        assert_eq!(restored.background, scene.background);
+        assert_eq!(
+            restored.creative_fingerprint(),
+            scene.creative_fingerprint()
+        );
+        let mut invalid = scene.clone();
+        invalid.background.angle = 361.0;
+        assert!(!invalid.validate());
+        assert_ne!(scene.creative_fingerprint(), fingerprint);
+    }
+
     fn example() -> SceneState {
         let mut pane = ModulePane::new(ModuleKind::Flux);
         let mut signals = Bank::default();
@@ -587,6 +629,7 @@ mod tests {
         }
         pane.paste_settings(&settings);
         SceneState {
+            background: Default::default(),
             macros: None,
             signals,
             panes: vec![pane.snapshot()],
@@ -722,6 +765,7 @@ mod tests {
             pane.paste_settings(&s);
         }
         let mut session = Session {
+            background: Default::default(),
             render_fps: 60,
             macros: None,
             project_path: None,

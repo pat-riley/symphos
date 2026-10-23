@@ -315,8 +315,10 @@ impl Resonance {
                 );
                 ui.checkbox(&mut s.reverse, "Reverse colors")
                     .help_text("Reverse the palette direction.");
-                ui.checkbox(&mut s.black_canvas, "Black canvas")
-                    .help_text("Use a black canvas independently of the GUI theme.");
+                if !crate::modules::flat_inspector(ui) {
+                    ui.checkbox(&mut s.black_canvas, "Black canvas")
+                        .help_text("Use a black canvas independently of the GUI theme.");
+                }
             });
             settings_group(ui, "Guides", |ui| {
                 ui.checkbox(&mut s.guides, "Labels & navigation hints");

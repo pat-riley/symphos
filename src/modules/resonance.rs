@@ -309,7 +309,15 @@ impl Resonance {
         }
         self.update(frame, now, live);
         let painter = ui.painter_at(rect);
-        if self.settings.black_canvas {
+        if self.settings.black_canvas
+            && ui
+                .data(|d| {
+                    d.get_temp::<crate::background::Background>(egui::Id::new(
+                        crate::background::CONTEXT,
+                    ))
+                })
+                .is_none()
+        {
             painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
         }
         let scene = painter.add(egui::Shape::Noop);

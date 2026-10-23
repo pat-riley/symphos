@@ -171,6 +171,7 @@ impl SymphosApp {
             self.scenes = Arc::unwrap_or_clone(snapshot.scenes);
         }
         let mut state = snapshot.current;
+        self.background = state.background;
         let open = self.scene_macros.open;
         if scene_changed {
             state.selected_pane = state
@@ -232,6 +233,7 @@ mod tests {
     fn snapshot(width: f32) -> Snapshot {
         let pane = ModulePane::new(ModuleKind::Spectrum);
         let state = crate::project::SceneState {
+            background: Default::default(),
             macros: Some(Default::default()),
             signals: Default::default(),
             panes: vec![pane.snapshot()],

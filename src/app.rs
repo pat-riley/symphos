@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS_WIDTH: f32 = 236.0;
 const DRAWER_ANIMATION_SECONDS: f32 = 0.22;
 
 pub struct SymphosApp {
+    background: crate::background::Background,
     history: history::History,
     performance: crate::performance::Monitor,
     frame_pacer: crate::performance::Pacer,
@@ -108,6 +109,7 @@ impl SymphosApp {
             project_dialog: Default::default(),
             scenes: Default::default(),
             saved_project: None,
+            background: Default::default(),
             history: Default::default(),
             performance: Default::default(),
             frame_pacer: Default::default(),
@@ -164,6 +166,7 @@ impl SymphosApp {
             pending_close: None,
         };
         if let Some(state) = session {
+            app.background = state.background;
             app.scene_macros = state.macros.clone().unwrap_or_else(|| {
                 crate::macros::scene::SceneMacros::from_legacy(&state.panes, state.selected_pane)
             });
@@ -228,6 +231,7 @@ impl SymphosApp {
             )
         });
         let mut state = Session {
+            background: self.background,
             macros: Some(self.scene_macros.clone()),
             project_path: self.project_dialog.current_path.clone(),
             scenes: None,
@@ -280,6 +284,7 @@ impl SymphosApp {
 
     fn capture_scene(&self) -> crate::project::SceneState {
         crate::project::SceneState {
+            background: self.background,
             macros: Some(self.scene_macros.clone()),
             signals: self
                 .signal_ui
@@ -301,6 +306,7 @@ impl SymphosApp {
     }
 
     fn apply_scene(&mut self, state: crate::project::SceneState) {
+        self.background = state.background;
         self.recording.stop();
         if let Some(midi) = &self.midi_runtime {
             self.midi_controller.reset(&midi.snapshot.load());
@@ -360,6 +366,7 @@ impl SymphosApp {
             }
             Action::New => {
                 let state = crate::project::SceneState {
+                    background: Default::default(),
                     macros: Some(Default::default()),
                     signals: Default::default(),
                     panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
@@ -415,6 +422,7 @@ impl SymphosApp {
     fn new_project(&mut self, ctx: &egui::Context) {
         self.history = Default::default();
         let state = crate::project::SceneState {
+            background: Default::default(),
             macros: Some(Default::default()),
             signals: Default::default(),
             panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
@@ -803,7 +811,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                             ),
                         )
                     });
-                    self.panes[self.selected_pane].inspector_controls(ui, frame)
+                    self.panes[self.selected_pane].background = self.background;
+                    self.panes[self.selected_pane].inspector_controls(ui, frame);
+                    self.background = self.panes[self.selected_pane].background;
                 });
             },
         );
@@ -952,6 +962,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
     }
 
     fn pane(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, frame: &AnalysisFrame) {
+        self.panes[index].background = self.background;
         let pane_started = self.performance.open.then(Instant::now);
         let live = matches!(self.status, AudioStatus::Streaming)
             && self.selected_node.is_some()
@@ -1230,6 +1241,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     .map(|id| self.panes[*id].snapshot())
                     .collect();
                 PresetContent::View {
+                    background: self.background,
                     macros: Some(Box::new(self.scene_macros.for_panes(&panes))),
                     layout: tree.canonical(),
                     panes,
@@ -1279,10 +1291,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 }
             }
             PresetContent::View {
+                background,
                 layout,
                 panes,
                 macros,
             } => {
+                self.background = *background;
                 self.scene_macros = macros
                     .clone()
                     .map(|m| *m)
@@ -2028,6 +2042,7 @@ impl eframe::App for SymphosApp {
                 .into_iter()
                 .find(|i| self.panes[*i].instance_id() == target)
         }) {
+            self.panes[index].background = self.background;
             self.recording.render_hidden(
                 ui.ctx(),
                 &mut self.panes[index],
@@ -2139,6 +2154,37 @@ fn settings_kind_name(kind: ModuleKind) -> String {
 mod workspace_interaction_tests {
     use super::*;
 
+    #[test]
+    fn scene_background_survives_switching_undo_and_full_view_presets() {
+        use crate::background::{Background, Mode};
+        let mut app = app();
+        app.scenes = crate::scenes::Book::new(app.capture_scene());
+        let background = Background {
+            mode: Mode::Linear,
+            start: [12, 34, 56],
+            end: [100, 30, 70],
+            angle: 45.0,
+        };
+        app.begin_edit(true);
+        app.background = background;
+        app.finish_edit();
+        app.undo_edit(false);
+        assert!(app.background.is_default());
+        app.undo_edit(true);
+        assert_eq!(app.background, background);
+        let view = app.preset_content(Scope::View).unwrap();
+        assert!(app.workspace(&egui::Context::default()).matches(&view));
+        app.scene_action(crate::scenes::Action::New);
+        assert!(app.background.is_default());
+        app.scene_action(crate::scenes::Action::Switch(1));
+        assert_eq!(app.background, background);
+        let state = app.capture_scene();
+        app.background = Default::default();
+        assert!(!app.workspace(&egui::Context::default()).matches(&view));
+        app.apply_scene(state);
+        assert_eq!(app.background, background);
+    }
+
     fn app() -> SymphosApp {
         SymphosApp {
             midi_runtime: None,
@@ -2149,6 +2195,7 @@ mod workspace_interaction_tests {
             project_dialog: Default::default(),
             scenes: Default::default(),
             saved_project: None,
+            background: Default::default(),
             history: Default::default(),
             performance: Default::default(),
             frame_pacer: Default::default(),

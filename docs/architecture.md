@@ -118,6 +118,14 @@ Geometry includes structure, population and simulation/flow; Appearance includes
 materials, particle rendering, color, light and feedback. Orbital's particle and
 orb groups retain explicit prefixes. No extra visualizer tabs are needed.
 
+Scene backgrounds are saved once in `SceneState`/`Session`, with a runtime copy
+on each visible pane for workspace and recording rendering. A defaulted, omitted
+black value keeps legacy scene fingerprints and documents compatible. The first
+Appearance group edits the scene value. Gradients use a shared cached texture;
+editing the background does not reset audio history, particle simulations, or
+feedback buffers. GPU particle outputs use premultiplied alpha over that canvas;
+Milkdrop retains the opaque output authored by its preset.
+
 All 3D visualizers share the camera motion math in `modules/camera_motion.rs`:
 world/custom axes, continuous or eased sweeps, reversal, wobble and independent
 framing pan. Waterfall preserves its existing serialized `motion` recipe; other

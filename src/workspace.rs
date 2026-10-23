@@ -366,6 +366,11 @@ fn valid_pane(pane: &PaneState) -> bool {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::background::Background::is_default"
+    )]
+    pub background: crate::background::Background,
     #[serde(default)]
     pub macros: Option<crate::macros::scene::SceneMacros>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -421,6 +426,7 @@ impl Session {
         let ids = self.layout.as_ref().map_or_else(Vec::new, Tile::ids);
         self.scenes.as_ref().is_none_or(crate::scenes::Book::valid)
             && self.macros.as_ref().is_none_or(|m| m.valid(&self.panes))
+            && self.background.valid()
             && self.signals.valid()
             && self.appearance.valid()
             && [30, 60, 90, 120].contains(&self.render_fps)
@@ -496,6 +502,11 @@ impl Session {
 pub enum PresetContent {
     Layout(Tile),
     View {
+        #[serde(
+            default,
+            skip_serializing_if = "crate::background::Background::is_default"
+        )]
+        background: crate::background::Background,
         layout: Tile,
         panes: Vec<PaneState>,
         #[serde(default)]
@@ -525,8 +536,14 @@ impl PresetContent {
                 tree.valid(ids.len())
                     && ids.iter().enumerate().all(|(i, id)| i == *id)
                     && match self {
-                        Self::View { panes, macros, .. } => {
-                            panes.len() == ids.len()
+                        Self::View {
+                            background,
+                            panes,
+                            macros,
+                            ..
+                        } => {
+                            background.valid()
+                                && panes.len() == ids.len()
                                 && panes.iter().all(valid_pane)
                                 && macros.as_ref().is_none_or(|m| m.valid(panes))
                         }
@@ -560,6 +577,7 @@ pub fn factory_presets() -> Vec<Preset> {
         id: format!("factory:{id}"),
         name: name.into(),
         content: PresetContent::View {
+            background: Default::default(),
             macros: None,
             layout,
             panes: kinds
@@ -863,11 +881,13 @@ impl Session {
                 .as_ref()
                 .is_some_and(|current| current.canonical() == *tree),
             PresetContent::View {
+                background,
                 layout,
                 panes,
                 macros,
             } => self.layout.as_ref().is_some_and(|current| {
-                current.canonical() == *layout
+                self.background == *background
+                    && current.canonical() == *layout
                     && (macros.is_none() || self.macros.as_ref() == macros.as_deref())
                     && current.ids().iter().zip(panes).all(|(id, saved)| {
                         let current = &self.panes[*id];
@@ -1270,6 +1290,7 @@ mod tests {
 
     fn session() -> Session {
         Session {
+            background: Default::default(),
             macros: None,
             project_path: None,
             scenes: None,

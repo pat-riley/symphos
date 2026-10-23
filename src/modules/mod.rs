@@ -264,6 +264,8 @@ impl ModuleKind {
 }
 
 pub struct ModulePane {
+    /// Runtime copy of the owning scene background, also used by recording.
+    pub background: crate::background::Background,
     pub audio_input: crate::signals::audio::Connection,
     input_revision: Option<(crate::signals::audio::Connection, u64, u64)>,
     silent_input: Option<AnalysisFrame>,
@@ -720,6 +722,7 @@ impl ModulePane {
 
     pub fn new(kind: ModuleKind) -> Self {
         Self {
+            background: Default::default(),
             audio_input: Default::default(),
             input_revision: None,
             silent_input: None,
@@ -1107,6 +1110,21 @@ impl ModulePane {
             egui::Frame::new()
                 .inner_margin(egui::Margin::symmetric(10, 5))
                 .show(ui, |ui| {
+                    if section == SettingsSection::Appearance {
+                        // No visualizer-specific group filter applies to scene properties.
+                        ui.data_mut(|d| {
+                            d.remove::<(ModuleKind, SettingsSection)>(egui::Id::new(
+                                VISUAL_INSPECTOR,
+                            ));
+                        });
+                        self.background.controls(ui);
+                        if self.kind == ModuleKind::Milkdrop {
+                            ui.small("Milkdrop presets render their own full-frame background.");
+                        }
+                        ui.data_mut(|d| {
+                            d.insert_temp(egui::Id::new(VISUAL_INSPECTOR), (self.kind, section))
+                        });
+                    }
                     if section == SettingsSection::Camera
                         && let Some(camera) = self.controlled_camera()
                     {
@@ -1380,7 +1398,22 @@ impl ModulePane {
             self.orbital.release_if_inactive();
         }
         let render_state = ModuleRenderState { live, frozen };
-        ui.painter().rect_filled(rect, 4.0, theme.background);
+        let mut canvas_theme = theme.clone();
+        canvas_theme.background = self.background.sample([0.5; 2]);
+        let [r, g, b, _] = canvas_theme.background.to_array();
+        if (r as f32 * 0.2126 + g as f32 * 0.7152 + b as f32 * 0.0722) > 145.0 {
+            canvas_theme.foreground = Color32::from_gray(25);
+            canvas_theme.muted = Color32::from_gray(75);
+        }
+        let theme = &canvas_theme;
+        self.background.paint(ui, rect);
+        let previous_background = ui.data_mut(|d| {
+            let previous = d.get_temp::<crate::background::Background>(egui::Id::new(
+                crate::background::CONTEXT,
+            ));
+            d.insert_temp(egui::Id::new(crate::background::CONTEXT), self.background);
+            previous
+        });
         ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
             .help_text(self.kind.description());
         match self.kind {
@@ -1495,6 +1528,12 @@ impl ModulePane {
                 |m, ui| m.draw(ui, rect, frame, theme, now, live),
             ),
         }
+        ui.data_mut(|d| {
+            d.remove::<crate::background::Background>(egui::Id::new(crate::background::CONTEXT));
+            if let Some(previous) = previous_background {
+                d.insert_temp(egui::Id::new(crate::background::CONTEXT), previous);
+            }
+        });
         if !restore.is_empty() {
             let mut settings = self.copy_settings();
             crate::macros::set_many(&mut settings, &restore);

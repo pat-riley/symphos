@@ -364,6 +364,7 @@ mod tests {
     };
     fn state() -> SceneState {
         SceneState {
+            background: Default::default(),
             macros: None,
             signals: Default::default(),
             panes: vec![ModulePane::new(ModuleKind::Flux).snapshot()],

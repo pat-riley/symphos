@@ -352,6 +352,7 @@ mod tests {
     use egui::Color32;
     fn state() -> SceneState {
         SceneState {
+            background: Default::default(),
             macros: Some(Default::default()),
             signals: Default::default(),
             panes: vec![

@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add scene-wide black, solid-color, linear and radial gradient backgrounds at
+  the top of Appearance. Backgrounds follow scenes, presets, Undo and recordings;
+  existing documents default to black. Milkdrop retains its preset-rendered canvas.
+
 - Hide the macOS window title text beside the native window controls.
 
 - Scene navigation, preset name, Library and Save now form one continuous

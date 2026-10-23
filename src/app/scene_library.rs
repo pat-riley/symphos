@@ -106,6 +106,7 @@ impl SymphosApp {
             Command::New => {
                 let active = self.scenes.active_scene;
                 let state = crate::project::SceneState {
+                    background: Default::default(),
                     macros: Some(Default::default()),
                     signals: Default::default(),
                     panes: vec![ModulePane::new(ModuleKind::Waterfall).snapshot()],
