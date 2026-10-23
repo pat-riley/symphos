@@ -6,6 +6,32 @@ use crate::{
 };
 use eframe::egui::{self, Align, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
+fn meter_width(bounds: Rect) -> f32 {
+    if bounds.width() < 700.0 {
+        120.0
+    } else if bounds.width() < 900.0 {
+        160.0
+    } else {
+        220.0
+    }
+}
+
+fn capture_width(bounds: Rect) -> f32 {
+    meter_width(bounds) + if bounds.width() < 540.0 { 0.0 } else { 82.0 }
+}
+
+/// Reserve a central footer segment without colliding with stats or capture meters.
+pub(crate) fn dock_bounds(bounds: Rect) -> Rect {
+    let width = if bounds.width() < 650.0 { 56.0 } else { 150.0 };
+    let left = bounds.left() + 130.0;
+    let right = (bounds.right() - capture_width(bounds) - 8.0 - width).max(left);
+    let x = (bounds.center().x - width * 0.5).clamp(left, right);
+    Rect::from_min_size(
+        egui::pos2(x, bounds.center().y - 13.0),
+        egui::vec2(width, 26.0),
+    )
+}
+
 pub struct GlobalBar {
     pub stereo: bool,
     pub channel: ChannelMode,
@@ -73,7 +99,6 @@ impl GlobalBar {
         ui.spacing_mut().interact_size.y = 26.0;
         ui.style_mut().override_font_id = Some(FontId::proportional(12.0));
         let bounds = ui.available_rect_before_wrap();
-        let compact = bounds.width() < 900.0;
         let help_rect = Rect::from_center_size(
             Pos2::new(bounds.left() + 13.0, bounds.center().y),
             Vec2::splat(26.0),
@@ -87,23 +112,17 @@ impl GlobalBar {
             help_open,
         );
 
-        let meter_width = if bounds.width() < 440.0 {
-            120.0
-        } else if compact {
-            160.0
-        } else {
-            220.0
-        };
+        let meter_width = meter_width(bounds);
         let audio_bounds = Rect::from_center_size(
             Pos2::new(
-                bounds.right() - (meter_width + 82.0) * 0.5,
+                bounds.right() - capture_width(bounds) * 0.5,
                 bounds.center().y,
             ),
-            Vec2::new(meter_width + 82.0, 30.0),
+            Vec2::new(capture_width(bounds), 30.0),
         );
         let stats_bounds = Rect::from_min_max(
             Pos2::new(help_rect.right() + 10.0, bounds.center().y - 15.0),
-            Pos2::new(audio_bounds.left() - 12.0, bounds.center().y + 15.0),
+            Pos2::new(dock_bounds(bounds).left() - 8.0, bounds.center().y + 15.0),
         );
         let mut stats = ui.new_child(
             egui::UiBuilder::new()
@@ -130,8 +149,10 @@ impl GlobalBar {
         );
         audio.with_layout(Layout::right_to_left(Align::Center), |ui| {
             self.meters(ui, &info, meter_width);
-            ui.label(RichText::new(info.source_label).size(11.0).color(info.theme.muted))
-                .help_text("Master capture levels before Signals inserts and track gain. Each visualizer can select its driving signal independently.");
+            if bounds.width() >= 540.0 {
+                ui.label(RichText::new(info.source_label).size(11.0).color(info.theme.muted))
+                    .help_text("Master capture levels before Signals inserts and track gain. Each visualizer can select its driving signal independently.");
+            }
         });
     }
 
@@ -316,6 +337,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn footer_dock_leaves_room_for_stats_and_meters_at_small_widths() {
+        for width in [320.0, 400.0, 540.0, 640.0, 650.0, 740.0, 900.0, 1416.0] {
+            let bounds = Rect::from_min_size(Pos2::new(12.0, 600.0), Vec2::new(width, 50.0));
+            let dock = dock_bounds(bounds);
+            assert!(dock.left() >= bounds.left() + 130.0);
+            assert!(dock.right() + 8.0 <= bounds.right() - capture_width(bounds));
+            assert_eq!(dock.center().y, bounds.center().y);
+        }
+    }
+
+    #[test]
     fn compact_bar_fits_minimum_width_and_keeps_help_left_and_levels_right() {
         for width in [320.0, 400.0, 540.0, 740.0, 900.0, 1000.0, 1416.0] {
             let context = egui::Context::default();
@@ -373,8 +405,12 @@ mod tests {
                 .unwrap();
             assert!((help.y - bounds.center().y).abs() < 0.1);
             assert!(help.x < x("60 FPS") && x("60 FPS") < bounds.center().x);
-            assert!(x("System audio") > x("60 FPS"));
-            assert!(x("System audio") < x("L"));
+            if width >= 540.0 {
+                assert!(x("System audio") > x("60 FPS"));
+                assert!(x("System audio") < x("L"));
+            } else {
+                assert!(labels.iter().all(|(label, _)| *label != "System audio"));
+            }
             assert!(
                 !labels
                     .iter()

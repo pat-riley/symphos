@@ -109,3 +109,21 @@ pub(crate) fn styled_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'
             .with_tag_value(MenuConfig::MENU_CONFIG_TAG, config),
     )
 }
+
+/// Parameter assignment editors use the same surface and scale as the inspector.
+pub(crate) fn editor_popup<'a>(
+    ui: &Ui,
+    popup: egui::Popup<'a>,
+    theme: &crate::theme::AppTheme,
+) -> egui::Popup<'a> {
+    popup.frame(
+        egui::Frame::popup(ui.style())
+            .fill(theme.navigation)
+            .stroke(egui::Stroke::new(
+                1.0,
+                theme.foreground.gamma_multiply(0.18),
+            ))
+            .corner_radius(3.0)
+            .inner_margin(8.0),
+    )
+}

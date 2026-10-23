@@ -174,14 +174,12 @@ impl SceneMacros {
                         .width(ui.available_width())
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut slot.signal, None, "None");
-                            for source in bank.channels.iter().filter(|d| d.has_control_output()) {
-                                ui.selectable_value(
-                                    &mut slot.signal,
-                                    Some(source.id),
-                                    &source.name,
-                                );
-                            }
+                            let mut panel = shared.lock().unwrap_or_else(|e| e.into_inner());
+                            signals::ui::modulation_source_options(
+                                ui,
+                                &mut panel.bank,
+                                &mut slot.signal,
+                            );
                         });
                     if slot.signal != previous {
                         slot.enabled = true;

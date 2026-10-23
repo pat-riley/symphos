@@ -706,14 +706,16 @@ fn bar_impl(
                                             }
                                         }
                                         let nested = egui::Popup::is_any_open(ui.ctx());
-                                        let popup = egui::Popup::from_response(&badge)
+                                        let popup = crate::dropdown::editor_popup(ui, egui::Popup::from_response(&badge)
                                             .open_bool(&mut opened)
                                             .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
-                                            .width(280.0)
+                                            .width(280.0), theme)
                                             .show(|ui| {
+                                                crate::workspace_ui::inspector_controls_style(ui, theme);
+                                                ui.visuals_mut().panel_fill = theme.navigation;
                                                 ui.strong(&p.label);
                                                 if let Some(shared) = &shared {
-                                                    let panel = shared
+                                                    let mut panel = shared
                                                         .lock()
                                                         .unwrap_or_else(|e| e.into_inner());
                                                     let mut signal = slot.signal;
@@ -733,25 +735,11 @@ fn bar_impl(
                                                         .width(260.0)
                                                         .selected_text(selected)
                                                         .show_ui(ui, |ui| {
-                                                            ui.selectable_value(
-                                                                &mut signal,
-                                                                None,
-                                                                "No modulation",
-                                                            );
-                                                            for d in panel.bank.channels.iter().filter(|d| d.has_control_output()) {
-                                                                ui.selectable_value(
-                                                                    &mut signal,
-                                                                    Some(d.id),
-                                                                    &d.name,
-                                                                );
-                                                            }
+                                                            signals::ui::modulation_source_options(ui, &mut panel.bank, &mut signal);
                                                         });
                                                     if signal != slot.signal {
                                                         slot.signal = signal;
                                                         slot.enabled = true;
-                                                    }
-                                                    if panel.bank.channels.is_empty() {
-                                                        ui.weak("Add sources in Signals.");
                                                     }
                                                     if ui
                                                         .add_enabled(
@@ -1521,6 +1509,11 @@ mod source_picker_tests {
     #[test]
     fn generic_macro_picker_connects_existing_audio_and_lfo_and_disconnects_without_editing_sources()
      {
+        exercise_macro_picker(false);
+        exercise_macro_picker(true);
+    }
+
+    fn exercise_macro_picker(audio_only: bool) {
         let ctx = egui::Context::default();
         let mut pane = ModulePane::new(ModuleKind::Waterfall);
         pane.macros.assign(
@@ -1552,6 +1545,18 @@ mod source_picker_tests {
             .bank
             .add(signals::Method::Lfo)
             .unwrap();
+        if audio_only {
+            let mut panel = shared.lock().unwrap();
+            let source = panel
+                .bank
+                .channels
+                .iter_mut()
+                .find(|d| d.id == audio)
+                .unwrap();
+            source.name = "brightness-beat".into();
+            source.inserts = Some(Default::default());
+            panel.bank.sync_audio_channels();
+        }
         let original = shared.lock().unwrap().bank.clone();
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(signals::ui::CONTEXT_KEY), shared.clone()));
         let manual = pane.copy_settings();
@@ -1592,9 +1597,24 @@ mod source_picker_tests {
         let out = click(egui::pos2(30.0, 10.0));
         let out = click(position(&out, "Connect…"));
         let out = click(position(&out, "Choose source"));
-        let out = click(position(&out, "Band energy"));
+        assert_eq!(
+            shared.lock().unwrap().bank,
+            original,
+            "opening the picker must not edit sources"
+        );
+        let audio_label = if audio_only {
+            "brightness-beat · add Overall intensity"
+        } else {
+            "Band energy"
+        };
+        let out = click(position(&out, audio_label));
         position(&out, "Disconnect");
-        let out = click(position(&out, "Band energy"));
+        let source_name = if audio_only {
+            "brightness-beat"
+        } else {
+            "Band energy"
+        };
+        let out = click(position(&out, source_name));
         let out = click(position(&out, "LFO"));
         position(&out, "Disconnect");
         click(position(&out, "Disconnect"));
@@ -1603,7 +1623,28 @@ mod source_picker_tests {
         assert_eq!(pane.macros.banks[0][0].depth, 0.35);
         assert_eq!(pane.copy_settings(), manual);
         assert_ne!(audio, lfo);
-        assert_eq!(shared.lock().unwrap().bank, original);
+        let mut expected = original;
+        if audio_only {
+            let source = expected
+                .channels
+                .iter_mut()
+                .find(|d| d.id == audio)
+                .unwrap();
+            source
+                .inserts
+                .as_mut()
+                .unwrap()
+                .add(
+                    source.input,
+                    0,
+                    signals::inserts::Effect::Detect(signals::inserts::Detection::new(
+                        signals::inserts::Detector::Level,
+                    )),
+                )
+                .unwrap();
+            assert!(shared.lock().unwrap().bank.valid());
+        }
+        assert_eq!(shared.lock().unwrap().bank, expected);
     }
 }
 

@@ -59,20 +59,13 @@ pub(super) fn strip(
     strip.set_clip_rect(rect.intersect(ui.clip_rect()));
     let ui = &mut strip;
     let text = ui.visuals().text_color();
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+    ui.painter()
+        .rect_filled(rect, 0.0, workspace_ui::strip_background(ui, selected));
     ui.painter().vline(
         rect.left(),
         rect.y_range(),
         egui::Stroke::new(1.0, text.gamma_multiply(0.18)),
     );
-    if selected {
-        ui.painter().rect_stroke(
-            rect,
-            0.0,
-            egui::Stroke::new(1.0, color.gamma_multiply(0.5)),
-            egui::StrokeKind::Inside,
-        );
-    }
     let response = ui.interact(rect, ui.id().with("select-master"), egui::Sense::click())
         .help_text("Default audio input · always available. Change the capture source in Audio settings. Add a scene audio channel for inserts and modulation.");
     let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 28.0));

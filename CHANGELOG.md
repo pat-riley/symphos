@@ -5,6 +5,14 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Move Macros and Signals back to the footer with compact controls on narrow
+  workspaces. Selected macro/signal strips use a subtle neutral background lift
+  instead of colored outlines.
+- Show audio-only channels in macro modulation pickers with an explicit action
+  to add Overall intensity and connect the resulting control curve. The source
+  editor uses the shared compact inspector/dropdown styling; opening it alone
+  does not change a channel.
+
 - Extend scene backgrounds to each pane’s rounded edges, including headers and
   content padding, with continuous gradients behind the inset visualization.
 

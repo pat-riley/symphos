@@ -89,8 +89,18 @@ pub(crate) fn scroll_offset_for_strip(ui: &egui::Ui, salt: &str, index: usize, w
     }
 }
 
+/// Selection changes the neutral body only; channel colors identify the header.
+pub(crate) fn strip_background(ui: &egui::Ui, selected: bool) -> Color32 {
+    let base = ui.visuals().panel_fill;
+    if selected {
+        sidebar_blend(base, Color32::WHITE, 0.045)
+    } else {
+        base
+    }
+}
+
 pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: bool) {
-    let body = ui.visuals().panel_fill;
+    let body = strip_background(ui, selected);
     ui.painter().rect_filled(rect, 0.0, body);
     let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 28.0));
     ui.painter().rect_filled(header, 0.0, color);
@@ -101,14 +111,6 @@ pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: 
     ui.painter()
         .vline(rect.right() - 0.5, rect.y_range(), divider);
     ui.painter().hline(rect.x_range(), header.bottom(), divider);
-    if selected {
-        ui.painter().rect_stroke(
-            rect,
-            0.0,
-            egui::Stroke::new(1.0, color.gamma_multiply(0.55)),
-            egui::StrokeKind::Inside,
-        );
-    }
 }
 
 /// Edit a channel name in its header. Returns commit/cancel, or None while typing.

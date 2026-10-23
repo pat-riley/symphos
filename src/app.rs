@@ -1733,9 +1733,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .show_signals;
-        let signals_were_open = signals_open;
-        let mut macros_open = !signals_open && self.scene_macros.open;
-        let macros_were_open = macros_open;
+        let macros_open = !signals_open && self.scene_macros.open;
         if signals_open && self.tiles.is_none() {
             self.inspecting_signal = true;
             self.inspecting_macro = None;
@@ -1798,41 +1796,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         }
                     },
                 );
-                if nav_dock_toggle(
-                    ui,
-                    icons::Icon::Levels,
-                    signals_open,
-                    "Signals",
-                    &crate::shortcuts::platform_label("Show / hide Signals · Ctrl + Shift + B"),
-                )
-                .clicked()
-                {
-                    signals_open = !signals_open;
-                    if signals_open {
-                        macros_open = false;
-                    }
-                }
-                if nav_dock_toggle(
-                    ui,
-                    icons::Icon::Knob,
-                    macros_open,
-                    "Macros",
-                    &crate::shortcuts::platform_label("Show / hide Macros · Ctrl + B"),
-                )
-                .clicked()
-                {
-                    macros_open = !macros_open;
-                    if macros_open {
-                        signals_open = false;
-                    }
-                }
             });
         });
         self.scene_macros.open = macros_open;
-        if signals_open && !signals_were_open {
-            self.inspecting_signal = true;
-            self.inspecting_macro = None;
-        }
         {
             let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
             panel.show_signals = signals_open;
@@ -1842,7 +1808,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.sidebar_open = true;
             }
         }
-        if !signals_open || (macros_open && !macros_were_open) {
+        if !signals_open {
             self.inspecting_signal = false;
         }
         let inspector_open = self.sidebar_open
@@ -1923,6 +1889,42 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 source_label,
             },
         );
+        let dock_rect = crate::global_bar::dock_bounds(footer);
+        let mut dock = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("footer-dock-toggles")
+                .max_rect(dock_rect),
+        );
+        dock.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if dock_toggle(
+                ui,
+                macros_open,
+                "Macros",
+                "Show / hide Macros · Ctrl + B",
+                dock_rect.width() * 0.5,
+            )
+            .clicked()
+            {
+                self.toggle_macros();
+            }
+            if dock_toggle(
+                ui,
+                signals_open,
+                "Signals",
+                "Show / hide Signals · Ctrl + Shift + B",
+                dock_rect.width() * 0.5,
+            )
+            .clicked()
+            {
+                self.toggle_signals();
+            }
+        });
+        signals_open = self
+            .signal_ui
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .show_signals;
         let content = content_bounds;
         resize_settings(
             ui,
@@ -3492,7 +3494,7 @@ mod workspace_interaction_tests {
     }
 
     #[test]
-    fn nav_icons_are_aligned_and_footer_fps_changes_only_the_local_display_target() {
+    fn footer_docks_are_centered_and_fps_changes_only_the_local_display_target() {
         let mut app = app();
         let ctx = egui::Context::default();
         let now = Instant::now();
@@ -3506,9 +3508,10 @@ mod workspace_interaction_tests {
         };
         let macros = nav("Macros");
         let signals = nav("Signals");
-        assert!(macros.right() < signals.left());
+        assert!(macros.right() <= signals.left());
         assert!((macros.center().y - signals.center().y).abs() < 0.1);
-        assert!(signals.bottom() < workspace_ui::NAV_HEIGHT);
+        assert!(signals.center().y > 750.0);
+        assert!(macros.left() > 200.0 && signals.right() < 900.0);
         let fps = ctx
             .data(|d| d.get_temp::<Rect>(egui::Id::new("test-footer-fps")))
             .unwrap();
@@ -4829,22 +4832,49 @@ struct WorkspaceLayout {
     help: Option<Rect>,
 }
 
-fn nav_dock_toggle(
+fn dock_toggle(
     ui: &mut egui::Ui,
-    icon: icons::Icon,
     open: bool,
     label: &str,
     description: &str,
+    width: f32,
 ) -> egui::Response {
+    let base = ui.visuals().panel_fill;
+    let fill = if open {
+        base.lerp_to_gamma(egui::Color32::WHITE, 0.065)
+    } else {
+        base
+    };
     let response = ui
         .push_id(label, |ui| {
-            icons::toolbar_toggle(
-                ui,
-                icon,
-                open,
-                workspace_ui::NAV_CONTROL_HEIGHT,
-                description,
-            )
+            let compact = width < 50.0;
+            let response = ui
+                .add_sized(
+                    [width, workspace_ui::NAV_CONTROL_HEIGHT],
+                    egui::Button::new(
+                        egui::RichText::new(if compact { "" } else { label }).size(12.0),
+                    )
+                    .fill(fill)
+                    .stroke(Stroke::new(
+                        1.0,
+                        ui.visuals().text_color().gamma_multiply(0.15),
+                    ))
+                    .corner_radius(2.0),
+                )
+                .help_text(crate::shortcuts::platform_label(description));
+            if compact {
+                icons::paint(
+                    ui,
+                    response.rect.shrink(5.0),
+                    if label == "Macros" {
+                        icons::Icon::Knob
+                    } else {
+                        icons::Icon::Levels
+                    },
+                    ui.visuals().text_color(),
+                );
+            }
+            response
         })
         .inner;
     response

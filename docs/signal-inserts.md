@@ -32,7 +32,12 @@ An audio channel starts with audio. Audio gain, frequency filters, channel
 selection and an audio gate process waveform data. A detector converts that
 branch to a control curve; further inserts shape the curve. The most recent
 audio before the detector remains available as the channel's main visualizer
-feed. With no detector, an Audio channel is not offered as a modulation source.
+feed. An Audio channel without a detector has no modulation curve yet. The
+macro source picker offers it as **<channel name> · add Overall intensity**;
+selecting that action appends the detector and connects its control output.
+Opening the picker alone does not modify the channel. Existing detector, LFO,
+and MIDI control sources remain directly selectable. A full insert chain must
+have room made for the detector in Signals first.
 
 LFOs and decoded MIDI messages start as control values and offer control
 processors directly. Audio filters and audio detectors cannot be inserted there.

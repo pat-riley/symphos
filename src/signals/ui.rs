@@ -2029,6 +2029,54 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
     );
 }
 
+/// List control sources and offer a visible, explicit conversion for audio-only tracks.
+/// Only a clicked conversion adds an insert; merely opening the menu never edits a track.
+pub(crate) fn modulation_source_options(
+    ui: &mut egui::Ui,
+    bank: &mut Bank,
+    selected: &mut Option<u64>,
+) {
+    ui.selectable_value(selected, None, "No modulation");
+    for source in &mut bank.channels {
+        if source.has_control_output() {
+            ui.selectable_value(selected, Some(source.id), &source.name);
+        } else {
+            let can_add = source.inserts.as_ref().is_some_and(|chain| {
+                chain.stages.len() < super::inserts::MAX_INSERTS && chain.next_id < u64::MAX
+            });
+            let response = ui.add_enabled(
+                can_add,
+                egui::Button::new(format!("{} · add Overall intensity", source.name)).frame(false),
+            );
+            if response.clicked() {
+                let chain = source
+                    .inserts
+                    .as_mut()
+                    .expect("audio-only source has a chain");
+                if chain
+                    .add(
+                        source.input,
+                        chain.stages.len(),
+                        super::inserts::Effect::Detect(super::inserts::Detection::new(
+                            super::inserts::Detector::Level,
+                        )),
+                    )
+                    .is_some()
+                {
+                    *selected = Some(source.id);
+                    ui.close();
+                }
+            }
+            response.on_hover_text(if can_add {
+                "Add an Overall intensity insert to convert this audio into a modulation curve. Existing audio processing and the visualizer feed stay intact."
+            } else { "This channel has reached its insert limit. Add a detector in Signals after making room." });
+        }
+    }
+    if bank.channels.is_empty() {
+        ui.weak("Add an Audio, LFO, or MIDI channel in Signals.");
+    }
+}
+
 pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -> bool {
     let Some(shared) = ui.data(|d| d.get_temp::<Shared>(egui::Id::new(CONTEXT_KEY))) else {
         return false;
@@ -2048,27 +2096,19 @@ pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -
             },
             |d| d.name.as_str(),
         );
+    let previous_signal = route.signal;
     crate::dropdown::ComboBox::from_id_salt(("named-signal", route.id))
         .selected_text(selected)
         .width(ui.available_width())
         .show_ui(ui, |ui| {
+            modulation_source_options(ui, &mut panel.bank, &mut route.signal);
             if route.target.layered() {
                 ui.selectable_value(&mut route.signal, None, "Automatic layer bands");
-            } else if ui
-                .selectable_value(&mut route.signal, None, "No modulation")
-                .clicked()
-            {
-                route.enabled = false;
-            }
-            for d in &panel.bank.channels {
-                if ui
-                    .selectable_value(&mut route.signal, Some(d.id), &d.name)
-                    .clicked()
-                {
-                    route.enabled = true;
-                }
             }
         });
+    if route.signal != previous_signal {
+        route.enabled = route.signal.is_some();
+    }
     if route.signal.is_none() && route.target.layered() && route.layer == 0 {
         ui.small("Local band bank: bass at the bottom, treble at the top. Re-divides when layer count changes.");
         return false;
