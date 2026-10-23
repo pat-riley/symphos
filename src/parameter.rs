@@ -160,7 +160,6 @@ impl<T: Numeric + Display> Parameter<'_, T> {
             label_ui.add(egui::Label::new(self.text.as_ref()).truncate());
             if let Some((context, spec)) = &descriptor {
                 let drag=label_ui.interact(label_rect,label_ui.id().with("macro-parameter-drag"),egui::Sense::drag())
-                    .on_hover_cursor(egui::CursorIcon::Grab)
                     .help_text(modulation.as_ref().map_or_else(|| "Drag this parameter label onto a macro slot".into(), |m| {
                         format!("Macro {} · {}\n{} · depth {:+.0}%\nBase {:.3} · current {:.3}\nDrag this label onto a macro slot to reassign it.",
                             m.macro_index,m.source,if m.enabled {"Modulating"} else {"Bypassed"},m.depth*100.0,before,m.current)
@@ -170,6 +169,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                         context: context.clone(), spec: spec.clone()
                     });
                 }
+                crate::workspace_ui::drag_cursor(drag);
             }
 
             let field_width = (width - label_width - ui.spacing().item_spacing.x).min(ui.available_width()).max(32.0);

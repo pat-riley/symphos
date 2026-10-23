@@ -1230,7 +1230,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     ui.id().with(("tile-divider", &divider.path)),
                     Sense::click_and_drag(),
                 )
-                .on_hover_cursor(if divider.axis == Axis::Horizontal {
+                .on_hover_and_drag_cursor(if divider.axis == Axis::Horizontal {
                     egui::CursorIcon::ResizeHorizontal
                 } else {
                     egui::CursorIcon::ResizeVertical
@@ -1827,7 +1827,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             );
             let response = ui
                 .interact(grip, egui::Id::new("signals-resize"), Sense::drag())
-                .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+                .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical)
                 .help_text("Drag to resize Signals · double-click to reset");
             if response.double_clicked() {
                 self.signals_height = workspace::default_signals_height();
@@ -3667,6 +3667,59 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn workspace_grips_and_splitters_keep_their_cursors_while_dragging() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        settle_drawers(&mut app, &ctx, now);
+        let canvas = app.scene_library.canvas.unwrap();
+        let (leaves, dividers) = app.tiles.as_ref().unwrap().geometry(canvas);
+        let grip = leaves[0].1.min + Vec2::new(17.0, 20.0);
+        let cases = std::iter::once((grip, egui::CursorIcon::Grab, egui::CursorIcon::Grabbing))
+            .chain(dividers.iter().map(|d| {
+                let icon = if d.axis == Axis::Horizontal {
+                    egui::CursorIcon::ResizeHorizontal
+                } else {
+                    egui::CursorIcon::ResizeVertical
+                };
+                (d.handle.center(), icon, icon)
+            }))
+            .collect::<Vec<_>>();
+        for (pos, hover, dragging) in cases {
+            // Each splitter starts from the same layout; earlier resize gestures
+            // must not invalidate the next handle's coordinates.
+            let mut app = self::app();
+            let ctx = egui::Context::default();
+            settle_drawers(&mut app, &ctx, now);
+            let out = workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            assert_eq!(out.platform_output.cursor_icon, hover, "hover at {pos:?}");
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, true)]);
+            let end = pos + Vec2::new(24.0, 24.0);
+            let out = workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(end)]);
+            assert_eq!(
+                out.platform_output.cursor_icon, dragging,
+                "drag from {pos:?}"
+            );
+            // Cancel pane rearrangement without dropping it into another pane.
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![
+                    egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    },
+                    button(end, false),
+                ],
+            );
+        }
+    }
+
+    #[test]
     fn blank_clicks_clear_pane_highlight_and_headers_restore_it() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -4261,7 +4314,7 @@ fn resize_library(ui: &mut egui::Ui, bounds: Rect, inspector_open: bool, width: 
             ui.id().with("library-resize"),
             Sense::click_and_drag(),
         )
-        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal)
         .help_text(
             "Drag to resize the component browser. Double-click to restore the compact width.",
         );
@@ -4302,7 +4355,7 @@ fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool
             ui.id().with("settings-resize"),
             Sense::click_and_drag(),
         )
-        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal)
         .help_text("Drag to resize module settings. Double-click to restore the compact width.");
     if response.double_clicked() {
         *width = DEFAULT_SETTINGS_WIDTH;

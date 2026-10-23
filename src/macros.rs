@@ -493,12 +493,12 @@ fn bar_impl(
                             let (header, _) = ui
                                 .allocate_exact_size(Vec2::new(width, 28.0), egui::Sense::hover());
                             let title = slot_title(slot, i);
-                            let drag = ui
+                            let drag = crate::workspace_ui::drag_cursor(ui
                                 .interact(
                                     header,
                                     ui.id().with("macro-header"),
                                     egui::Sense::click_and_drag(),
-                                )
+                                ))
                                 .help_text(
                                     "Click to inspect · drag to reorder · double-click to rename",
                                 );

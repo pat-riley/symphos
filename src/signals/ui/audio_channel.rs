@@ -88,13 +88,12 @@ pub(super) fn strip(
         format!("{} {}", slot + 1, bus.name),
         dark,
     );
-    let response = ui
-        .interact(
-            title,
-            ui.id().with("audio-title"),
-            egui::Sense::click_and_drag(),
-        )
-        .help_text("Select audio channel · drag to reorder · right-click for channel actions");
+    let response = workspace_ui::drag_cursor(ui.interact(
+        title,
+        ui.id().with("audio-title"),
+        egui::Sense::click_and_drag(),
+    ))
+    .help_text("Select audio channel · drag to reorder · right-click for channel actions");
     let mut action = response.clicked().then_some(StripAction::Select(bus.id));
     if response.drag_started() {
         response.dnd_set_drag_payload(ChannelDrag(bus.id));
@@ -165,7 +164,7 @@ pub(super) fn footer(
         egui::pos2(rect.left() + 40.0, bottom + 58.0),
         egui::vec2(54.0, 54.0),
     );
-    let response=ui.interact(knob,ui.id().with("audio-gain"),egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical).help_text("Audio input gain · drag vertically · Shift: fine · double-click: 0 dB. Applies to this channel's waveform, spectrum and measurements.");
+    let response=ui.interact(knob,ui.id().with("audio-gain"),egui::Sense::click_and_drag()).on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical).help_text("Audio input gain · drag vertically · Shift: fine · double-click: 0 dB. Applies to this channel's waveform, spectrum and measurements.");
     if response.dragged() {
         bus.gain_db = (bus.gain_db
             - ui.input(|i| i.pointer.delta().y)

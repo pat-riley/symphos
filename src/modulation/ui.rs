@@ -325,7 +325,7 @@ pub(crate) fn spectrum_editor(
                 ui.id().with(("band-handle", r.id, index)),
                 Sense::drag(),
             )
-            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            .on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal)
             .help_text("Frequency boundary\nDrag horizontally to set the lower or upper frequency limit. Use the Hz fields below for exact values.");
         if response.dragged()
             && let Some(pos) = response.interact_pointer_pos()
@@ -418,11 +418,17 @@ pub(crate) fn envelope_editor(
         if follow && (i == 2 || i == 3) {
             continue;
         }
-        let response = ui.interact(
-            Rect::from_center_size(points[i], Vec2::splat(18.0)),
-            ui.id().with(("adsr", i)),
-            Sense::drag(),
-        );
+        let response = ui
+            .interact(
+                Rect::from_center_size(points[i], Vec2::splat(18.0)),
+                ui.id().with(("adsr", i)),
+                Sense::drag(),
+            )
+            .on_hover_and_drag_cursor(if i == 3 {
+                egui::CursorIcon::ResizeVertical
+            } else {
+                egui::CursorIcon::ResizeHorizontal
+            });
         if response.dragged() {
             dragging = true;
             *drag_span = Some(span);

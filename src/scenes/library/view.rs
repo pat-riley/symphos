@@ -328,6 +328,7 @@ impl Library {
                                     )
                                 });
                                 if query.is_empty() && available.edit {
+                                    let response = crate::workspace_ui::drag_cursor(response);
                                     if response.drag_started() {
                                         response.dnd_set_drag_payload(key);
                                     }

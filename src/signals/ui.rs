@@ -1571,13 +1571,12 @@ fn channel_strip(
         format!("{} {}", slot + 1, d.name),
         dark,
     );
-    let response = ui
-        .interact(
-            title,
-            ui.id().with("channel-title"),
-            egui::Sense::click_and_drag(),
-        )
-        .help_text("Select channel · drag to reorder");
+    let response = workspace_ui::drag_cursor(ui.interact(
+        title,
+        ui.id().with("channel-title"),
+        egui::Sense::click_and_drag(),
+    ))
+    .help_text("Select channel · drag to reorder");
     if response.clicked() {
         action = Some(StripAction::Select(d.id));
     }
@@ -1905,7 +1904,7 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
             ui.id().with("influence-knob"),
             egui::Sense::click_and_drag(),
         )
-        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical)
         .help_text("Visual influence · drag vertically · Shift: fine · double-click: 100%");
     let speed = if ui.input(|i| i.modifiers.shift) {
         0.002

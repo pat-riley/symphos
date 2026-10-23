@@ -549,7 +549,7 @@ impl Manager {
                 ui.push_id(kind.label(), |ui| {
                     sidebar_rule(ui, rect);
                     let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click_and_drag());
-                    let response = response.on_hover_cursor(egui::CursorIcon::Grab);
+                    let response = drag_cursor(response);
                     if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, ui.visuals().widgets.noninteractive.bg_fill); }
                     let badge = Rect::from_center_size(egui::pos2(row.left() + 20.0, row.center().y), Vec2::splat(20.0));
                     icons::paint(ui, badge, kind.icon(), theme.foreground);
@@ -745,12 +745,23 @@ fn thumbnail(ui: &egui::Ui, tree: &workspace::Tile, rect: Rect, color: Color32) 
     }
 }
 
+/// Use an open hand for a movable item, then a closed hand for the full drag,
+/// including when the pointer leaves the original handle.
+pub fn drag_cursor(response: egui::Response) -> egui::Response {
+    let cursor = if response.dragged() {
+        egui::CursorIcon::Grabbing
+    } else {
+        egui::CursorIcon::Grab
+    };
+    response.on_hover_and_drag_cursor(cursor)
+}
+
 pub fn drag_grip(ui: &mut egui::Ui, id: usize) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(18.0, 24.0), Sense::drag());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::drag());
     let color = ui.visuals().weak_text_color();
     paint_drag_grip(ui, rect, color);
     response.dnd_set_drag_payload(DragPayload::Pane(id));
-    response.on_hover_cursor(egui::CursorIcon::Grab).help_text(
+    drag_cursor(response).help_text(
         "Drag this pane to an edge to move it, or onto another pane's center to swap positions.",
     )
 }

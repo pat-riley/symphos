@@ -96,13 +96,11 @@ impl SettingsWindow {
                     header.min,
                     Pos2::new(header.right() - 42.0, header.bottom()),
                 );
-                let drag = ui
-                    .interact(
-                        drag_rect,
-                        ui.id().with("settings-title-drag"),
-                        Sense::drag(),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::Grab);
+                let drag = workspace_ui::drag_cursor(ui.interact(
+                    drag_rect,
+                    ui.id().with("settings-title-drag"),
+                    Sense::drag(),
+                ));
                 if drag.dragged() {
                     position += drag.drag_delta();
                 }
