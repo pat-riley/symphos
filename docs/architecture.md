@@ -138,6 +138,15 @@ consume Undo history. CPU and GPU renderers retain their lenses and simulation
 state. All 3D views expose the same graphical axis navigator and six views;
 Flux and Strata also support free trackball rotation, pan and optional XYZ grids.
 Signals retain their separate processing rail.
+3D Rings wraps signed time-domain samples around each orbit. Its Geometry tab
+owns visual displacement, waveform visibility/detail, outline interpolation, and
+level-driven expansion. Visibility uses a bounded, shared stereo display boost
+with a quiet floor; the signed detail curve retains zero crossings. A separate
+per-channel RMS envelope supplies fast attack and configurable exponential
+release, using the pane's virtual time so pause and 30/60/120 Hz rendering agree.
+These controls never alter the input audio or other sketches. Source gain and
+automatic input scaling remain in Signals. Resting guides stay unexpanded and
+camera framing uses configured bounds, avoiding camera pumping as music changes.
 Each pane/module/tab also has an independent scroll-area identity, avoiding
 scroll offsets carrying across unrelated sections. Appearance uses grouped
 render-style, color/level, and viewport-guide controls; Geometry groups

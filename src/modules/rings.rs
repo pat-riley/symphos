@@ -57,6 +57,10 @@ pub(crate) struct RingsSettings {
     auto_scale: bool,
     amplitude: f32,
     sideways: f32,
+    waveform_visibility: f32,
+    waveform_detail: f32,
+    pulse_amount: f32,
+    pulse_release_ms: f32,
     smoothing_ms: f32,
     line_smoothing: f32,
     seam: f32,
@@ -100,16 +104,20 @@ impl Default for RingsSettings {
             resolution: 768,
             channel: WaveformChannel::Mid,
             stereo: true,
-            window_ms: 80.0,
+            window_ms: 45.0,
             trigger: true,
             rising: true,
             threshold: 0.0,
             gain: 1.0,
             auto_scale: false,
-            amplitude: 0.65,
-            sideways: 0.12,
-            smoothing_ms: 25.0,
-            line_smoothing: 0.2,
+            amplitude: 0.9,
+            sideways: 0.22,
+            waveform_visibility: 0.8,
+            waveform_detail: 0.35,
+            pulse_amount: 0.2,
+            pulse_release_ms: 180.0,
+            smoothing_ms: 8.0,
+            line_smoothing: 0.08,
             seam: 0.04,
             repeats: 1,
             phase_offset: 0.1,
@@ -140,6 +148,7 @@ impl Default for RingsSettings {
 pub struct Rings {
     settings: RingsSettings,
     waves: [Vec<f32>; 4],
+    levels: [f32; 4],
     last_draw: Option<Instant>,
     epoch: Option<u64>,
     orbit_phase: f32,
@@ -163,6 +172,7 @@ impl Rings {
     }
     pub fn clear(&mut self) {
         self.waves = Default::default();
+        self.levels = [0.0; 4];
         self.last_draw = None;
         self.epoch = None;
         self.orbit_phase = 0.0;
@@ -262,6 +272,74 @@ impl Rings {
                     ui
                 );
             });
+            settings_group(ui, "Waveform shape", |ui| {
+                p!(
+                    amplitude,
+                    0.0..=2.0,
+                    0.9,
+                    "Radial movement",
+                    "Signed waveform amplitude pushes each trace inward and outward.",
+                    ui
+                );
+                p!(
+                    sideways,
+                    0.0..=2.0,
+                    0.22,
+                    "Sideways movement",
+                    "Move the waveform perpendicular to its orbital plane.",
+                    ui
+                );
+                p!(
+                    waveform_visibility,
+                    0.0..=1.0,
+                    0.8,
+                    "Waveform visibility",
+                    "Expand quieter waveforms so their peaks and troughs are easier to see. Zero preserves the input's relative size; one applies the strongest display boost. Stereo rings share the same boost, and near-silence is not amplified. This changes this sketch's drawing only, not the audio signal or other visualizers. Auto scale in Signals overrides this control when enabled.",
+                    ui
+                );
+                p!(
+                    waveform_detail,
+                    0.0..=1.0,
+                    0.35,
+                    "Waveform detail",
+                    "Lift small waveform ripples without increasing the largest peaks. Zero draws the waveform linearly; one reveals the most detail. Signs, zero crossings and the quiet floor are preserved. This changes the drawing, not the audio feed.",
+                    ui
+                );
+                p!(
+                    line_smoothing,
+                    0.0..=1.0,
+                    0.08,
+                    "Line smoothing",
+                    "Blend neighboring trace samples to soften jagged detail.",
+                    ui
+                );
+                p!(
+                    smoothing_ms,
+                    0.0..=500.0,
+                    8.0,
+                    "Waveform smoothing ms",
+                    "Blend successive ring outlines over this many milliseconds. High values soften fast details and can average away waveform motion. Zero follows the current waveform immediately. This controls visual interpolation only, not processing of the shared audio signal.",
+                    ui
+                );
+            });
+            settings_group(ui, "Ring expansion", |ui| {
+                p!(
+                    pulse_amount,
+                    0.0..=0.6,
+                    0.2,
+                    "Level pulse",
+                    "Expand each ring as its audio channel becomes louder, in addition to its waveform ripples. Zero disables the expansion. Left and right rings follow their own measured level; silence returns them to their resting orbit. This follows loudness rather than estimating a beat.",
+                    ui
+                );
+                p!(
+                    pulse_release_ms,
+                    30.0..=1500.0,
+                    180.0,
+                    "Pulse release ms",
+                    "How quickly a ring returns after its audio level drops. Short values feel tight and percussive; long values create a gentle breathing motion. The attack remains fast, and timing is consistent at different frame rates.",
+                    ui
+                );
+            });
             settings_group(ui, "Movement", |ui| {
                 p!(
                     motion_speed,
@@ -308,7 +386,7 @@ impl Rings {
         settings_panel(ui, "Time Window", |ui| {
             settings_group(ui, "Capture", |ui| {
                 ui.add(
-                    Parameter::new(&mut s.window_ms, 10.0..=500.0, 80.0)
+                    Parameter::new(&mut s.window_ms, 10.0..=500.0, 45.0)
                         .key("window_ms")
                         .logarithmic(true)
                         .text("Window ms"),
@@ -357,40 +435,6 @@ impl Rings {
                         .key("gain")
                         .logarithmic(true)
                         .text("Input gain ×"),
-                );
-                p!(
-                    amplitude,
-                    0.0..=2.0,
-                    0.65,
-                    "Radial movement",
-                    "Signed waveform amplitude pushes each trace inward and outward.",
-                    ui
-                );
-                p!(
-                    sideways,
-                    0.0..=2.0,
-                    0.12,
-                    "Sideways movement",
-                    "Move the waveform perpendicular to its orbital plane.",
-                    ui
-                );
-            });
-            settings_group(ui, "Smoothing", |ui| {
-                p!(
-                    smoothing_ms,
-                    0.0..=500.0,
-                    25.0,
-                    "Response ms",
-                    "Time-based smoothing of successive waveforms. Zero follows samples directly.",
-                    ui
-                );
-                p!(
-                    line_smoothing,
-                    0.0..=1.0,
-                    0.2,
-                    "Line smoothing",
-                    "Blend neighboring trace samples to soften jagged detail.",
-                    ui
                 );
             });
         });
@@ -539,6 +583,7 @@ impl Rings {
         self.last_draw = Some(now);
         if self.epoch != Some(frame.capture_epoch) {
             self.waves = Default::default();
+            self.levels = [0.0; 4];
             self.epoch = Some(frame.capture_epoch);
         }
         let s = &self.settings;
@@ -568,6 +613,8 @@ impl Rings {
         for (lane, channel) in WaveformChannel::ALL.into_iter().enumerate() {
             let initial = self.waves[lane].len() != count;
             self.waves[lane].resize(count, 0.0);
+            let mut power = 0.0;
+            let mut samples = 0;
             for i in 0..count {
                 let a = window.start + i * window.len() / count;
                 let b = (window.start + (i + 1) * window.len() / count)
@@ -577,28 +624,74 @@ impl Rings {
                 if live {
                     for index in a..b {
                         let value = channel.sample(frame, index);
-                        if value.is_finite() && value.abs() > peak.abs() {
-                            peak = value;
+                        if value.is_finite() {
+                            let value = value.clamp(-16.0, 16.0);
+                            power += value * value;
+                            samples += 1;
+                            if value.abs() > peak.abs() {
+                                peak = value;
+                            }
                         }
                     }
                 }
                 let out = &mut self.waves[lane][i];
                 *out += (peak - *out) * if initial { 1.0 } else { alpha };
             }
+            let rms = (power / samples.max(1) as f32).sqrt();
+            // Display envelope spans -60 to -6 dBFS; silence stays at zero.
+            let level = ((20.0 * rms.max(0.001).log10() + 60.0) / 54.0).clamp(0.0, 1.0);
+            let target = level * level;
+            let tau_ms = if target > self.levels[lane] {
+                8.0
+            } else {
+                s.pulse_release_ms.clamp(30.0, 1500.0)
+            };
+            let response = if initial {
+                1.0
+            } else {
+                -(-dt * 1000.0 / tau_ms).exp_m1()
+            };
+            self.levels[lane] += (target - self.levels[lane]) * response;
         }
+    }
+    fn lane(&self, ring: usize) -> usize {
+        if self.settings.stereo {
+            ring % 2
+        } else {
+            self.settings.channel as usize
+        }
+    }
+    fn display_gain(&self) -> f32 {
+        let s = &self.settings;
+        // One display gain preserves relative Left/Right amplitude. A floor and
+        // bounded boost keep silence/noise from expanding into full-size waves.
+        let peak = self
+            .waves
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                if s.stereo {
+                    *i < 2
+                } else {
+                    *i == s.channel as usize
+                }
+            })
+            .flat_map(|(_, wave)| wave)
+            .map(|v| v.abs())
+            .fold(0.0_f32, f32::max);
+        let normalization = if s.auto_scale {
+            (0.95 / peak.max(0.001)).clamp(0.1, 100.0)
+        } else {
+            let gate = ((peak - 0.001) / 0.004).clamp(0.0, 1.0);
+            1.0 + ((0.75 / peak.max(0.01)).clamp(1.0, 16.0) - 1.0)
+                * s.waveform_visibility.clamp(0.0, 1.0)
+                * gate
+        };
+        s.gain.clamp(0.1, 10.0) * normalization
     }
     fn wave(&self, ring: usize, fraction: f32, gain: f32) -> f32 {
         let s = &self.settings;
-        let lane = if s.stereo {
-            ring % 2
-        } else {
-            match s.channel {
-                WaveformChannel::Left => 0,
-                WaveformChannel::Right => 1,
-                WaveformChannel::Mid => 2,
-                WaveformChannel::Side => 3,
-            }
-        };
+        let lane = self.lane(ring);
         let wave = &self.waves[lane];
         if wave.is_empty() {
             return 0.0;
@@ -619,13 +712,25 @@ impl Rings {
         } else {
             1.0
         };
-        (value * gain * blend).clamp(-1.0, 1.0)
+        let value = (value * gain).clamp(-1.0, 1.0);
+        let curve = 1.0 - s.waveform_detail.clamp(0.0, 1.0) * 0.75;
+        let detail = if curve == 1.0 {
+            value
+        } else {
+            let shaped = value.abs().powf(curve).copysign(value);
+            let gate = ((value.abs() - 0.001) / 0.004).clamp(0.0, 1.0);
+            value + (shaped - value) * gate
+        };
+        detail * blend
     }
     fn point(&self, ring: usize, fraction: f32, value: f32) -> [f32; 3] {
+        self.point_with_pulse(ring, fraction, value, self.levels[self.lane(ring)])
+    }
+    fn point_with_pulse(&self, ring: usize, fraction: f32, value: f32, level: f32) -> [f32; 3] {
         let s = &self.settings;
         let rings = s.rings.clamp(1, 12);
-        let radial = (s.radius.clamp(0.2, 2.5)
-            + ring as f32 * s.spacing.clamp(0.0, 0.4)
+        let radial = ((s.radius.clamp(0.2, 2.5) + ring as f32 * s.spacing.clamp(0.0, 0.4))
+            * (1.0 + s.pulse_amount.clamp(0.0, 0.6) * level)
             + value * s.amplitude.clamp(0.0, 2.0))
         .max(0.05);
         let sign = if s.alternate && ring % 2 == 1 {
@@ -658,14 +763,17 @@ impl Rings {
         let s = &self.settings;
         let rings = s.rings.clamp(1, 12);
         let count = s.resolution.clamp(128, 2048);
-        let extent = (s.radius.clamp(0.2, 2.5)
-            + (rings - 1) as f32 * s.spacing.clamp(0.0, 0.4)
-            + 0.65)
-            .max(if s.arrangement == Arrangement::Stacked {
-                s.stack_height.clamp(0.0, 4.0) * 0.5 + 0.5
-            } else {
-                0.0
-            });
+        let extent = ((s.radius.clamp(0.2, 2.5) + (rings - 1) as f32 * s.spacing.clamp(0.0, 0.4))
+            * (1.0 + s.pulse_amount.clamp(0.0, 0.6))
+            + s.amplitude
+                .clamp(0.0, 2.0)
+                .max(s.sideways.clamp(0.0, 2.0))
+                .max(0.65))
+        .max(if s.arrangement == Arrangement::Stacked {
+            s.stack_height.clamp(0.0, 4.0) * 0.5 + 0.5
+        } else {
+            0.0
+        });
         let scale =
             rect.width().min(rect.height()).max(0.0) * 0.43 * s.zoom.clamp(0.25, 8.0) / extent;
         let center = rect.center() + s.pan * rect.size();
@@ -676,26 +784,7 @@ impl Rings {
                 std::array::from_fn(|i| axes[0][i] * p[0] + axes[1][i] * p[1] + axes[2][i] * p[2]);
             (center + Vec2::new(v[0], v[1]) * scale, v[2])
         };
-        let peak = self
-            .waves
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| {
-                if s.stereo {
-                    *i < 2
-                } else {
-                    *i == s.channel as usize
-                }
-            })
-            .flat_map(|(_, wave)| wave)
-            .map(|v| v.abs())
-            .fold(0.0_f32, f32::max);
-        let gain = s.gain.clamp(0.1, 10.0)
-            * if s.auto_scale {
-                (0.95 / peak.max(0.001)).clamp(0.1, 100.0)
-            } else {
-                1.0
-            };
+        let gain = self.display_gain();
         let mut segments = Vec::with_capacity(rings * count * if s.baselines { 2 } else { 1 });
         for ring in 0..rings {
             let mut vertices = Vec::with_capacity(count + 1);
@@ -736,9 +825,14 @@ impl Rings {
             }
             if s.baselines {
                 for i in 0..count {
-                    let (a, ad) = project(self.point(ring, i as f32 / count as f32, 0.0));
-                    let (b, bd) =
-                        project(self.point(ring, ((i + 1) % count) as f32 / count as f32, 0.0));
+                    let (a, ad) =
+                        project(self.point_with_pulse(ring, i as f32 / count as f32, 0.0, 0.0));
+                    let (b, bd) = project(self.point_with_pulse(
+                        ring,
+                        ((i + 1) % count) as f32 / count as f32,
+                        0.0,
+                        0.0,
+                    ));
                     let c = theme.muted.gamma_multiply(0.2);
                     segments.push((
                         Vertex {
@@ -932,9 +1026,152 @@ mod tests {
         let mut rings = Rings::default();
         rings.settings.trigger = false;
         rings.settings.smoothing_ms = 0.0;
+        rings.settings.window_ms = 80.0;
         rings.settings.seam = 0.0;
         rings.settings.phase_offset = 0.0;
+        rings.settings.waveform_visibility = 0.0;
+        rings.settings.waveform_detail = 0.0;
+        rings.settings.pulse_amount = 0.0;
         rings
+    }
+
+    #[test]
+    fn quiet_waveforms_get_visible_signed_detail_without_changing_the_audio_feed() {
+        let mut frame = audio();
+        for samples in [&mut frame.waveform_left, &mut frame.waveform_right] {
+            for value in std::sync::Arc::make_mut(samples) {
+                *value *= 0.04;
+            }
+        }
+        let original_left = frame.waveform_left.clone();
+        let original_right = frame.waveform_right.clone();
+        let now = Instant::now();
+        let mut rings = direct();
+        rings.update(&frame, now, true);
+        let raw = (0..768)
+            .map(|i| rings.wave(0, i as f32 / 768.0, rings.display_gain()))
+            .collect::<Vec<_>>();
+        rings.settings.waveform_visibility = 0.8;
+        rings.settings.waveform_detail = 0.35;
+        let visible = (0..768)
+            .map(|i| rings.wave(0, i as f32 / 768.0, rings.display_gain()))
+            .collect::<Vec<_>>();
+        let peak = |values: &[f32]| values.iter().map(|v| v.abs()).fold(0.0, f32::max);
+        assert!(
+            peak(&visible) > peak(&raw) * 8.0,
+            "quiet input has clearly visible ripples"
+        );
+        assert!(
+            raw.iter()
+                .zip(&visible)
+                .all(|(a, b)| a.signum() == b.signum())
+        );
+        assert_eq!(rings.settings.gain, 1.0);
+        assert_eq!(frame.waveform_left, original_left);
+        assert_eq!(frame.waveform_right, original_right);
+        // A shared gain keeps stereo balance; the detail curve can be neutral.
+        rings.settings.waveform_detail = 0.0;
+        rings.waves[0].fill(0.02);
+        rings.waves[1].fill(0.01);
+        let gain = rings.display_gain();
+        assert!((rings.wave(0, 0.5, gain) / rings.wave(1, 0.5, gain) - 2.0).abs() < 1e-5);
+        rings.waves = std::array::from_fn(|_| vec![0.0001; 768]);
+        rings.settings.waveform_detail = 0.35;
+        assert_eq!(
+            rings.display_gain(),
+            1.0,
+            "do not normalize the noise floor"
+        );
+        assert!((rings.wave(0, 0.5, 1.0) - 0.0001).abs() < 1e-7);
+        rings.waves.iter_mut().for_each(|w| w.fill(0.0));
+        assert_eq!(rings.wave(0, 0.5, rings.display_gain()), 0.0);
+    }
+
+    #[test]
+    fn level_pulse_is_channel_specific_time_based_and_freezes_and_clears() {
+        let now = Instant::now();
+        let frame = AnalysisFrame {
+            waveform_left: vec![0.25; 4800].into(),
+            waveform_right: vec![0.0; 4800].into(),
+            ..audio()
+        };
+        let silent = AnalysisFrame {
+            waveform_left: vec![0.0; 4800].into(),
+            ..frame.clone()
+        };
+        let mut results = Vec::new();
+        for fps in [30, 60, 120] {
+            let mut rings = direct();
+            rings.settings.pulse_amount = 0.4;
+            rings.update(&silent, now, true);
+            for i in 1..=fps {
+                rings.update(
+                    &frame,
+                    now + std::time::Duration::from_secs_f64(i as f64 / fps as f64),
+                    true,
+                );
+            }
+            assert!(rings.levels[0] > 0.5);
+            assert_eq!(rings.levels[1], 0.0);
+            let length = |p: [f32; 3]| p.iter().map(|v| v * v).sum::<f32>().sqrt();
+            assert!(length(rings.point(0, 0.25, 0.0)) > rings.settings.radius * 1.2);
+            assert!(
+                (length(rings.point_with_pulse(0, 0.25, 0.0, 0.0)) - rings.settings.radius).abs()
+                    < 1e-6
+            );
+            let held = rings.levels;
+            rings.update(&silent, now + std::time::Duration::from_secs(1), true);
+            assert_eq!(rings.levels, held, "frozen virtual time holds the envelope");
+            for i in 1..=fps {
+                rings.update(
+                    &silent,
+                    now + std::time::Duration::from_secs_f64(1.0 + i as f64 / fps as f64),
+                    true,
+                );
+            }
+            results.push(rings.levels[0]);
+            assert!(rings.levels[0] < held[0] * 0.01);
+            let mut changed = silent.clone();
+            changed.capture_epoch += 1;
+            rings.update(&changed, now + std::time::Duration::from_secs(3), false);
+            assert_eq!(rings.levels, [0.0; 4]);
+            rings.clear();
+            assert_eq!(rings.levels, [0.0; 4]);
+        }
+        assert!((results[0] - results[1]).abs() < 1e-6);
+        assert!((results[1] - results[2]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn old_ring_settings_keep_existing_values_and_gain_new_visual_controls() {
+        let settings = RingsSettings {
+            gain: 2.0,
+            amplitude: 1.4,
+            smoothing_ms: 42.0,
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(&settings).unwrap();
+        for field in [
+            "waveform_visibility",
+            "waveform_detail",
+            "pulse_amount",
+            "pulse_release_ms",
+        ] {
+            json.as_object_mut().unwrap().remove(field);
+        }
+        let restored: RingsSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.gain, settings.gain);
+        assert_eq!(restored.amplitude, settings.amplitude);
+        assert_eq!(restored.smoothing_ms, settings.smoothing_ms);
+        assert_eq!(
+            restored.waveform_visibility,
+            RingsSettings::default().waveform_visibility
+        );
+        let encoded = serde_json::to_value(&restored).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RingsSettings>(encoded).unwrap(),
+            restored
+        );
     }
 
     #[test]
@@ -1097,6 +1334,41 @@ mod tests {
         assert!(restored.waves.iter().all(Vec::is_empty));
         restored.reset_settings();
         assert_eq!(restored.settings, RingsSettings::default());
+    }
+
+    #[test]
+    #[ignore = "manual CPU timing for default 3D Rings waveform update and mesh generation"]
+    fn benchmark_audio_reactive_rings() {
+        let frame = audio();
+        let theme = AppTheme::default();
+        let start = Instant::now();
+        for enhanced in [false, true] {
+            let mut rings = Rings::default();
+            if !enhanced {
+                rings.settings.waveform_visibility = 0.0;
+                rings.settings.waveform_detail = 0.0;
+                rings.settings.pulse_amount = 0.0;
+            }
+            let mut timings = Vec::new();
+            for i in 0..180 {
+                let began = Instant::now();
+                rings.update(
+                    &frame,
+                    start + Duration::from_secs_f64(i as f64 / 120.0),
+                    true,
+                );
+                std::hint::black_box(rings.build_mesh(rect(), &theme));
+                if i >= 30 {
+                    timings.push(began.elapsed());
+                }
+            }
+            timings.sort();
+            eprintln!(
+                "3D Rings, 4 × 768 samples, enhanced={enhanced}: CPU median {:?}, p95 {:?}",
+                timings[timings.len() / 2],
+                timings[timings.len() * 95 / 100]
+            );
+        }
     }
 
     #[test]

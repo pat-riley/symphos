@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn rings_visual_response_is_in_geometry_and_source_gain_stays_in_signals() {
+    let collect = |input: bool| {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.set_everything_is_visible(true));
+        let mut pane = ModulePane::new(ModuleKind::Rings);
+        pane.select_inspector_section(SettingsSection::Geometry);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(440.0, 12000.0))),
+                ..Default::default()
+            },
+            |ui| {
+                if input {
+                    pane.input_controls(ui, &AnalysisFrame::default());
+                } else {
+                    pane.inspector_controls(ui, &AnalysisFrame::default());
+                }
+            },
+        );
+        output.textures_delta.clear();
+        ctx.data(|d| {
+            d.get_temp::<std::collections::BTreeSet<String>>(egui::Id::new(
+                "test-rendered-parameter-keys",
+            ))
+        })
+        .unwrap()
+    };
+    let geometry = collect(false);
+    let input = collect(true);
+    for key in [
+        "amplitude",
+        "sideways",
+        "waveform_visibility",
+        "waveform_detail",
+        "smoothing_ms",
+        "line_smoothing",
+        "pulse_amount",
+        "pulse_release_ms",
+    ] {
+        assert!(geometry.contains(key), "{key} belongs in Geometry");
+        assert!(
+            !input.contains(key),
+            "{key} is a drawing control, not a source processor"
+        );
+    }
+    assert!(input.contains("gain"));
+    assert!(!geometry.contains("gain"));
+}
+
+#[test]
 fn consolidated_tabs_and_signals_keep_every_existing_numeric_parameter_reachable() {
     for kind in ModuleKind::ALL {
         let collect = |standard: bool| {
