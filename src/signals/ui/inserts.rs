@@ -13,12 +13,12 @@ fn insert_menu(ui: &mut egui::Ui, d: &Definition, index: usize) -> Option<StripA
     let data = chain.data_at(d.input, index);
     ui.add_enabled_ui(chain.stages.len() < crate::signals::inserts::MAX_INSERTS, |ui| {
         let button = insert_button(ui, "+ Insert", false, egui::Sense::click()).help_text("Add a processor at this position. Only inserts compatible with the incoming data type are offered. Audio detectors convert audio to control values; the audio feed remains available to sketches.");
-        crate::dropdown::styled_popup(ui, egui::Popup::menu(&button))
+        crate::dropdown::context_popup(ui, egui::Popup::menu(&button))
             .gap(5.0)
             .width(180.0)
             .show(|ui| {
                 ui.small(if data == Data::Audio { "Audio effects & detectors" } else { "Control processors" });
-                ui.separator();
+                crate::dropdown::menu_separator(ui);
                 for effect in Effect::choices(data) {
                     let mut candidate = chain.clone();
                     let compatible = candidate.add(d.input, index, effect.clone()).is_some();

@@ -327,7 +327,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
         *self.value = T::from_f64(value);
         let mut response = inner.inner.union(inner.response);
         if let Some((target, spec)) = &descriptor {
-            response.context_menu(|ui| {
+            crate::dropdown::context_popup(ui, egui::Popup::context_menu(&response)).show(|ui| {
                 ui.strong(&spec.label);
                 ui.weak(format!(
                     "Range {}–{} · default {}",
@@ -337,7 +337,7 @@ impl<T: Numeric + Display> Parameter<'_, T> {
                     *self.value = self.default;
                     ui.close();
                 }
-                ui.separator();
+                crate::dropdown::menu_separator(ui);
                 crate::midi::mapping::menu(ui, target, spec);
             });
         }

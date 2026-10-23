@@ -316,7 +316,11 @@ impl Library {
                                 if response.double_clicked() && available.load {
                                     command = Some(Command::Load(key));
                                 }
-                                response.context_menu(|ui| {
+                                crate::dropdown::context_popup(
+                                    ui,
+                                    egui::Popup::context_menu(&response),
+                                )
+                                .show(|ui| {
                                     edit_menu(
                                         ui,
                                         key,
@@ -451,7 +455,6 @@ fn edit_menu(
         *command = Some(Command::Load(key));
         ui.close();
     }
-    ui.separator();
     if ui
         .add_enabled(available.duplicate, egui::Button::new("Duplicate"))
         .clicked()
@@ -477,7 +480,7 @@ fn edit_menu(
         *command = Some(Command::Refresh);
         ui.close();
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     if ui
         .add_enabled(available.earlier, egui::Button::new("Move earlier"))
         .clicked()
@@ -492,7 +495,7 @@ fn edit_menu(
         *command = Some(Command::Reorder(key, index + 2));
         ui.close();
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     if ui
         .add_enabled(available.delete, egui::Button::new("Delete…"))
         .clicked()

@@ -95,21 +95,6 @@ pub(crate) fn popup_style(style: &mut egui::Style, base: Color32, text: Color32,
     }
 }
 
-/// Carry the same compact chrome into nested menus as well as the root popup.
-pub(crate) fn styled_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'a> {
-    use egui::containers::menu::MenuConfig;
-    let base = ui.visuals().panel_fill;
-    let text = ui.visuals().text_color();
-    let accent = ui.visuals().selection.bg_fill;
-    let config = MenuConfig::new().style(egui::style::StyleModifier::new(move |style| {
-        popup_style(style, base, text, accent);
-    }));
-    popup.style(config.style.clone()).info(
-        egui::UiStackInfo::new(egui::UiKind::Menu)
-            .with_tag_value(MenuConfig::MENU_CONFIG_TAG, config),
-    )
-}
-
 /// Context menus have comfortable rows and no per-item button frames.
 /// Explicit group separators are drawn by `menu_separator`.
 pub(crate) fn context_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'a> {

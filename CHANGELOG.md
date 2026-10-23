@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Apply the borderless context-menu style to pane menus and their submenus,
+  parameter/MIDI actions, library entries, and saved swatches. Remove the older
+  competing menu styling path and keep pane menus to two deliberate dividers.
+
 - Place FPS/sample-rate readouts beside system audio meters on the right, and
   give the left-aligned Signals/Macros controls roomier icon/label padding.
 

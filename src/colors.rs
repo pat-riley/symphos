@@ -702,7 +702,11 @@ impl Palette {
                                 editor.gradient.colors[editor.selected] = s.color;
                             }
                             response.clone().help_text(&s.name);
-                            response.context_menu(|ui| {
+                            crate::dropdown::context_popup(
+                                ui,
+                                egui::Popup::context_menu(&response),
+                            )
+                            .show(|ui| {
                                 ui.label(&s.name);
                                 if ui.button("Delete swatch").clicked() {
                                     remove = Some(i);

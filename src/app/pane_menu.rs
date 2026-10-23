@@ -50,87 +50,83 @@ impl SymphosApp {
         if !requested && !egui::Popup::is_id_open(ui.ctx(), popup_id) {
             return;
         }
-        let base = self.theme.panel;
-        let text = self.theme.foreground;
-        let accent = self.theme.accent;
         let mut action = None;
-        egui::Popup::new(popup_id, ui.ctx().clone(), rect, ui.layer_id())
-            .at_pointer_fixed()
-            .open_memory(requested.then_some(egui::SetOpenCommand::Bool(true)))
-            .kind(egui::PopupKind::Menu)
-            .layout(Layout::top_down_justified(Align::LEFT))
-            .style(egui::style::StyleModifier::new(move |style| {
-                crate::dropdown::popup_style(style, base, text, accent)
-            }))
-            .show(|ui| {
-                ui.set_min_width(190.0);
-                let mut item = |ui: &mut egui::Ui, label: &str, enabled: bool, command: Action| {
-                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                        action = Some(command);
-                        ui.close();
+        crate::dropdown::context_popup(
+            ui,
+            egui::Popup::new(popup_id, ui.ctx().clone(), rect, ui.layer_id())
+                .at_pointer_fixed()
+                .open_memory(requested.then_some(egui::SetOpenCommand::Bool(true)))
+                .kind(egui::PopupKind::Menu)
+                .layout(Layout::top_down_justified(Align::LEFT)),
+        )
+        .show(|ui| {
+            ui.set_min_width(190.0);
+            let mut item = |ui: &mut egui::Ui, label: &str, enabled: bool, command: Action| {
+                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                    action = Some(command);
+                    ui.close();
+                }
+            };
+            item(ui, "Inspect", true, Action::Inspect);
+            item(ui, "Copy pane", true, Action::Copy);
+            item(
+                ui,
+                "Paste pane",
+                self.pane_clipboard.is_some(),
+                Action::Paste,
+            );
+            let can_add = self.open_panes().len() < MAX_PANES;
+            item(ui, "Duplicate pane", can_add, Action::Duplicate);
+            ui.add_enabled_ui(can_add && self.pane_clipboard.is_some(), |ui| {
+                ui.menu_button("Paste as new pane", |ui| {
+                    for (edge, label) in EDGES {
+                        item(ui, label, true, Action::PasteNew(edge));
                     }
-                };
-                item(ui, "Inspect", true, Action::Inspect);
-                ui.separator();
-                item(ui, "Copy pane", true, Action::Copy);
-                item(
-                    ui,
-                    "Paste pane",
-                    self.pane_clipboard.is_some(),
-                    Action::Paste,
-                );
-                let can_add = self.open_panes().len() < MAX_PANES;
-                item(ui, "Duplicate pane", can_add, Action::Duplicate);
-                ui.add_enabled_ui(can_add && self.pane_clipboard.is_some(), |ui| {
-                    ui.menu_button("Paste as new pane", |ui| {
+                });
+            });
+            crate::dropdown::menu_separator(ui);
+            let frozen = self.panes[index].is_frozen();
+            item(
+                ui,
+                if frozen { "Resume pane" } else { "Freeze pane" },
+                live || frozen,
+                Action::Freeze,
+            );
+            item(
+                ui,
+                if self.panel_fullscreen.is_some() {
+                    "Exit fullscreen"
+                } else {
+                    "Fullscreen pane"
+                },
+                true,
+                Action::Fullscreen,
+            );
+            ui.add_enabled_ui(
+                self.open_panes().len() > 1 && self.panel_fullscreen.is_none(),
+                |ui| {
+                    ui.menu_button("Position", |ui| {
                         for (edge, label) in EDGES {
-                            item(ui, label, true, Action::PasteNew(edge));
+                            item(ui, label, true, Action::Position(edge));
                         }
                     });
-                });
-                ui.separator();
-                let frozen = self.panes[index].is_frozen();
-                item(
-                    ui,
-                    if frozen { "Resume pane" } else { "Freeze pane" },
-                    live || frozen,
-                    Action::Freeze,
-                );
-                item(
-                    ui,
-                    if self.panel_fullscreen.is_some() {
-                        "Exit fullscreen"
-                    } else {
-                        "Fullscreen pane"
-                    },
-                    true,
-                    Action::Fullscreen,
-                );
-                ui.add_enabled_ui(
-                    self.open_panes().len() > 1 && self.panel_fullscreen.is_none(),
-                    |ui| {
-                        ui.menu_button("Position", |ui| {
-                            for (edge, label) in EDGES {
-                                item(ui, label, true, Action::Position(edge));
-                            }
-                        });
-                        ui.menu_button("Swap with", |ui| {
-                            for other in self.open_panes().into_iter().filter(|id| *id != index) {
-                                item(
-                                    ui,
-                                    &format!("{} · {}", other + 1, self.panes[other].kind.label()),
-                                    true,
-                                    Action::Swap(other),
-                                );
-                            }
-                        });
-                        item(ui, "Balance pane sizes", true, Action::Balance);
-                    },
-                );
-                ui.separator();
-                item(ui, "Reset pane settings", true, Action::Reset);
-                item(ui, "Delete pane", true, Action::Delete);
-            });
+                    ui.menu_button("Swap with", |ui| {
+                        for other in self.open_panes().into_iter().filter(|id| *id != index) {
+                            item(
+                                ui,
+                                &format!("{} · {}", other + 1, self.panes[other].kind.label()),
+                                true,
+                                Action::Swap(other),
+                            );
+                        }
+                    });
+                    item(ui, "Balance pane sizes", true, Action::Balance);
+                },
+            );
+            crate::dropdown::menu_separator(ui);
+            item(ui, "Reset pane settings", true, Action::Reset);
+            item(ui, "Delete pane", true, Action::Delete);
+        });
         if let Some(action) = action {
             egui::Popup::close_all(ui.ctx());
             self.pane_action(index, action, frame);

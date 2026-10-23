@@ -4324,6 +4324,55 @@ mod workspace_interaction_tests {
         };
         assert!(position("Inspect").y < position("Copy pane").y);
         assert!(position("Reset pane settings").y < position("Delete pane").y);
+        // Disabled entries, normal entries, and submenu buttons must be flat rows.
+        for label in [
+            "Inspect",
+            "Copy pane",
+            "Paste pane",
+            "Duplicate pane",
+            "Position",
+            "Delete pane",
+        ] {
+            let center = position(label);
+            assert!(
+                !out.shapes.iter().any(|s| matches!(&s.shape,
+                egui::Shape::Rect(r) if r.stroke.width > 0.0
+                    && r.rect.height() <= 35.0 && r.rect.width() >= 180.0
+                    && r.rect.contains(center))),
+                "boxed menu row: {label}"
+            );
+        }
+        let submenu_button = position("Position");
+        for pressed in [true, false] {
+            render(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(submenu_button),
+                    button(submenu_button, pressed),
+                ],
+            );
+        }
+        let submenu = render(&mut app, &ctx, vec![]);
+        for label in ["Left", "Right", "Above", "Below"] {
+            let center = submenu
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == label => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing submenu entry {label}"));
+            assert!(
+                !submenu.shapes.iter().any(|s| matches!(&s.shape,
+                egui::Shape::Rect(r) if r.stroke.width > 0.0
+                    && r.rect.height() <= 35.0 && r.rect.width() >= 80.0
+                    && r.rect.contains(center))),
+                "boxed submenu row: {label}"
+            );
+        }
         let inspect = position("Inspect");
         render(
             &mut app,
