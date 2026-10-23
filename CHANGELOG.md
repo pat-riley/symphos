@@ -5,6 +5,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Move 3D Waterfall note labels and tuning into Appearance → Viewport guides.
+  Add frequency/time grid divisions, minor lines, opacity, line width, optional
+  level guides, and independent frequency/time/level labels. Guide density adapts
+  to the projected viewport; presets retain the guide settings without changing audio.
+
 - Give expanded macro docks wider strips and more generous control spacing.
   Show the mapped parameter beneath the knob/value, independently of its macro
   title, with component context and a separate modulation-source group.

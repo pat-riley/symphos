@@ -12,6 +12,7 @@ use crate::help::HoverHelp;
 use crate::icons::{self, Icon};
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
+mod guides;
 mod motion;
 mod texture;
 
@@ -114,6 +115,7 @@ pub struct Waterfall {
     floor_grid: bool,
     guides: bool,
     axes: bool,
+    guide_detail: guides::Settings,
     show_gizmo: bool,
     surface_walls: bool,
     surface_floor: bool,
@@ -176,6 +178,8 @@ grid: bool => grid,
 floor_grid: bool => floor_grid,
 guides: bool => guides,
 axes: bool => axes,
+#[serde(default)]
+guide_detail: guides::Settings => guide_detail,
 show_gizmo: bool => show_gizmo,
 surface_walls: bool => surface_walls,
 #[serde(default)]
@@ -233,6 +237,7 @@ impl Default for Waterfall {
             floor_grid: true,
             guides: true,
             axes: true,
+            guide_detail: Default::default(),
             show_gizmo: false,
             surface_walls: true,
             surface_floor: false,
@@ -657,7 +662,6 @@ impl Waterfall {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
-            self.history.data.settings.label_controls(ui);
             ui.spacing_mut().slider_width = 60.0;
             super::settings_group(ui, "Render style", |ui| {
                 super::property_row(ui, "Style", |ui| render_style_picker(ui, &mut self.mode));
@@ -786,7 +790,12 @@ impl Waterfall {
                 ui.checkbox(&mut self.guides, "Show guides").help_text("Master switch: hide floor and surface grids, all axes and labels, navigation hints, and the viewport gizmo. Your individual guide settings are remembered.");
                 ui.add_enabled_ui(self.guides, |ui| {
                     ui.checkbox(&mut self.floor_grid, "Floor grid").help_text("Reference grid beneath the waterfall.");
-                    ui.checkbox(&mut self.axes, "Axes & labels").help_text("Frequency/time/level axis lines, tick labels, and navigation text. Note labels are configured under Appearance → Musical labels.");
+                    self.guide_detail.grid_controls(ui, self.floor_grid, self.axes);
+                    ui.checkbox(&mut self.axes, "Axes & labels").help_text("Frequency, time, and level reference axes. Choose which labels to show below.");
+                    self.guide_detail.label_controls(ui, self.axes);
+                    ui.add_enabled_ui(self.axes && self.guide_detail.grid.x_labels, |ui| {
+                        self.history.data.settings.label_options(ui);
+                    });
                     ui.checkbox(&mut self.show_gizmo, "Navigation gizmo").help_text("Show the small clickable axis navigator in the viewport. The sidebar camera controls remain available when hidden.");
                 });
             });
@@ -1109,23 +1118,9 @@ impl Waterfall {
         let camera = self.camera(plot);
         let mesh = self.cached_mesh(&camera, plot, now, theme);
         let project = |x, y, z| camera.project(self.geometry_point([x, y, z])).0;
-        let base_stroke = Stroke::new(0.6, mix(theme.background, theme.muted, 0.35));
-        for step in 0..if self.guides && self.floor_grid { 9 } else { 0 } {
-            let t = step as f32 / 8.0;
-            painter.line_segment(
-                [
-                    project(-1.4 + t * 2.8, 0.0, -1.0),
-                    project(-1.4 + t * 2.8, 0.0, 1.0),
-                ],
-                base_stroke,
-            );
-            painter.line_segment(
-                [
-                    project(-1.4, 0.0, -1.0 + t * 2.0),
-                    project(1.4, 0.0, -1.0 + t * 2.0),
-                ],
-                base_stroke,
-            );
+        if self.guides {
+            self.guide_detail
+                .paint(&painter, &project, self.floor_grid, self.height, theme);
         }
 
         painter.add(egui::Shape::Mesh(mesh));
@@ -1144,33 +1139,52 @@ impl Waterfall {
                 [project(-1.4, 0.0, 1.0), project(-1.4, self.height, 1.0)],
                 axis_stroke,
             );
-            for step in 0..=4 {
-                let t = step as f32 / 4.0;
-                label(
-                    &painter,
-                    project(-1.4 + t * 2.8, 0.0, 1.0) + Vec2::new(-8.0, 6.0),
-                    settings.axis_label(t, frame.sample_rate),
-                    theme.muted,
-                );
+            let grid = &self.guide_detail.grid;
+            if grid.x_labels {
+                let extent = project(-1.4, 0.0, 1.0).distance(project(1.4, 0.0, 1.0));
+                for t in grid.label_ticks(true, extent) {
+                    label(
+                        &painter,
+                        project(-1.4 + t * 2.8, 0.0, 1.0) + Vec2::new(-8.0, 6.0),
+                        settings.axis_label(t, frame.sample_rate),
+                        theme.muted,
+                    );
+                }
             }
-            label(
-                &painter,
-                project(1.4, 0.0, -1.0) + Vec2::new(5.0, 0.0),
-                format!("−{} s", self.seconds),
-                theme.muted,
-            );
-            label(
-                &painter,
-                project(1.4, 0.0, 1.0) + Vec2::new(12.0, -12.0),
-                "now",
-                theme.muted,
-            );
-            label(
-                &painter,
-                project(-1.4, self.height, 1.0) + Vec2::new(-8.0, -16.0),
-                format!("{:.0} dBFS", settings.ceiling),
-                theme.muted,
-            );
+            if grid.y_labels {
+                let extent = project(1.4, 0.0, 1.0).distance(project(1.4, 0.0, -1.0));
+                // Time labels run from newest at the front to oldest at the back.
+                for t in grid.label_ticks(false, extent / 2.0) {
+                    label(
+                        &painter,
+                        project(1.4, 0.0, 1.0 - 2.0 * t) + Vec2::new(8.0, -12.0),
+                        if t == 0.0 {
+                            "now".to_owned()
+                        } else {
+                            format!("−{:.2} s", t * self.seconds)
+                        },
+                        theme.muted,
+                    );
+                }
+            }
+            if self.guide_detail.level_labels {
+                let ticks = super::plot_grid::Settings {
+                    y_divisions: self.guide_detail.level_divisions,
+                    ..grid.clone()
+                };
+                let extent = project(-1.4, 0.0, 1.0).distance(project(-1.4, self.height, 1.0));
+                for t in ticks.label_ticks(false, extent) {
+                    label(
+                        &painter,
+                        project(-1.4, self.height * t, 1.0) + Vec2::new(-40.0, -12.0),
+                        format!(
+                            "{:.0} dBFS",
+                            settings.floor + (settings.ceiling - settings.floor) * t
+                        ),
+                        theme.muted,
+                    );
+                }
+            }
         }
         if self.guides && self.show_gizmo && !super::presenting(ui) {
             let gizmo_rect =
@@ -2512,6 +2526,100 @@ mod tests {
                 assert_eq!(camera.project([0.0, 0.0, 0.0]).0, viewport.center());
             }
         }
+    }
+
+    #[test]
+    fn guide_detail_roundtrips_and_changes_only_references() {
+        let now = Instant::now();
+        let mut waterfall = populated_waterfall(now);
+        waterfall.grid = false; // Isolate reference grids from the surface overlay.
+        let baseline = draw_frame(&mut waterfall, now);
+        let lines = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. }))
+                .count()
+        };
+        let mesh = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| {
+                    if let egui::Shape::Mesh(mesh) = &s.shape {
+                        Some(mesh.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+        };
+        let original_audio = waterfall.history.data.settings.clone();
+        waterfall.guide_detail.grid.x_divisions = 12;
+        waterfall.guide_detail.grid.y_divisions = 6;
+        waterfall.guide_detail.grid.subdivisions = 4;
+        waterfall.guide_detail.grid.line_width = 1.5;
+        waterfall.guide_detail.level_lines = true;
+        let detailed = draw_frame(&mut waterfall, now);
+        assert!(lines(&detailed) > lines(&baseline));
+        assert_eq!(mesh(&baseline).vertices, mesh(&detailed).vertices);
+        assert_eq!(waterfall.history.data.settings, original_audio);
+        assert_eq!(waterfall.history_len(), 1);
+
+        waterfall.guide_detail.grid.x_labels = false;
+        waterfall.guide_detail.grid.y_labels = false;
+        waterfall.guide_detail.level_labels = false;
+        assert!(
+            !draw_frame(&mut waterfall, now)
+                .shapes
+                .iter()
+                .any(|s| matches!(s.shape, egui::Shape::Text(_)))
+        );
+        let saved = serde_json::to_value(waterfall.settings_snapshot()).unwrap();
+        let mut restored = Waterfall::default();
+        restored.apply_settings(&serde_json::from_value(saved.clone()).unwrap());
+        assert_eq!(restored.guide_detail, waterfall.guide_detail);
+        let mut old = saved;
+        old.as_object_mut().unwrap().remove("guide_detail");
+        let upgraded: WaterfallSettings = serde_json::from_value(old).unwrap();
+        assert_eq!(upgraded.guide_detail, guides::Settings::default());
+        waterfall.guides = false;
+        assert_eq!(lines(&draw_frame(&mut waterfall, now)), 0);
+    }
+
+    #[test]
+    fn note_labels_live_inside_viewport_guides() {
+        let context = egui::Context::default();
+        context.memory_mut(|m| m.set_everything_is_visible(true));
+        let mut waterfall = Waterfall::default();
+        waterfall.history.data.settings.note_labels = true;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(440.0, 6000.0))),
+                ..Default::default()
+            },
+            |ui| {
+                ui.data_mut(|data| {
+                    data.insert_temp(
+                        ui.id().with("active-module-section"),
+                        super::super::SettingsSection::Appearance,
+                    )
+                });
+                waterfall.controls(ui);
+            },
+        );
+        output.textures_delta.clear();
+        assert!(
+            text_position(&output, "Note labels").y > text_position(&output, "Viewport guides").y
+        );
+        assert!(text_position(&output, "A4 Hz").y > text_position(&output, "Note labels").y);
+        assert!(
+            !output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Text(t)
+            if t.galley.job.text == "Musical labels"))
+        );
     }
 
     #[test]

@@ -78,13 +78,15 @@ impl FrequencySettings {
     }
 
     pub fn label_controls(&mut self, ui: &mut egui::Ui) {
-        super::settings_group(ui, "Musical labels", |ui| {
-            ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
-            if self.note_labels {
-                ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).key("frequency.tuning_hz").bounds(200.0..=1000.0).text("A4 Hz"))
+        super::settings_group(ui, "Musical labels", |ui| self.label_options(ui));
+    }
+
+    pub fn label_options(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.note_labels, "Note labels").help_text("Label the frequency axis with the nearest equal-tempered note instead of Hz. These are frequency references, not detected notes or the song's key.");
+        if self.note_labels {
+            ui.add(crate::parameter::Parameter::new(&mut self.tuning_hz, 400.0..=480.0, 440.0).key("frequency.tuning_hz").bounds(200.0..=1000.0).text("A4 Hz"))
                 .help_text("Tuning reference for note labels. Standard concert tuning is A4 = 440 Hz; this does not change the audio.");
-            }
-        });
+        }
     }
 
     pub fn response_controls(&mut self, ui: &mut egui::Ui) {
