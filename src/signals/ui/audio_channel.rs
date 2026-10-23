@@ -94,7 +94,11 @@ pub(super) fn strip(
         egui::Sense::click_and_drag(),
     ))
     .help_text("Select audio channel · drag to reorder · right-click for channel actions");
-    let mut action = response.clicked().then_some(StripAction::Select(bus.id));
+    let mut action = if response.double_clicked() {
+        Some(StripAction::Rename(bus.id))
+    } else {
+        response.clicked().then_some(StripAction::Select(bus.id))
+    };
     if response.drag_started() {
         response.dnd_set_drag_payload(ChannelDrag(bus.id));
     }

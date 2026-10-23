@@ -347,6 +347,13 @@ impl Panel {
                                     }
                                 }
                             }
+                            if let Some(id) = id {
+                                let title = Rect::from_min_max(
+                                    strip.min,
+                                    egui::pos2(strip.right() - 24.0, strip.top() + 28.0),
+                                );
+                                self.rename_field(ui, title, id);
+                            }
                             if ui.rect_contains_pointer(strip)
                                 && ui.input(|i| i.pointer.primary_pressed())
                             {
@@ -494,7 +501,6 @@ impl Panel {
         if let Some(action) = action {
             self.act(action);
         }
-        self.rename_dialog(ui.ctx());
         self.bank.sync_audio_channels();
         if inspector_open {
             self.show_inspector(ui, inspector, frame, theme);
@@ -794,6 +800,9 @@ impl Panel {
                     })
                 {
                     self.rename = Some((id, name, true));
+                    self.selected = Some(id);
+                    self.selected_insert = None;
+                    self.inspect_requested = true;
                 }
             }
             StripAction::Color(id, color) => {
@@ -858,48 +867,43 @@ impl Panel {
             }
         }
     }
-    fn rename_dialog(&mut self, ctx: &egui::Context) {
-        let Some((id, name, focus)) = &mut self.rename else {
+    fn rename_field(&mut self, ui: &mut egui::Ui, rect: Rect, target: u64) {
+        if !self.rename.as_ref().is_some_and(|(id, _, _)| *id == target) {
+            return;
+        }
+        let color = self
+            .bank
+            .channels
+            .iter()
+            .find(|d| d.id == target)
+            .map(channel_color)
+            .or_else(|| {
+                self.bank
+                    .audio_inputs
+                    .iter()
+                    .find(|bus| bus.id == target)
+                    .map(|bus| {
+                        let [r, g, b] = bus.color_rgb();
+                        egui::Color32::from_rgb(r, g, b)
+                    })
+            })
+            .unwrap_or(ui.visuals().panel_fill);
+        let Some((id, name, focus)) = self.rename.as_mut().filter(|(id, _, _)| *id == target)
+        else {
             return;
         };
-        let mut open = true;
-        let mut apply = false;
-        let mut cancel = false;
-        egui::Window::new("Rename channel")
-            .id(egui::Id::new("rename-signal-channel"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                let field = ui.add(
-                    egui::TextEdit::singleline(name)
-                        .char_limit(80)
-                        .desired_width(280.0),
-                );
-                if *focus {
-                    field.request_focus();
-                    *focus = false;
-                }
-                let valid = crate::workspace::valid_name(name);
-                if !valid {
-                    ui.small("Enter a name of 1–80 characters, without control characters.");
-                }
-                ui.horizontal(|ui| {
-                    apply = ui.add_enabled(valid, egui::Button::new("Rename")).clicked();
-                    cancel = ui.button("Cancel").clicked();
-                });
-                apply |= valid && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-            });
-        if apply && let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == *id) {
-            d.name = name.trim().into();
+        let Some(commit) = workspace_ui::inline_strip_name(ui, rect, name, focus, color) else {
+            return;
+        };
+        if commit {
+            if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == *id) {
+                d.name = name.trim().into();
+            }
+            if let Some(b) = self.bank.audio_inputs.iter_mut().find(|b| b.id == *id) {
+                b.name = name.trim().into();
+            }
         }
-        if apply && let Some(b) = self.bank.audio_inputs.iter_mut().find(|b| b.id == *id) {
-            b.name = name.trim().into();
-        }
-        if apply || cancel || !open {
-            self.rename = None;
-        }
+        self.rename = None;
     }
     fn editor_actions(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
@@ -1608,8 +1612,10 @@ fn channel_strip(
         ui.id().with("channel-title"),
         egui::Sense::click_and_drag(),
     ))
-    .help_text("Select channel · drag to reorder");
-    if response.clicked() {
+    .help_text("Select channel · double-click to rename · drag to reorder");
+    if response.double_clicked() {
+        action = Some(StripAction::Rename(d.id));
+    } else if response.clicked() {
         action = Some(StripAction::Select(d.id));
     }
     if response.drag_started() {
@@ -2638,6 +2644,85 @@ mod tests {
     }
 
     #[test]
+    fn double_click_renames_audio_lfo_midi_and_legacy_signal_headers_inline() {
+        for input in [Input::System, Input::Lfo, Input::Midi] {
+            for legacy in [false, true] {
+                let ctx = egui::Context::default();
+                let mut panel = Panel::default();
+                let id = panel.bank.add_source(input).unwrap();
+                panel.bank.channels[0].name = "Original".into();
+                if legacy {
+                    panel.bank.channels[0].inserts = None;
+                    // Legacy control-only channels have no same-ID audio bus.
+                    panel.bank.audio_inputs.clear();
+                }
+                assert!(panel.bank.valid());
+                let render = |panel: &mut Panel, events| {
+                    let mut out = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(800.0, 500.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            panel.show(
+                                ui,
+                                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 400.0)),
+                                &AnalysisFrame::default(),
+                                false,
+                                &AppTheme::default(),
+                            )
+                        },
+                    );
+                    out.textures_delta.clear();
+                    out
+                };
+                render(&mut panel, vec![]);
+                let pos = egui::pos2(65.0, 22.0);
+                for _ in 0..2 {
+                    render(&mut panel, vec![egui::Event::PointerMoved(pos)]);
+                    for pressed in [true, false] {
+                        render(
+                            &mut panel,
+                            vec![egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            }],
+                        );
+                    }
+                }
+                let out = render(&mut panel, vec![]);
+                assert!(panel.rename.is_some(), "{input:?}, legacy {legacy}");
+                assert!(crate::shortcuts::editing_text(&ctx));
+                assert!(!out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Rename channel")));
+                render(&mut panel, vec![egui::Event::Text("New signal".into())]);
+                render(
+                    &mut panel,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+                assert_eq!(panel.bank.channels[0].name, "New signal");
+                assert_eq!(panel.selected, Some(id));
+                if let Some(bus) = panel.bank.audio_inputs.iter().find(|b| b.id == id) {
+                    assert_eq!(bus.name, "New signal");
+                }
+                assert!(panel.rename.is_none());
+                assert!(panel.bank.valid());
+            }
+        }
+    }
+
+    #[test]
     fn rename_commits_on_enter_and_cancel_leaves_the_definition_untouched() {
         let ctx = egui::Context::default();
         let mut panel = test_panel();
@@ -2658,7 +2743,13 @@ mod tests {
                         .unwrap_or_default(),
                     ..Default::default()
                 },
-                |ui| panel.rename_dialog(ui.ctx()),
+                |ui| {
+                    panel.rename_field(
+                        ui,
+                        Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(156.0, 28.0)),
+                        1,
+                    )
+                },
             );
             out.textures_delta.clear();
         };
@@ -2672,6 +2763,14 @@ mod tests {
         panel.rename.as_mut().unwrap().1 = "Discarded".into();
         render(&mut panel, Some(egui::Key::Escape));
         assert_eq!(panel.bank.channels[0].name, "Kick pulse");
+        assert!(panel.rename.is_none());
+        panel.act(StripAction::Rename(1));
+        render(&mut panel, None);
+        panel.rename.as_mut().unwrap().1 = "   ".into();
+        render(&mut panel, Some(egui::Key::Enter));
+        assert_eq!(panel.bank.channels[0].name, "Kick pulse");
+        assert!(panel.rename.is_some(), "invalid names remain editable");
+        render(&mut panel, Some(egui::Key::Escape));
         assert!(panel.rename.is_none());
     }
 

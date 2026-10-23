@@ -215,8 +215,12 @@ pub(super) fn strip(
         format!("{} {}", slot + 1, d.name),
         ink,
     );
-    let response=workspace_ui::drag_cursor(ui.interact(title,ui.id().with("insert-channel-title"),egui::Sense::click_and_drag())).help_text("Select channel · drag to reorder channels · right-click for rename, color, duplicate and delete");
-    let mut action = response.clicked().then_some(StripAction::Select(d.id));
+    let response=workspace_ui::drag_cursor(ui.interact(title,ui.id().with("insert-channel-title"),egui::Sense::click_and_drag())).help_text("Select channel · double-click to rename · drag to reorder · right-click for channel actions");
+    let mut action = if response.double_clicked() {
+        Some(StripAction::Rename(d.id))
+    } else {
+        response.clicked().then_some(StripAction::Select(d.id))
+    };
     if response.drag_started() {
         response.dnd_set_drag_payload(ChannelDrag(d.id));
     }

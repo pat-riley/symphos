@@ -92,6 +92,73 @@ pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: 
     }
 }
 
+/// Edit a channel name in its header. Returns commit/cancel, or None while typing.
+pub(crate) fn inline_strip_name(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    name: &mut String,
+    focus: &mut bool,
+    color: Color32,
+) -> Option<bool> {
+    ui.painter().rect_filled(rect, 0.0, color);
+    let id = ui.id().with("inline-strip-name");
+    let starting = *focus;
+    // TextEdit can consume Enter/Escape while surrendering focus. Remember the
+    // intent first so Escape can never turn into a click-away commit.
+    let (escape, enter) = ui.input(|input| {
+        (
+            input.key_pressed(egui::Key::Escape),
+            input.key_pressed(egui::Key::Enter),
+        )
+    });
+    let response = ui.put(
+        rect.shrink2(Vec2::new(3.0, 3.0)),
+        egui::TextEdit::singleline(name)
+            .id(id)
+            .char_limit(80)
+            .font(FontId::proportional(12.0))
+            .desired_width(f32::INFINITY),
+    );
+    if starting {
+        response.request_focus();
+        if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(name.chars().count()),
+                )));
+            state.store(ui.ctx(), id);
+        }
+        *focus = false;
+    }
+    let valid = crate::workspace::valid_name(name);
+    if escape || enter {
+        ui.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        });
+    }
+    let done = if escape {
+        Some(false)
+    } else if enter {
+        if valid {
+            Some(true)
+        } else {
+            response.request_focus();
+            None
+        }
+    } else if !starting && response.lost_focus() {
+        Some(valid)
+    } else {
+        None
+    };
+    if done.is_some() {
+        response.surrender_focus();
+    }
+    done
+}
+
 pub fn strip_title(ui: &egui::Ui, rect: Rect, text: String, color: egui::Color32) {
     let galley = egui::WidgetText::from(egui::RichText::new(text).size(13.0).strong().color(color))
         .into_galley(

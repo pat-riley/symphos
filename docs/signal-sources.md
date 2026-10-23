@@ -68,7 +68,12 @@ Colors are saved with channels and follow their meters, traces, and macro source
 rings through reorder, duplication, and preset import. Dark header colors use light
 text for readability. Drag a header to reorder; a thin line marks the insertion
 boundary, including at the end of the track list. **Undo delete / cut** restores the
-source identity, settings, and order. Track order is saved in projects; vacant
+source identity, settings, and order. Double-click a colored channel title to
+rename it inline; typing replaces the selected name. Enter commits, Escape
+cancels, and clicking away commits a valid name. Delete or Backspace removes the
+selected channel (or selected insert), while either key edits text during a
+rename. The permanent default input cannot be renamed or deleted.
+Track order is saved in projects; vacant
 slots in older projects are removed when displayed.
 The mixer scrolls horizontally and vertically when space is limited. Deletion
 clears that channel's mappings across all retained visualizer configurations.
@@ -374,3 +379,13 @@ opens the local 30/60/90/120 target selector, shared with Settings. The labeled
 System audio meters on the right show the master capture before Signals inserts
 or channel gain (Audio input/Demo audio is labeled accordingly when selected).
 The display target never changes audio analysis or recording frame rate.
+
+### Inline macro titles
+
+Double-click a macro’s colored title to edit its name in place. Enter confirms,
+Escape cancels, and clicking away commits a valid name. Click a macro and press
+Delete or Backspace to clear that slot, including its parameter assignment and
+modulation link. The visualizer’s manual parameter value stays unchanged.
+Scene Undo restores the deleted macro; the macro context menu also offers
+**Undo last edit**. Delete and Backspace edit text while a name or other text
+field has focus.

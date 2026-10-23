@@ -893,7 +893,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if self.scene_library.busy() || self.settings_window.open {
             return; // The modal owns Escape and blocks workspace shortcuts.
         }
-        if self.inspecting_signal
+        if (self.inspecting_signal || self.inspecting_macro.is_some())
             && self.panel_fullscreen.is_none()
             && !self.workspace_menu_blocked(ctx)
             && !crate::shortcuts::editing_text(ctx)
@@ -904,10 +904,22 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         || input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
             })
         {
-            self.signal_ui
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .delete_selection();
+            if let Some(index) = self.inspecting_macro {
+                crate::macros::delete_scene_slot(
+                    ctx,
+                    &format!("scene-{}", self.scenes.active_scene),
+                    &mut self.scene_macros.slots,
+                    index,
+                );
+                for pane in &mut self.panes {
+                    pane.set_scene_macros(&self.scene_macros);
+                }
+            } else {
+                self.signal_ui
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .delete_selection();
+            }
             return;
         }
         // Always provide an exit even if a hidden inspector or dialog held focus.
@@ -2938,6 +2950,56 @@ mod workspace_interaction_tests {
         );
         output.textures_delta.clear();
         output
+    }
+
+    #[test]
+    fn delete_key_clears_selected_macro_only_and_can_be_undone() {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            app.scene_macros.slots[0].name = Some("Delete me".into());
+            app.scene_macros.slots[1].name = Some("Keep me".into());
+            app.inspecting_macro = Some(0);
+            let macros = app.scene_macros.clone();
+            let panes = app
+                .panes
+                .iter()
+                .map(ModulePane::copy_settings)
+                .collect::<Vec<_>>();
+            let event = || egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let field = egui::Id::new("macro-delete-test-text");
+            ctx.data_mut(|data| data.insert_temp(field, String::new()));
+            ctx.memory_mut(|m| m.request_focus(field));
+            workspace_frame(&mut app, &ctx, now, vec![event()]);
+            assert_eq!(app.scene_macros.slots, macros.slots);
+            ctx.memory_mut(|m| m.surrender_focus(field));
+            app.settings_window.open = true;
+            workspace_frame(&mut app, &ctx, now, vec![event()]);
+            assert_eq!(app.scene_macros.slots, macros.slots);
+            app.settings_window.open = false;
+            workspace_frame(&mut app, &ctx, now, vec![]);
+            app.begin_edit(true);
+            workspace_frame(&mut app, &ctx, now, vec![event()]);
+            app.finish_edit();
+            assert_eq!(app.scene_macros.slots[0], crate::macros::Slot::default());
+            assert_eq!(app.scene_macros.slots[1], macros.slots[1]);
+            assert_eq!(
+                app.panes
+                    .iter()
+                    .map(ModulePane::copy_settings)
+                    .collect::<Vec<_>>(),
+                panes
+            );
+            app.undo_edit(false);
+            assert_eq!(app.scene_macros.slots, macros.slots);
+        }
     }
 
     #[test]
