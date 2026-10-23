@@ -15,6 +15,7 @@ fn build_macos_capture() {
         .file("src/audio/macos_capture.m")
         .file("src/project_menu.m")
         .file("src/window_chrome.m")
+        .file("src/color_picker.m")
         .file("src/midi/macos.m")
         .file("src/recording/encoder.m")
         .flag("-fobjc-arc")

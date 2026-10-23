@@ -43,6 +43,7 @@ pub enum Icon {
     AudioMappings,
     Knob,
     Levels,
+    Eyedropper,
 }
 
 pub fn sized_button(
@@ -176,6 +177,17 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
                 painter.rect_filled(Rect::from_min_max(p(x, top), p(x + 3.0, 17.0)), 0.6, color);
                 line(&[(x, top - 2.5), (x + 3.0, top - 2.5)]);
             }
+        }
+        Icon::Eyedropper => {
+            line(&[
+                (12.0, 5.0),
+                (4.0, 13.0),
+                (3.0, 17.0),
+                (7.0, 16.0),
+                (15.0, 8.0),
+            ]);
+            line(&[(10.0, 4.0), (16.0, 10.0)]);
+            line(&[(13.0, 5.0), (16.0, 2.0), (19.0, 5.0), (16.0, 8.0)]);
         }
         Icon::AudioMappings => {
             line(&[(2.0, 10.0), (8.0, 10.0), (13.0, 4.0), (18.0, 4.0)]);

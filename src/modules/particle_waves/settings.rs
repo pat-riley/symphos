@@ -420,6 +420,7 @@ pub(super) fn resolved_palette(palette: Option<Palette>, legacy: [[u8; 3]; 3]) -
         Palette::Custom(Gradient {
             colors,
             count: 3,
+            alpha: [255; 8],
             cyclic: false,
         })
     })
@@ -458,7 +459,7 @@ impl Settings {
                 a: color(legacy[0]),
                 b: color(legacy[1]),
                 c: color(legacy[2]),
-                gradient: gradient.colors.map(color),
+                gradient: gradient.gpu(),
                 palette: [
                     if palette.is_some() {
                         gradient.count.clamp(2, 8) as f32

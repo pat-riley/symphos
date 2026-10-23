@@ -3,6 +3,7 @@ mod app;
 mod audio;
 mod background;
 mod capture_history;
+mod color_picker;
 mod colors;
 #[cfg(feature = "development")]
 mod development;
@@ -61,7 +62,7 @@ fn main() -> eframe::Result {
             .with_title_shown(false)
             .with_app_id("io.github.riley.Symphos")
             .with_inner_size([1440.0, 940.0])
-            .with_min_inner_size([1024.0, 700.0])
+            .with_min_inner_size(workspace::MIN_WINDOW_SIZE)
             .with_icon(app_icon()),
         ..Default::default()
     };

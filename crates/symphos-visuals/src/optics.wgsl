@@ -37,7 +37,7 @@ fn optical_visibility(point:vec3f,ignore:u32)->f32 {
         let disc=b*b-a*c;
         if disc>0.0 {
             let hit=(-b-sqrt(disc))/a;
-            if hit>0.0 && hit<particle_distance-0.001 {visible*=1.0-f.orb_optics.x*f.orb_style.w;}
+            if hit>0.0 && hit<particle_distance-0.001 {visible*=1.0-f.orb_optics.x*f.orb_style.w*optical_alpha(j);}
         }
     }
     return visible;
@@ -57,6 +57,18 @@ fn optical_palette(t:f32,id:u32)->vec3f {
     }
     return mix(mix(a,b,clamp(k*2.0,0.0,1.0)),c,clamp(k*2.0-1.0,0.0,1.0));
 }
+fn optical_alpha(i:u32)->f32 {
+    let t=f32(i)/max(f.orbs.x-1.0,1.0)*f.orb_color.w+f.orb_color.z+f.clock.y*f.orb_tint.y;
+    let k=1.0-abs(fract(t*0.5)*2.0-1.0);
+    if u32(f.orb_color.x)==2u {return f.orb_start.a;}
+    if u32(f.orb_color.x)==3u {return f.orb_colors[min(i,4u)].a;}
+    if u32(f.orb_color.x)==1u && u32(f.orb_color.y)==7u {return mix(f.orb_start.a,f.orb_end.a,k);}
+    if u32(f.orb_color.x)==0u && u32(f.particle_color.x)==7u {
+        let p=f32(i)/max(f.orbs.x,1.0)*f.particle_color.z+f.look.w+f.clock.y*f.particle_light.z;
+        return mix(f.color_start.a,f.color_end.a,1.0-abs(fract(p*0.5)*2.0-1.0));
+    }
+    return 1.0;
+}
 fn optical_color(i:u32)->vec3f {
     let t=f32(i)/max(f.orbs.x-1.0,1.0)*f.orb_color.w+f.orb_color.z+f.clock.y*f.orb_tint.y;
     var color=optical_palette(t,u32(f.orb_color.y));
@@ -74,7 +86,7 @@ fn optical_color(i:u32)->vec3f {
     if u32(f.orb_color.x)==2u {color=pow(f.orb_start.rgb,vec3f(2.2));}
     if u32(f.orb_color.x)==3u {color=pow(f.orb_colors[min(i,4u)].rgb,vec3f(2.2));}
     let gray=dot(color,vec3f(0.2126,0.7152,0.0722));
-    return max(mix(vec3f(gray),color,f.orb_tint.x),vec3f(0))*f.look.z*f.particle_light.w*f.orb_style.w;
+    return max(mix(vec3f(gray),color,f.orb_tint.x),vec3f(0))*f.look.z*f.particle_light.w*f.orb_style.w*optical_alpha(i);
 }
 
 fn optical_illumination(point:vec3f)->f32 {

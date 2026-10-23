@@ -107,7 +107,7 @@ impl Settings {
             .collect()
     }
 }
-fn lines(divisions: usize, subdivisions: usize, extent: f32) -> Vec<(f32, bool)> {
+pub(super) fn lines(divisions: usize, subdivisions: usize, extent: f32) -> Vec<(f32, bool)> {
     let divisions = divisions.clamp(2, 24);
     let subdivisions = subdivisions.clamp(1, 8);
     let minor = extent / (divisions * subdivisions) as f32 >= 5.0;

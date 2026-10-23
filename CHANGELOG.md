@@ -5,6 +5,68 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Reduce development build debug artifacts and disable the incremental object
+  cache. Reclaim debug build artifacts before supervised builds exceed a 12 GiB
+  cache budget, preserving development workspaces, presets, and the working app.
+
+- Use one inspector-colored, movable Color panel with an explicit close button,
+  aligned format controls, a checkerboard opacity slider, and tighter spacing.
+  Show editable hex codes beside inspector swatches. Persist color/gradient
+  opacity and carry it through CPU and GPU drawing; older colors stay opaque.
+
+- Redesign the shared color picker with a larger saturation/brightness field,
+  rounded hue strip, and compact eyedropper. Add editable Hex, RGB, CSS, HSL,
+  and HSB representations with validation; preserve existing opaque colors.
+
+- Extend fullscreen scene backgrounds behind the native macOS traffic lights,
+  including gradients, and restore the editor's title-bar inset on exit. Lower
+  the minimum window width from 1024 to 768 and accept narrower saved workspaces.
+
+- Add a shared eyedropper to every color popup on macOS, including gradient
+  stops, scene backgrounds, macro colors, and individual visualizer colors.
+  Use the native screen sampler, convert sampled colors to sRGB, and preserve
+  colors on cancellation. Sampled changes participate in undo and preset edits.
+
+- Move 3D Waterfall note labels and tuning into Appearance → Viewport guides.
+  Add frequency/time grid divisions, minor lines, opacity, line width, optional
+  level guides, and independent frequency/time/level labels. Guide density adapts
+  to the projected viewport; presets retain the guide settings without changing audio.
+
+- Give expanded macro docks wider strips and more generous control spacing.
+  Show the mapped parameter beneath the knob/value, independently of its macro
+  title, with component context and a separate modulation-source group.
+
+- Apply the borderless context-menu style to pane menus and their submenus,
+  parameter/MIDI actions, library entries, and saved swatches. Remove the older
+  competing menu styling path and keep pane menus to two deliberate dividers.
+
+- Place FPS/sample-rate readouts beside system audio meters on the right, and
+  give the left-aligned Signals/Macros controls roomier icon/label padding.
+
+- Make pane fullscreen a clean edge-to-edge presentation: hide pane headers,
+  controls, outline, hover help, orientation navigator, and exit hint, while
+  retaining the native macOS red/yellow/green window controls. Escape restores
+  the workspace without changing visualizer settings; explicitly opened
+  fullscreen macros remain available.
+
+- Add a resizable Macros dock, including fullscreen, with double-click reset and
+  a remembered local height. Center crisp resize guides evenly between pane,
+  dock, and sidebar edges; resizing uses pointer movement without a grab jump.
+
+- Left-align footer dock controls beside the performance readout, with Signals
+  before Macros, matching levels/knob icons, and equal vertically centered buttons.
+
+- Clean up channel and macro context menus with borderless rows, two deliberate
+  group dividers, consistent menu padding, and roomier shared color swatches.
+
+- Move Macros and Signals back to the footer with compact controls on narrow
+  workspaces. Selected macro/signal strips use a subtle neutral background lift
+  instead of colored outlines.
+- Show audio-only channels in macro modulation pickers with an explicit action
+  to add Overall intensity and connect the resulting control curve. The source
+  editor uses the shared compact inspector/dropdown styling; opening it alone
+  does not change a channel.
+
 - Extend scene backgrounds to each pane’s rounded edges, including headers and
   content padding, with continuous gradients behind the inset visualization.
 

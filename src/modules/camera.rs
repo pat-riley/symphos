@@ -229,6 +229,7 @@ pub(super) fn draw<M: Controlled + ?Sized>(
     shared_gizmo: bool,
     body: impl FnOnce(&mut M, &mut Ui),
 ) {
+    let presentation = super::presenting(ui);
     let (base, raw, enabled, speed, reverse, recipe, gizmo, y_up) = {
         let c = module.camera();
         (
@@ -275,19 +276,19 @@ pub(super) fn draw<M: Controlled + ?Sized>(
     {
         let mut c = module.camera();
         c.apply(shown);
-        if shared_gizmo {
+        if shared_gizmo || presentation {
             *c.gizmo = false;
         }
         *c.enabled = false; // prevent the renderer's legacy yaw-only animator
     }
     let navigator = gizmo_rect(rect);
-    if shared_gizmo && gizmo {
+    if shared_gizmo && gizmo && !presentation {
         ui.data_mut(|d| d.insert_temp(egui::Id::new("camera-navigator-bounds"), navigator));
     }
     body(module, ui);
     let mut after = module.camera().pose();
     let mut navigated = !after.close(shown);
-    if shared_gizmo && gizmo {
+    if shared_gizmo && gizmo && !presentation {
         let action = camera_gizmo::draw_in_space(
             ui,
             navigator,
@@ -322,11 +323,11 @@ pub(super) fn draw<M: Controlled + ?Sized>(
             navigated = true;
         }
     }
-    if shared_gizmo && gizmo {
+    if shared_gizmo && gizmo && !presentation {
         ui.data_mut(|d| d.remove::<Rect>(egui::Id::new("camera-navigator-bounds")));
     }
     let mut c = module.camera();
-    if shared_gizmo {
+    if shared_gizmo || presentation {
         *c.gizmo = gizmo;
     }
     if navigated || !enabled {

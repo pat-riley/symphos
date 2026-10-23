@@ -156,6 +156,7 @@ impl Default for ResonanceSettings {
                     [0, 0, 0],
                 ],
                 count: 5,
+                alpha: [255; 8],
                 cyclic: false,
             }),
             color_by: ColorBy::Layer,

@@ -89,6 +89,7 @@ impl SceneState {
             sidebar_width: 300.0,
             library_width: crate::workspace::default_library_width(),
             signals_height: crate::workspace::default_signals_height(),
+            macros_height: crate::workspace::default_macros_height(),
             help_open: false,
             analysis: self.analysis.clone(),
             meter_stereo: true,
@@ -603,6 +604,7 @@ mod tests {
             start: [20, 40, 80],
             end: [200, 100, 70],
             angle: 30.0,
+            alpha: [255; 2],
         };
         assert!(scene.validate());
         let restored: SceneState =
@@ -782,6 +784,7 @@ mod tests {
             sidebar_width: 300.0,
             library_width: crate::workspace::default_library_width(),
             signals_height: crate::workspace::default_signals_height(),
+            macros_height: crate::workspace::default_macros_height(),
             help_open: false,
             analysis: Default::default(),
             meter_stereo: true,

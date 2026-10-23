@@ -1,10 +1,14 @@
 //! Shared dropdown chrome. Styling is local so fields and other buttons keep their layout.
 use egui::{Color32, FontId, InnerResponse, Ui, WidgetText};
 
-pub struct ComboBox(egui::ComboBox);
+pub struct ComboBox(egui::ComboBox, Option<f32>);
 impl ComboBox {
     pub fn from_id_salt(id: impl egui::AsIdSalt) -> Self {
-        Self(egui::ComboBox::from_id_salt(id).truncate())
+        Self(egui::ComboBox::from_id_salt(id).truncate(), None)
+    }
+    pub fn control_height(mut self, height: f32) -> Self {
+        self.1 = Some(height);
+        self
     }
     pub fn selected_text(mut self, text: impl Into<WidgetText>) -> Self {
         self.0 = self.0.selected_text(text);
@@ -32,6 +36,10 @@ impl ComboBox {
         let accent = ui.visuals().selection.bg_fill;
         ui.scope(|ui| {
             button_style(ui.style_mut(), base, text, accent);
+            if let Some(height) = self.1 {
+                ui.spacing_mut().button_padding.y =
+                    ((height - ui.spacing().icon_width) / 2.0).max(0.0);
+            }
             self.0
                 .popup_style(egui::style::StyleModifier::new(move |style| {
                     popup_style(style, base, text, accent);
@@ -95,17 +103,60 @@ pub(crate) fn popup_style(style: &mut egui::Style, base: Color32, text: Color32,
     }
 }
 
-/// Carry the same compact chrome into nested menus as well as the root popup.
-pub(crate) fn styled_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'a> {
+/// Context menus have comfortable rows and no per-item button frames.
+/// Explicit group separators are drawn by `menu_separator`.
+pub(crate) fn context_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'a> {
     use egui::containers::menu::MenuConfig;
     let base = ui.visuals().panel_fill;
     let text = ui.visuals().text_color();
     let accent = ui.visuals().selection.bg_fill;
     let config = MenuConfig::new().style(egui::style::StyleModifier::new(move |style| {
         popup_style(style, base, text, accent);
+        style.spacing.menu_margin = egui::Margin::same(6);
+        style.spacing.interact_size.y = 25.0;
+        style.spacing.button_padding = egui::vec2(8.0, 5.0);
+        for widget in [
+            &mut style.visuals.widgets.noninteractive,
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            widget.bg_stroke = egui::Stroke::NONE;
+        }
+        style.visuals.widgets.inactive.weak_bg_fill = base;
+        style.visuals.widgets.noninteractive.weak_bg_fill = base;
     }));
     popup.style(config.style.clone()).info(
         egui::UiStackInfo::new(egui::UiKind::Menu)
             .with_tag_value(MenuConfig::MENU_CONFIG_TAG, config),
+    )
+}
+
+pub(crate) fn menu_separator(ui: &mut Ui) {
+    ui.scope(|ui| {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::new(
+            1.0,
+            blend(ui.visuals().panel_fill, ui.visuals().text_color(), 0.16),
+        );
+        ui.add(egui::Separator::default().spacing(11.0));
+    });
+}
+
+/// Parameter assignment editors use the same surface and scale as the inspector.
+pub(crate) fn editor_popup<'a>(
+    ui: &Ui,
+    popup: egui::Popup<'a>,
+    theme: &crate::theme::AppTheme,
+) -> egui::Popup<'a> {
+    popup.frame(
+        egui::Frame::popup(ui.style())
+            .fill(theme.navigation)
+            .stroke(egui::Stroke::new(
+                1.0,
+                theme.foreground.gamma_multiply(0.18),
+            ))
+            .corner_radius(3.0)
+            .inner_margin(8.0),
     )
 }

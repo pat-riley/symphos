@@ -150,8 +150,8 @@ mod tests {
                 particle_detail: [0.3, 0.0, 0.0, 0.0],
                 particle_color: [0.0, 0.0, 0.35, 1.0],
                 particle_light: [1.0, 0.0, 0.0, 1.0],
-                color_start: [0.0, 0.8, 1.0, 0.0],
-                color_end: [1.0, 0.1, 0.5, 0.0],
+                color_start: [0.0, 0.8, 1.0, 1.0],
+                color_end: [1.0, 0.1, 0.5, 1.0],
                 orb_style: [0.0, 1.0, 1.0, 1.0],
                 orb_shape: [0.0, 0.0, 0.5, 0.4],
                 orb_material: [0.5, 0.0, 0.4, 3.0],
@@ -159,8 +159,8 @@ mod tests {
                 orb_light: [-26.565_f32.to_radians(), 28.22_f32.to_radians(), 0.0, 0.0],
                 orb_color: [0.0, 2.0, 0.0, 1.0],
                 orb_tint: [1.0, 0.0, 0.0, 0.0],
-                orb_start: [0.0, 0.8, 1.0, 0.0],
-                orb_end: [1.0, 0.1, 0.5, 0.0],
+                orb_start: [0.0, 0.8, 1.0, 1.0],
+                orb_end: [1.0, 0.1, 0.5, 1.0],
                 camera: [8.5, 2.0, 0.0, 0.0],
                 behavior: [1.75, 1.0, 0.6, 40.0],
                 dynamics: [0.12, 0.0, 0.0, 0.0],
@@ -175,11 +175,11 @@ mod tests {
                 path_style: [0.5, 1.5, 0.0, 0.0],
                 path_clock: [0.0; 4],
                 orb_colors: [
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                    [1.0, 1.0, 0.0, 0.0],
-                    [1.0, 0.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0, 1.0],
+                    [1.0, 1.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0, 1.0],
                 ],
             };
             let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -393,7 +393,7 @@ mod tests {
                         );
                     }
                     let before = checksum(&render(style));
-                    style.color_start = [1.0, 0.0, 0.0, 0.0];
+                    style.color_start = [1.0, 0.0, 0.0, 1.0];
                     assert_ne!(
                         before,
                         checksum(&render(style)),
@@ -528,7 +528,7 @@ mod tests {
                         checksum(&render(style)),
                         "independent orb colors must ignore particle palette edits"
                     );
-                    style.orb_start = [1.0, 0.2, 0.0, 0.0];
+                    style.orb_start = [1.0, 0.2, 0.0, 1.0];
                     assert_ne!(
                         solid,
                         checksum(&render(style)),

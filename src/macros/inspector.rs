@@ -83,16 +83,22 @@ impl SceneMacros {
                         }
                     }
                 });
-                property_row(ui, "Color", |ui| {
+                property_row(ui, "Color mode", |ui| {
                     let mut automatic = slot.color.is_none();
                     if ui.checkbox(&mut automatic, "Auto").changed() {
                         let [r, g, b, _] = theme.accent.to_array();
                         slot.color = (!automatic).then_some([r, g, b]);
                     }
-                    if let Some(color) = &mut slot.color {
-                        ui.color_edit_button_srgb(color);
-                    }
                 });
+                if let Some(color) = &mut slot.color {
+                    property_row(ui, "Color", |ui| {
+                        crate::color_picker::color_edit_button_srgba(
+                            ui,
+                            color,
+                            &mut slot.color_alpha,
+                        );
+                    });
+                }
                 if let Some(parameter) = &slot.parameter {
                     value_row(ui, "Parameter", &parameter.label);
                     if let Some(target) = &target {
@@ -174,14 +180,12 @@ impl SceneMacros {
                         .width(ui.available_width())
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut slot.signal, None, "None");
-                            for source in bank.channels.iter().filter(|d| d.has_control_output()) {
-                                ui.selectable_value(
-                                    &mut slot.signal,
-                                    Some(source.id),
-                                    &source.name,
-                                );
-                            }
+                            let mut panel = shared.lock().unwrap_or_else(|e| e.into_inner());
+                            signals::ui::modulation_source_options(
+                                ui,
+                                &mut panel.bank,
+                                &mut slot.signal,
+                            );
                         });
                     if slot.signal != previous {
                         slot.enabled = true;

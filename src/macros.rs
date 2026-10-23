@@ -39,6 +39,7 @@ pub struct Slot {
     pub target: Option<ParameterContext>,
     pub name: Option<String>,
     pub color: Option<[u8; 3]>,
+    pub color_alpha: u8,
     pub signal: Option<u64>,
     pub depth: f32,
     pub enabled: bool,
@@ -53,6 +54,7 @@ impl Default for Slot {
             target: None,
             name: None,
             color: None,
+            color_alpha: 255,
             signal: None,
             depth: 0.35,
             enabled: true,
@@ -280,7 +282,9 @@ pub fn inspector_indicators(
                     source: source.map_or_else(|| "Unavailable source".into(), |d| d.name.clone()),
                     color: slot
                         .color
-                        .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                        .map(|[r, g, b]| {
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, slot.color_alpha)
+                        })
                         .unwrap_or_else(|| {
                             source
                                 .map_or(ui.visuals().selection.bg_fill, signals::ui::channel_color)
@@ -441,7 +445,11 @@ fn bar_impl(
         .iter()
         .any(|s| s.parameter.is_some())
         .then(|| settings.parameter_document().ok().unwrap_or_default());
-    let width = ((child.available_width() - 1.0) / 12.0).max(116.0);
+    // Larger docks should open up the controls rather than add only empty space.
+    let expansion = ((child.available_height() - 220.0) / 200.0).clamp(0.0, 1.0);
+    let padding_x = (8.0 + expansion * 4.0).round() as i8;
+    let padding_y = (3.0 + expansion * 8.0).round() as i8;
+    let width = ((child.available_width() - 1.0) / 12.0).max(116.0 + expansion * 32.0);
     let row_bounds = Rect::from_min_max(
         child.available_rect_before_wrap().min,
         rect.max - Vec2::splat(1.0),
@@ -474,7 +482,7 @@ fn bar_impl(
                         let strip = Rect::from_min_size(start, Vec2::new(width, row_height));
                         let header_color = slot
                             .color
-                            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                            .map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, slot.color_alpha))
                             .or_else(|| {
                                 shared.as_ref().and_then(|shared| {
                                     let panel = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -552,33 +560,23 @@ fn bar_impl(
                                 action = Some(rename);
                             }
                             egui::Frame::new()
-                                .inner_margin(egui::Margin::symmetric(8, 3))
+                                .inner_margin(egui::Margin::symmetric(padding_x, padding_y))
                                 .show(ui, |ui| {
-                                    let width = width - 16.0;
+                                    let width = width - 2.0 * f32::from(padding_x);
                                     ui.set_width(width);
-                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0 + expansion * 4.0);
                                     if let Some(p) = slot.parameter.clone() {
                                         let component = scene.as_deref().and_then(|components| {
                                             slot.target.as_ref().and_then(|target| {
                                                 components.iter().find(|c| &c.target == target)
                                             })
                                         });
-                                        if scene.is_some() {
-                                            let owner = component.map_or_else(
-                                                || "Component unavailable".into(),
-                                                |c| c.label.clone(),
-                                            );
-                                            ui.add_sized(
-                                                [width, 14.0],
-                                                egui::Label::new(
-                                                    egui::RichText::new(owner.clone())
-                                                        .small()
-                                                        .color(theme.muted),
-                                                )
-                                                .truncate(),
-                                            )
-                                            .help_text(owner);
-                                        }
+                                        let owner = component.map_or_else(
+                                            || if scene.is_some() { "Component unavailable".into() }
+                                                else { kind.label().to_owned() },
+                                            |c| c.label.clone(),
+                                        );
+                                        ui.add_space(expansion * 8.0);
                                         let base = component
                                             .map(|c| &c.document)
                                             .or(document.as_ref())
@@ -640,7 +638,7 @@ fn bar_impl(
                                         );
                                         let color = slot
                                             .color
-                                            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                                            .map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, slot.color_alpha))
                                             .unwrap_or(color);
                                         let map = |v: f32| {
                                             slot.output_min
@@ -685,8 +683,27 @@ fn bar_impl(
                                                 set(settings, &p.field, p.value(value) * p.scale);
                                             }
                                         }
+                                        // A macro's user-assigned title may differ from its target.
+                                        // Keep the actual parameter explicit beneath the knob/value.
+                                        ui.vertical_centered(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 2.0;
+                                            ui.add_sized([width, 16.0], egui::Label::new(
+                                                egui::RichText::new(&p.label).size(12.0).strong()
+                                            ).truncate()).help_text(format!("{} · {}", owner, p.label));
+                                            if expansion > 0.15 && scene.is_some() {
+                                                ui.add_sized([width, 14.0], egui::Label::new(
+                                                    egui::RichText::new(&owner).size(10.0).color(theme.muted)
+                                                ).truncate()).help_text(&owner);
+                                            }
+                                        });
+                                        ui.add_space(expansion * 10.0);
+                                        if row_height >= 320.0 {
+                                            ui.add_sized([width, 14.0], egui::Label::new(
+                                                egui::RichText::new("Modulation source").size(10.0).color(theme.muted)
+                                            ).truncate());
+                                        }
                                         let badge = ui.add_sized(
-                                            [width, 24.0],
+                                            [width, 24.0 + expansion * 2.0],
                                             egui::Button::new(
                                                 egui::RichText::new(source).color(color),
                                             )
@@ -706,14 +723,16 @@ fn bar_impl(
                                             }
                                         }
                                         let nested = egui::Popup::is_any_open(ui.ctx());
-                                        let popup = egui::Popup::from_response(&badge)
+                                        let popup = crate::dropdown::editor_popup(ui, egui::Popup::from_response(&badge)
                                             .open_bool(&mut opened)
                                             .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
-                                            .width(280.0)
+                                            .width(280.0), theme)
                                             .show(|ui| {
+                                                crate::workspace_ui::inspector_controls_style(ui, theme);
+                                                ui.visuals_mut().panel_fill = theme.navigation;
                                                 ui.strong(&p.label);
                                                 if let Some(shared) = &shared {
-                                                    let panel = shared
+                                                    let mut panel = shared
                                                         .lock()
                                                         .unwrap_or_else(|e| e.into_inner());
                                                     let mut signal = slot.signal;
@@ -733,25 +752,11 @@ fn bar_impl(
                                                         .width(260.0)
                                                         .selected_text(selected)
                                                         .show_ui(ui, |ui| {
-                                                            ui.selectable_value(
-                                                                &mut signal,
-                                                                None,
-                                                                "No modulation",
-                                                            );
-                                                            for d in panel.bank.channels.iter().filter(|d| d.has_control_output()) {
-                                                                ui.selectable_value(
-                                                                    &mut signal,
-                                                                    Some(d.id),
-                                                                    &d.name,
-                                                                );
-                                                            }
+                                                            signals::ui::modulation_source_options(ui, &mut panel.bank, &mut signal);
                                                         });
                                                     if signal != slot.signal {
                                                         slot.signal = signal;
                                                         slot.enabled = true;
-                                                    }
-                                                    if panel.bank.channels.is_empty() {
-                                                        ui.weak("Add sources in Signals.");
                                                     }
                                                     if ui
                                                         .add_enabled(
@@ -781,13 +786,13 @@ fn bar_impl(
                                             ui.data_mut(|d| d.remove::<egui::Id>(editor_key));
                                         }
                                         ui.horizontal(|ui| {
-                                            ui.spacing_mut().interact_size.y = 20.0;
+                                            ui.spacing_mut().interact_size.y = 20.0 + expansion * 4.0;
                                             if slot.signal.is_some() {
                                                 ui.checkbox(&mut slot.enabled, "Mod");
                                                 let mut depth = slot.depth * 100.0;
                                                 if ui
                                                     .add_sized(
-                                                        [ui.available_width().max(1.0), 20.0],
+                                                        [ui.available_width().max(1.0), 20.0 + expansion * 4.0],
                                                         egui::DragValue::new(&mut depth)
                                                             .range(-1200.0..=1200.0)
                                                             .speed(1.0)
@@ -841,7 +846,7 @@ fn bar_impl(
                         // their primary drags/clicks from the children.
                         let right_click = ui.rect_contains_pointer(area)
                             && ui.input(|input| input.pointer.secondary_clicked());
-                        egui::Popup::menu(&response)
+                        crate::dropdown::context_popup(ui, egui::Popup::menu(&response))
                             .open_memory(right_click.then_some(egui::SetOpenCommand::Bool(true)))
                             .at_pointer_fixed()
                             .show(|ui| {
@@ -1521,6 +1526,11 @@ mod source_picker_tests {
     #[test]
     fn generic_macro_picker_connects_existing_audio_and_lfo_and_disconnects_without_editing_sources()
      {
+        exercise_macro_picker(false);
+        exercise_macro_picker(true);
+    }
+
+    fn exercise_macro_picker(audio_only: bool) {
         let ctx = egui::Context::default();
         let mut pane = ModulePane::new(ModuleKind::Waterfall);
         pane.macros.assign(
@@ -1552,6 +1562,18 @@ mod source_picker_tests {
             .bank
             .add(signals::Method::Lfo)
             .unwrap();
+        if audio_only {
+            let mut panel = shared.lock().unwrap();
+            let source = panel
+                .bank
+                .channels
+                .iter_mut()
+                .find(|d| d.id == audio)
+                .unwrap();
+            source.name = "brightness-beat".into();
+            source.inserts = Some(Default::default());
+            panel.bank.sync_audio_channels();
+        }
         let original = shared.lock().unwrap().bank.clone();
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(signals::ui::CONTEXT_KEY), shared.clone()));
         let manual = pane.copy_settings();
@@ -1592,9 +1614,24 @@ mod source_picker_tests {
         let out = click(egui::pos2(30.0, 10.0));
         let out = click(position(&out, "Connect…"));
         let out = click(position(&out, "Choose source"));
-        let out = click(position(&out, "Band energy"));
+        assert_eq!(
+            shared.lock().unwrap().bank,
+            original,
+            "opening the picker must not edit sources"
+        );
+        let audio_label = if audio_only {
+            "brightness-beat · add Overall intensity"
+        } else {
+            "Band energy"
+        };
+        let out = click(position(&out, audio_label));
         position(&out, "Disconnect");
-        let out = click(position(&out, "Band energy"));
+        let source_name = if audio_only {
+            "brightness-beat"
+        } else {
+            "Band energy"
+        };
+        let out = click(position(&out, source_name));
         let out = click(position(&out, "LFO"));
         position(&out, "Disconnect");
         click(position(&out, "Disconnect"));
@@ -1603,7 +1640,28 @@ mod source_picker_tests {
         assert_eq!(pane.macros.banks[0][0].depth, 0.35);
         assert_eq!(pane.copy_settings(), manual);
         assert_ne!(audio, lfo);
-        assert_eq!(shared.lock().unwrap().bank, original);
+        let mut expected = original;
+        if audio_only {
+            let source = expected
+                .channels
+                .iter_mut()
+                .find(|d| d.id == audio)
+                .unwrap();
+            source
+                .inserts
+                .as_mut()
+                .unwrap()
+                .add(
+                    source.input,
+                    0,
+                    signals::inserts::Effect::Detect(signals::inserts::Detection::new(
+                        signals::inserts::Detector::Level,
+                    )),
+                )
+                .unwrap();
+            assert!(shared.lock().unwrap().bank.valid());
+        }
+        assert_eq!(shared.lock().unwrap().bank, expected);
     }
 }
 

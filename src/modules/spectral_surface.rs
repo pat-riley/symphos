@@ -1008,10 +1008,10 @@ impl SpectralSurface {
                     depth,
                     base: project(self.point(u, v, 0.0)).0,
                     color: Color32::from_rgba_unmultiplied(
-                        c(color.r()),
-                        c(color.g()),
-                        c(color.b()),
-                        (alpha * 255.0) as u8,
+                        c(color.to_srgba_unmultiplied()[0]),
+                        c(color.to_srgba_unmultiplied()[1]),
+                        c(color.to_srgba_unmultiplied()[2]),
+                        (alpha * color.a() as f32) as u8,
                     ),
                 });
             }
@@ -1241,10 +1241,10 @@ impl SpectralSurface {
                     depth,
                     base,
                     color: Color32::from_rgba_unmultiplied(
-                        c(color.r()),
-                        c(color.g()),
-                        c(color.b()),
-                        (alpha * 255.0) as u8,
+                        c(color.to_srgba_unmultiplied()[0]),
+                        c(color.to_srgba_unmultiplied()[1]),
+                        c(color.to_srgba_unmultiplied()[2]),
+                        (alpha * color.a() as f32) as u8,
                     ),
                 });
             }

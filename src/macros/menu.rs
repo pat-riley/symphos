@@ -78,7 +78,6 @@ pub(super) fn macro_menu(
     ui.set_min_width(328.0);
     if let (Some(target), Some(spec)) = (&bank[index].target, &bank[index].parameter) {
         crate::midi::mapping::menu(ui, target, spec);
-        ui.separator();
     }
     let mut action = None;
     let occupied = bank[index].parameter.is_some();
@@ -108,7 +107,7 @@ pub(super) fn macro_menu(
             ui.close();
         }
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     for (label, command, enabled) in [
         ("Rename", MacroAction::Rename(index), true),
         ("Insert empty macro", MacroAction::Insert(index), vacant),
@@ -125,7 +124,7 @@ pub(super) fn macro_menu(
         action = Some(MacroAction::Undo);
         ui.close();
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     ui.small("Macro color");
     if let Some(color) = signals::ui::color_palette(ui, color) {
         action = Some(MacroAction::Color(index, Some(color)));
@@ -199,7 +198,10 @@ pub(super) fn apply_macro_action(
             ui.data_mut(|d| d.insert_temp(egui::Id::new(INSPECT_REQUEST), i));
         }
         MacroAction::RenameTo(i, name) => bank[i].name = Some(name),
-        MacroAction::Color(i, color) => bank[i].color = color,
+        MacroAction::Color(i, color) => {
+            bank[i].color = color;
+            bank[i].color_alpha = 255;
+        }
         MacroAction::Insert(i) => insert(bank, i, Slot::default()),
         MacroAction::Undo => {
             if let Some(previous) = menu.undo.take() {

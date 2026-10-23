@@ -217,12 +217,14 @@ fn extras(ui: &mut egui::Ui, s: &mut OrbitalSettings, extra: Extra) {
                     ui,
                     "Start color",
                     &mut s.color_start,
+                    &mut s.color_alpha[0],
                     "Start of the particle gradient.",
                 );
                 swatch(
                     ui,
                     "End color",
                     &mut s.color_end,
+                    &mut s.color_alpha[1],
                     "End of the particle gradient.",
                 );
             }
@@ -279,6 +281,7 @@ fn extras(ui: &mut egui::Ui, s: &mut OrbitalSettings, extra: Extra) {
                     ui,
                     "Orb color / start",
                     &mut s.orb_color_start,
+                    &mut s.orb_color_alpha[0],
                     "Solid orb color or start of its independent gradient.",
                 );
             }
@@ -287,6 +290,7 @@ fn extras(ui: &mut egui::Ui, s: &mut OrbitalSettings, extra: Extra) {
                     ui,
                     "Orb end color",
                     &mut s.orb_color_end,
+                    &mut s.orb_color_alpha[1],
                     "End of the independent orb gradient.",
                 );
             }
@@ -296,6 +300,7 @@ fn extras(ui: &mut egui::Ui, s: &mut OrbitalSettings, extra: Extra) {
                         ui,
                         &format!("Orb {} color", i + 1),
                         &mut s.orb_colors[i],
+                        &mut s.orb_color_alpha[i + 2],
                         "This orb's color is retained if the attractor count is reduced and restored.",
                     );
                 }
@@ -315,9 +320,9 @@ fn extras(ui: &mut egui::Ui, s: &mut OrbitalSettings, extra: Extra) {
         Extra::None | Extra::Population | Extra::OrbPalette => {}
     }
 }
-fn swatch(ui: &mut egui::Ui, title: &str, color: &mut [u8; 3], help: &str) {
+fn swatch(ui: &mut egui::Ui, title: &str, color: &mut [u8; 3], alpha: &mut u8, help: &str) {
     property_row(ui, title, |ui| {
-        ui.color_edit_button_srgb(color).help_text(help);
+        crate::color_picker::color_edit_button_srgba(ui, color, alpha).help_text(help);
     });
 }
 

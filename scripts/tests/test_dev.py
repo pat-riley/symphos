@@ -11,6 +11,43 @@ spec.loader.exec_module(dev)
 
 
 class DevelopmentSupervisorTests(unittest.TestCase):
+    def test_cache_budget_counts_only_debug_artifacts_and_ignores_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "target/dev").mkdir(parents=True)
+            workspace = root / "target/dev/workspace.json"
+            workspace.write_bytes(b"session" * 1000)
+            self.assertFalse(dev.debug_cache_exceeds(root, budget=1))
+            debug = root / "target/debug/deps"
+            debug.mkdir(parents=True)
+            (debug / "external").symlink_to(workspace)
+            self.assertFalse(dev.debug_cache_exceeds(root, budget=1))
+            (debug / "compile.rcgu.o").write_bytes(b"object" * 1000)
+            self.assertTrue(dev.debug_cache_exceeds(root, budget=1))
+            self.assertEqual(workspace.read_bytes(), b"session" * 1000)
+
+    def test_cleanup_preserves_cargo_lock_workspace_release_and_external_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ["debug", "dev", "release"]:
+                (root / "target" / name).mkdir(parents=True)
+            debug = root / "target/debug"
+            lock = debug / ".cargo-lock"
+            lock.touch()
+            inode = lock.stat().st_ino
+            workspace = root / "target/dev/workspace.json"
+            workspace.write_text("session")
+            release = root / "target/release/symphos"
+            release.write_text("release")
+            (debug / "external").symlink_to(workspace)
+            (debug / "deps").mkdir()
+            (debug / "deps/old.rcgu.o").write_text("old compiler output")
+            dev.reclaim_debug_cache(root)
+            self.assertEqual(list(debug.iterdir()), [lock])
+            self.assertEqual(lock.stat().st_ino, inode)
+            self.assertEqual(workspace.read_text(), "session")
+            self.assertEqual(release.read_text(), "release")
+
     def test_source_changes_are_watched_but_live_theme_and_workspace_are_not(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

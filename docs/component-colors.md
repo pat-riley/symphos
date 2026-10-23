@@ -69,8 +69,12 @@ The compact Viridis/Magma/Inferno/Plasma gradients use five color anchors.
 
 Expand **Edit gradient & swatches**:
 
-1. Select a numbered stop. Its color button opens the RGB/HSV color picker,
-   including hex entry; the row also shows its hex color.
+1. Select a numbered stop. Its color button opens the shared movable Color
+   panel, with Hex, RGB, CSS, HSL, and HSB entry, an eyedropper, and hue/opacity
+   sliders. Drag the panel header to move it; X or Escape closes it. The panel
+   follows the inspector theme. An editable hex field also sits beside each
+   swatch. Eight-digit hex and CSS alpha values preserve opacity in saved
+   colors and gradients; older colors remain fully opaque.
 2. Add/remove stops (2–8), reverse the gradient, or turn the selected stop into a
    solid color. Stop spacing is uniform. **Cyclic gradient** joins the last stop
    back to the first; Flux's cyclic presets retain their original wrap behavior.

@@ -28,6 +28,7 @@ pub struct Background {
     pub mode: Mode,
     pub start: [u8; 3],
     pub end: [u8; 3],
+    pub alpha: [u8; 2],
     pub angle: f32,
 }
 impl Default for Background {
@@ -36,6 +37,7 @@ impl Default for Background {
             mode: Mode::Black,
             start: [24, 32, 64],
             end: [3, 6, 18],
+            alpha: [255; 2],
             angle: 90.0,
         }
     }
@@ -64,10 +66,10 @@ impl Background {
     }
     /// Normalized canvas coordinates: zero degrees runs left to right; 90 top to bottom.
     pub fn sample(&self, uv: [f32; 2]) -> Color32 {
-        let color = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
+        let color = |[r, g, b]: [u8; 3], alpha| Color32::from_rgba_unmultiplied(r, g, b, alpha);
         let t = match self.mode {
             Mode::Black => return Color32::BLACK,
-            Mode::Color => return color(self.start),
+            Mode::Color => return color(self.start, self.alpha[0]),
             Mode::Linear => {
                 let a = self.angle.to_radians();
                 let (y, x) = a.sin_cos();
@@ -75,12 +77,16 @@ impl Background {
             }
             Mode::Radial => ((uv[0] - 0.5).hypot(uv[1] - 0.5) * 2.0).min(1.0),
         };
-        color(self.start).lerp_to_gamma(color(self.end), t.clamp(0.0, 1.0))
+        color(self.start, self.alpha[0])
+            .lerp_to_gamma(color(self.end, self.alpha[1]), t.clamp(0.0, 1.0))
     }
     pub fn paint(&self, ui: &egui::Ui, rect: egui::Rect) {
         self.paint_rounded(ui, rect, 0);
     }
     pub fn paint_rounded(&self, ui: &egui::Ui, rect: egui::Rect, radius: u8) {
+        if self.alpha != [255; 2] {
+            ui.painter().rect_filled(rect, radius, Color32::BLACK);
+        }
         if matches!(self.mode, Mode::Black | Mode::Color) {
             ui.painter()
                 .rect_filled(rect, radius, self.sample([0.0; 2]));
@@ -146,13 +152,21 @@ impl Background {
                         "Start color"
                     },
                     |ui| {
-                        ui.color_edit_button_srgb(&mut self.start);
+                        crate::color_picker::color_edit_button_srgba(
+                            ui,
+                            &mut self.start,
+                            &mut self.alpha[0],
+                        );
                     },
                 );
             }
             if matches!(self.mode, Mode::Linear | Mode::Radial) {
                 property_row(ui, "End color", |ui| {
-                    ui.color_edit_button_srgb(&mut self.end);
+                    crate::color_picker::color_edit_button_srgba(
+                        ui,
+                        &mut self.end,
+                        &mut self.alpha[1],
+                    );
                 });
             }
             if self.mode == Mode::Linear {
@@ -200,6 +214,27 @@ mod tests {
         );
         assert!(!Background { angle: 361.0, ..b }.valid());
     }
+    #[test]
+    fn background_opacity_roundtrips_and_older_backgrounds_stay_opaque() {
+        let background = Background {
+            mode: Mode::Color,
+            start: [200, 100, 50],
+            alpha: [128, 255],
+            ..Default::default()
+        };
+        assert_eq!(background.sample([0.5, 0.5]).a(), 128);
+        let mut saved = serde_json::to_value(background).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Background>(saved.clone()).unwrap(),
+            background
+        );
+        saved.as_object_mut().unwrap().remove("alpha");
+        assert_eq!(
+            serde_json::from_value::<Background>(saved).unwrap().alpha,
+            [255; 2]
+        );
+    }
+
     #[test]
     fn gradient_upload_is_shared_by_panes_and_only_changes_with_settings() {
         let ctx = egui::Context::default();

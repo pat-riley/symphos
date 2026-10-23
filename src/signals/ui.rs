@@ -382,7 +382,7 @@ impl Panel {
                         }
                         let definition =
                             id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
-                        crate::dropdown::styled_popup(
+                        crate::dropdown::context_popup(
                             ui,
                             egui::Popup::context_menu(&menu_response),
                         )
@@ -444,7 +444,7 @@ impl Panel {
                 }
                 let open_menu =
                     ui.rect_contains_pointer(space) && ui.input(|i| i.pointer.secondary_clicked());
-                crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response))
+                crate::dropdown::context_popup(ui, egui::Popup::context_menu(&response))
                     .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
                     .show(|ui| {
                         if let Some(menu_action) = channel_menu(
@@ -1488,7 +1488,7 @@ fn channel_menu(
                 ui.close();
             }
         }
-        ui.separator();
+        crate::dropdown::menu_separator(ui);
         if ui
             .button(if d.inserts.is_some() {
                 "Inspect channel & inserts"
@@ -1544,7 +1544,7 @@ fn channel_menu(
         ui.close();
     }
     if let Some(d) = d {
-        ui.separator();
+        crate::dropdown::menu_separator(ui);
         ui.small("Channel color");
         if let Some(color) = color_palette(ui, channel_color(d)) {
             action = Some(StripAction::Color(d.id, color));
@@ -1553,40 +1553,47 @@ fn channel_menu(
     action
 }
 pub(crate) fn color_palette(ui: &mut egui::Ui, selected: egui::Color32) -> Option<[u8; 3]> {
-    let mut choice = None;
-    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-    ui.spacing_mut().interact_size.y = 16.0;
-    for row in CHANNEL_SWATCHES {
-        ui.horizontal(|ui| {
-            for [r, g, b] in row {
-                let color = egui::Color32::from_rgb(r, g, b);
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-                ui.painter().rect_filled(rect, 0.0, color);
-                if color == selected {
-                    ui.painter().rect_stroke(
-                        rect.expand(1.0),
-                        1.0,
-                        egui::Stroke::new(1.0, ui.visuals().text_color()),
-                        egui::StrokeKind::Outside,
-                    );
+    ui.scope(|ui| {
+        let mut choice = None;
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.add_space(6.0);
+        for row in CHANNEL_SWATCHES {
+            ui.horizontal(|ui| {
+                for [r, g, b] in row {
+                    let color = egui::Color32::from_rgb(r, g, b);
+                    let (hit, response) =
+                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                    let rect = hit.shrink(3.0);
+                    ui.painter().rect_filled(rect, 1.0, color);
+                    if color == selected || response.hovered() {
+                        ui.painter().rect_stroke(
+                            rect.expand(1.5),
+                            2.0,
+                            egui::Stroke::new(
+                                1.0,
+                                ui.visuals()
+                                    .text_color()
+                                    .gamma_multiply(if color == selected { 0.95 } else { 0.55 }),
+                            ),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .help_text(format!("#{r:02X}{g:02X}{b:02X}"))
+                        .clicked()
+                    {
+                        choice = Some([r, g, b]);
+                        ui.close();
+                    }
                 }
-                if response
-                    .help_text(format!(
-                        "#{:02X}{:02X}{:02X}",
-                        color.r(),
-                        color.g(),
-                        color.b()
-                    ))
-                    .clicked()
-                {
-                    choice = Some([color.r(), color.g(), color.b()]);
-                    ui.close();
-                }
-            }
-        });
-    }
-    choice
+            });
+        }
+        ui.add_space(6.0);
+        choice
+    })
+    .inner
 }
 
 fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
@@ -2029,6 +2036,54 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
     );
 }
 
+/// List control sources and offer a visible, explicit conversion for audio-only tracks.
+/// Only a clicked conversion adds an insert; merely opening the menu never edits a track.
+pub(crate) fn modulation_source_options(
+    ui: &mut egui::Ui,
+    bank: &mut Bank,
+    selected: &mut Option<u64>,
+) {
+    ui.selectable_value(selected, None, "No modulation");
+    for source in &mut bank.channels {
+        if source.has_control_output() {
+            ui.selectable_value(selected, Some(source.id), &source.name);
+        } else {
+            let can_add = source.inserts.as_ref().is_some_and(|chain| {
+                chain.stages.len() < super::inserts::MAX_INSERTS && chain.next_id < u64::MAX
+            });
+            let response = ui.add_enabled(
+                can_add,
+                egui::Button::new(format!("{} · add Overall intensity", source.name)).frame(false),
+            );
+            if response.clicked() {
+                let chain = source
+                    .inserts
+                    .as_mut()
+                    .expect("audio-only source has a chain");
+                if chain
+                    .add(
+                        source.input,
+                        chain.stages.len(),
+                        super::inserts::Effect::Detect(super::inserts::Detection::new(
+                            super::inserts::Detector::Level,
+                        )),
+                    )
+                    .is_some()
+                {
+                    *selected = Some(source.id);
+                    ui.close();
+                }
+            }
+            response.on_hover_text(if can_add {
+                "Add an Overall intensity insert to convert this audio into a modulation curve. Existing audio processing and the visualizer feed stay intact."
+            } else { "This channel has reached its insert limit. Add a detector in Signals after making room." });
+        }
+    }
+    if bank.channels.is_empty() {
+        ui.weak("Add an Audio, LFO, or MIDI channel in Signals.");
+    }
+}
+
 pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -> bool {
     let Some(shared) = ui.data(|d| d.get_temp::<Shared>(egui::Id::new(CONTEXT_KEY))) else {
         return false;
@@ -2048,27 +2103,19 @@ pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -
             },
             |d| d.name.as_str(),
         );
+    let previous_signal = route.signal;
     crate::dropdown::ComboBox::from_id_salt(("named-signal", route.id))
         .selected_text(selected)
         .width(ui.available_width())
         .show_ui(ui, |ui| {
+            modulation_source_options(ui, &mut panel.bank, &mut route.signal);
             if route.target.layered() {
                 ui.selectable_value(&mut route.signal, None, "Automatic layer bands");
-            } else if ui
-                .selectable_value(&mut route.signal, None, "No modulation")
-                .clicked()
-            {
-                route.enabled = false;
-            }
-            for d in &panel.bank.channels {
-                if ui
-                    .selectable_value(&mut route.signal, Some(d.id), &d.name)
-                    .clicked()
-                {
-                    route.enabled = true;
-                }
             }
         });
+    if route.signal != previous_signal {
+        route.enabled = route.signal.is_some();
+    }
     if route.signal.is_none() && route.target.layered() && route.layer == 0 {
         ui.small("Local band bank: bass at the bottom, treble at the top. Re-divides when layer count changes.");
         return false;

@@ -7,6 +7,7 @@ use crate::project_menu::{Action, ItemState};
 impl SymphosApp {
     pub(super) fn workspace_menu_blocked(&self, ctx: &egui::Context) -> bool {
         self.settings_window.open
+            || crate::color_picker::is_open(ctx)
             || self.project_dialog.open
             || self.project_dialog.pending_new
             || self.project_dialog.pending_open.is_some()
@@ -152,7 +153,6 @@ impl SymphosApp {
             if self.fullscreen_macros {
                 self.scene_macros.open = true;
             }
-            self.fullscreen_hint_started = None;
         } else {
             let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
             if panel.show_signals {

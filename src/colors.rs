@@ -12,11 +12,17 @@ const MAX_SAVED: usize = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Gradient {
     pub colors: [[u8; 3]; MAX_COLORS],
+    #[serde(default = "opaque_stops")]
+    pub alpha: [u8; MAX_COLORS],
     #[serde(deserialize_with = "valid_count")]
     pub count: u8,
     #[serde(default)]
     pub cyclic: bool,
 }
+fn opaque_stops() -> [u8; MAX_COLORS] {
+    [255; MAX_COLORS]
+}
+
 fn valid_count<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
     let n = u8::deserialize(d)?;
     if (2..=MAX_COLORS as u8).contains(&n) {
@@ -34,51 +40,76 @@ impl Gradient {
         Self {
             colors: stops,
             count: colors.len() as u8,
+            alpha: [255; 8],
             cyclic: false,
         }
     }
     pub fn color(self, t: f32) -> Color32 {
+        let [r, g, b, a] = self.sample_rgba(t);
+        Color32::from_rgba_unmultiplied(r, g, b, a)
+    }
+    fn sample_rgba(self, t: f32) -> [u8; 4] {
         let n = self.count.clamp(2, MAX_COLORS as u8) as usize;
         if self.cyclic {
             let x = t.rem_euclid(1.0) * n as f32;
             let i = x as usize;
-            return blend(
-                rgb(self.colors[i % n]),
-                rgb(self.colors[(i + 1) % n]),
-                x.fract(),
-            );
+            return self.interpolate(i % n, (i + 1) % n, x.fract());
         }
         let x = t.clamp(0.0, 1.0) * (n - 1) as f32;
         let i = (x as usize).min(n - 2);
-        blend(rgb(self.colors[i]), rgb(self.colors[i + 1]), x - i as f32)
+        self.interpolate(i, i + 1, x - i as f32)
+    }
+    fn interpolate(self, i: usize, j: usize, t: f32) -> [u8; 4] {
+        let t = t.clamp(0.0, 1.0);
+        std::array::from_fn(|channel| {
+            let a = if channel == 3 {
+                self.alpha[i]
+            } else {
+                self.colors[i][channel]
+            };
+            let b = if channel == 3 {
+                self.alpha[j]
+            } else {
+                self.colors[j][channel]
+            };
+            (a as f32 + (b as f32 - a as f32) * t) as u8
+        })
+    }
+    pub fn gpu(self) -> [[f32; 4]; MAX_COLORS] {
+        std::array::from_fn(|i| {
+            let c = self.colors[i];
+            [
+                c[0] as f32 / 255.0,
+                c[1] as f32 / 255.0,
+                c[2] as f32 / 255.0,
+                self.alpha[i] as f32 / 255.0,
+            ]
+        })
     }
     fn resample(self, count: u8) -> Self {
         let mut next = self;
         next.count = count;
         for i in 0..count as usize {
-            next.colors[i] = self
-                .color(
-                    i as f32
-                        / if self.cyclic {
-                            count as f32
-                        } else {
-                            (count - 1) as f32
-                        },
-                )
-                .to_array()[..3]
-                .try_into()
-                .unwrap();
+            let sample = self.sample_rgba(
+                i as f32
+                    / if self.cyclic {
+                        count as f32
+                    } else {
+                        (count - 1) as f32
+                    },
+            );
+            next.colors[i] = sample[..3].try_into().unwrap();
+            next.alpha[i] = sample[3];
         }
         next
     }
 }
-fn rgb(c: [u8; 3]) -> Color32 {
-    Color32::from_rgb(c[0], c[1], c[2])
-}
 fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let c = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
-    Color32::from_rgb(c(a.r(), b.r()), c(a.g(), b.g()), c(a.b(), b.b()))
+    let a = a.to_srgba_unmultiplied();
+    let b = b.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(c(a[0], b[0]), c(a[1], b[1]), c(a[2], b[2]), c(a[3], b[3]))
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Palette {
@@ -181,6 +212,7 @@ impl Palette {
                     [0; 3],
                 ],
                 count: 2,
+                alpha: [255; 8],
                 cyclic: false,
             };
         }
@@ -257,6 +289,7 @@ impl Palette {
                         [0; 3],
                     ],
                     count: 6,
+                    alpha: [255; 8],
                     cyclic: true,
                 }
             } else {
@@ -264,11 +297,9 @@ impl Palette {
             };
             let x = t.rem_euclid(1.0) * g.count as f32;
             let i = x as usize;
-            blend(
-                rgb(g.colors[i % g.count as usize]),
-                rgb(g.colors[(i + 1) % g.count as usize]),
-                x.fract(),
-            )
+            let [r, g, b, a] =
+                g.interpolate(i % g.count as usize, (i + 1) % g.count as usize, x.fract());
+            Color32::from_rgba_unmultiplied(r, g, b, a)
         } else {
             let g = self.gradient(theme);
             g.color(if g.cyclic {
@@ -321,6 +352,8 @@ struct NamedPalette {
 struct Swatch {
     name: String,
     color: [u8; 3],
+    #[serde(default = "crate::color_picker::opaque")]
+    alpha: u8,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LibraryData {
@@ -570,14 +603,15 @@ impl Palette {
                             {
                                 editor.selected = i;
                             }
-                            if ui
-                                .color_edit_button_srgb(&mut editor.gradient.colors[i])
-                                .changed()
+                            if crate::color_picker::color_edit_button_srgba(
+                                ui,
+                                &mut editor.gradient.colors[i],
+                                &mut editor.gradient.alpha[i],
+                            )
+                            .changed()
                             {
                                 editor.selected = i;
                             }
-                            let c = editor.gradient.colors[i];
-                            ui.monospace(format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]));
                         });
                     });
                 }
@@ -604,10 +638,13 @@ impl Palette {
                     }
                     if ui.small_button("Reverse").clicked() {
                         editor.gradient.colors[..editor.gradient.count as usize].reverse();
+                        editor.gradient.alpha[..editor.gradient.count as usize].reverse();
                     }
                     if ui.small_button("Solid color").clicked() {
                         let color = editor.gradient.colors[editor.selected];
                         editor.gradient.colors.fill(color);
+                        let alpha = editor.gradient.alpha[editor.selected];
+                        editor.gradient.alpha.fill(alpha);
                         editor.gradient.count = 2;
                         editor.gradient.cyclic = false;
                         editor.selected = 0;
@@ -680,6 +717,7 @@ impl Palette {
                     let s = Swatch {
                         name: editor.swatch_name.trim().into(),
                         color: editor.gradient.colors[editor.selected],
+                        alpha: editor.gradient.alpha[editor.selected],
                     };
                     if let Some(i) = existing {
                         library.data.swatches[i] = s;
@@ -694,15 +732,26 @@ impl Palette {
                         ui.push_id(i, |ui| {
                             let (rect, response) =
                                 ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
-                            ui.painter().rect_filled(rect, 3.0, rgb(s.color));
+                            ui.painter().rect_filled(
+                                rect,
+                                3.0,
+                                Color32::from_rgba_unmultiplied(
+                                    s.color[0], s.color[1], s.color[2], s.alpha,
+                                ),
+                            );
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &s.name)
                             });
                             if response.clicked() {
                                 editor.gradient.colors[editor.selected] = s.color;
+                                editor.gradient.alpha[editor.selected] = s.alpha;
                             }
                             response.clone().help_text(&s.name);
-                            response.context_menu(|ui| {
+                            crate::dropdown::context_popup(
+                                ui,
+                                egui::Popup::context_menu(&response),
+                            )
+                            .show(|ui| {
                                 ui.label(&s.name);
                                 if ui.button("Delete swatch").clicked() {
                                     remove = Some(i);
@@ -817,6 +866,7 @@ mod tests {
         library.data.swatches.push(Swatch {
             name: "Accent".into(),
             color: [20, 180, 210],
+            alpha: 255,
         });
         library.save();
         let restored = Library::load(path.clone());
@@ -859,6 +909,7 @@ mod tests {
         data.swatches.push(Swatch {
             name: " ".into(),
             color: [0; 3],
+            alpha: 255,
         });
         assert!(Library::decode(&serde_json::to_vec(&data).unwrap()).is_none());
     }
@@ -963,5 +1014,41 @@ mod tests {
         assert_eq!(restored.data.swatches[0].name, "Warm white");
         assert_eq!(palette, Palette::Custom(restored.data.palettes[0].gradient));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod opacity_tests {
+    use super::*;
+    #[test]
+    fn gradient_opacity_reaches_cpu_gpu_resampling_and_saved_palettes() {
+        let mut gradient = Gradient::from_hex(&[0xff0000, 0x0000ff]);
+        gradient.alpha[0] = 0;
+        gradient.alpha[1] = 128;
+        assert_eq!(gradient.color(0.0).a(), 0);
+        assert_eq!(gradient.color(1.0).a(), 128);
+        assert_eq!(gradient.gpu()[0][3], 0.0);
+        assert_eq!(gradient.gpu()[1][3], 128.0 / 255.0);
+        let resized = gradient.resample(4);
+        assert_eq!((resized.alpha[0], resized.alpha[3]), (0, 128));
+        assert_eq!(
+            resized.colors[0],
+            [255, 0, 0],
+            "transparent stops retain their RGB color"
+        );
+        let midpoint = gradient.sample_rgba(0.5);
+        assert_eq!(midpoint, [127, 0, 127, 64]);
+        let mut saved = serde_json::to_value(gradient).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Gradient>(saved.clone()).unwrap(),
+            gradient
+        );
+        saved.as_object_mut().unwrap().remove("alpha");
+        assert_eq!(
+            serde_json::from_value::<Gradient>(saved).unwrap().alpha,
+            [255; 8]
+        );
+        let swatch: Swatch = serde_json::from_str(r#"{"name":"Old","color":[1,2,3]}"#).unwrap();
+        assert_eq!(swatch.alpha, 255);
     }
 }

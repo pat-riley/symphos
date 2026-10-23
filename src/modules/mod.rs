@@ -1459,8 +1459,10 @@ impl ModulePane {
             d.insert_temp(egui::Id::new(crate::background::CONTEXT), self.background);
             previous
         });
-        ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
-            .help_text(self.kind.description());
+        if !presenting(ui) {
+            ui.interact(rect, ui.id().with("module-help"), egui::Sense::hover())
+                .help_text(self.kind.description());
+        }
         match self.kind {
             ModuleKind::Milkdrop => self.milkdrop.draw(ui, rect, frame, now, live, frozen),
             ModuleKind::Cymatics => camera::draw(
@@ -1792,6 +1794,13 @@ pub(crate) fn settings_panel(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&
     ui.push_id(title, body);
 }
 
+/// Transient viewport chrome suppression, independent of saved visualizer settings.
+pub(crate) const PRESENTATION: &str = "pane-clean-presentation";
+pub(crate) fn presenting(ui: &egui::Ui) -> bool {
+    ui.data(|d| d.get_temp::<bool>(egui::Id::new(PRESENTATION)))
+        .unwrap_or(false)
+}
+
 /// The inspector's outer bounds allow rules to span padding and the scroll gutter.
 pub(crate) const FLAT_INSPECTOR: &str = "visualizer-flat-inspector";
 const VISUAL_INSPECTOR: &str = "visualizer-inspector-tab";
@@ -2025,10 +2034,13 @@ pub(crate) fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
     let channel = |left: u8, right: u8| {
         (left as f32 + (right as f32 - left as f32) * amount.clamp(0.0, 1.0)) as u8
     };
-    Color32::from_rgb(
-        channel(a.r(), b.r()),
-        channel(a.g(), b.g()),
-        channel(a.b(), b.b()),
+    let a = a.to_srgba_unmultiplied();
+    let b = b.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(
+        channel(a[0], b[0]),
+        channel(a[1], b[1]),
+        channel(a[2], b[2]),
+        channel(a[3], b[3]),
     )
 }
 

@@ -49,6 +49,16 @@ fn palette(t:f32)->vec3f {
  let x=u*f32(n-1u);let i=min(u32(x),n-2u);
  return mix(f.gradient[i].rgb,f.gradient[i+1u].rgb,x-f32(i));
 }
+fn palette_alpha(t:f32)->f32 {
+ let u=clamp(pow(clamp(t*f.color.y+f.color.z,0.0,1.0),f.color.w),0.0,1.0);
+ let n=u32(clamp(f.palette.x,2.0,8.0));
+ if f.palette.y>0.5 {
+    let x=fract(u)*f32(n);let i=u32(x);
+    return mix(f.gradient[i%n].a,f.gradient[(i+1u)%n].a,fract(x));
+ }
+ let x=u*f32(n-1u);let i=min(u32(x),n-2u);
+ return mix(f.gradient[i].a,f.gradient[i+1u].a,x-f32(i));
+}
 struct V {@builtin(position) p:vec4f,@location(0) uv:vec2f,@location(1) local:vec2f,@location(2) shade:f32}
 @vertex fn plate_vertex(@builtin(vertex_index) i:u32)->V {let cell=i/6u;let corner=array<vec2f,6>(vec2f(0,0),vec2f(1,0),vec2f(0,1),vec2f(0,1),vec2f(1,0),vec2f(1,1))[i%6u];let uv=(vec2f(f32(cell%64u),f32(cell/64u))+corner)/32.0-1.0;var o:V;o.p=project(world(uv,0));o.uv=uv;o.local=vec2f(0);o.shade=1;return o;}
 @fragment fn plate_fragment(v:V)->@location(0) vec4f {
@@ -67,7 +77,7 @@ struct V {@builtin(position) p:vec4f,@location(0) uv:vec2f,@location(1) local:ve
     color=palette(select(amplitude*2.0,value.y*0.5+0.5,f.color.x>0.5))*(f.light.x+f.light.y*diffuse)+vec3f(f.light.z*spec);
     if f.geometry.z>1.5&&f.geometry.z<2.5 {let node=exp(-amplitude*amplitude/max(f.surface.z*f.surface.z,0.00001));let contour=pow(0.5+0.5*cos(amplitude*f.surface.w*6.283185),18.0)*0.3;color=mix(f.plate_color.rgb,palette(amplitude*2.0),clamp(node+contour,0.0,1.0)*clamp(f.camera.w*200.0,0.0,1.0));}
  }
- return vec4f(tone(color*f.surface.y),opacity);
+ return vec4f(tone(color*f.surface.y),opacity*select(1.0,palette_alpha(select(amplitude*2.0,value.y*0.5+0.5,f.color.x>0.5)),f.geometry.z>0.5));
 }
 @vertex fn grain_vertex(@builtin(vertex_index) vertex:u32,@builtin(instance_index) i:u32)->V {
  let g=grains[i];let corner=array<vec2f,6>(vec2f(-1,-1),vec2f(1,-1),vec2f(-1,1),vec2f(-1,1),vec2f(1,-1),vec2f(1,1))[vertex];
@@ -78,5 +88,5 @@ struct V {@builtin(position) p:vec4f,@location(0) uv:vec2f,@location(1) local:ve
  var alpha=(1.0-smoothstep(0.65,1.0,radius))*f.grains.z;
  if f.direction.w>0.5{alpha*=exp(-radius*radius*3.0);}
  let energy=sqrt(max(sample_field(v.uv).x,0.0));let t=select(v.shade,energy*3.0,f.color.x>0.5);
- let glow=1.0+f.grains.w*(1.0-radius);return vec4f(tone(palette(t)*f.surface.y*glow),alpha);
+ let glow=1.0+f.grains.w*(1.0-radius);return vec4f(tone(palette(t)*f.surface.y*glow),alpha*palette_alpha(t));
 }
