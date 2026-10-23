@@ -76,6 +76,8 @@ pub struct SymphosApp {
     context: Option<egui::Context>,
     pending_close: Option<usize>,
     selected_pane: usize,
+    // Visible selection is transient; shortcuts keep the last active pane.
+    pane_highlighted: bool,
     sidebar_open: bool,
     sidebar_width: f32,
     library_width: f32,
@@ -151,6 +153,7 @@ impl SymphosApp {
                 ModulePane::new(ModuleKind::Spectrogram),
             ],
             selected_pane: 0,
+            pane_highlighted: true,
             sidebar_open: true,
             sidebar_width: DEFAULT_SETTINGS_WIDTH,
             library_width: workspace_ui::LIBRARY_WIDTH,
@@ -329,6 +332,7 @@ impl SymphosApp {
             .collect();
         self.tiles = state.layout;
         self.selected_pane = state.selected_pane;
+        self.pane_highlighted = true;
         self.signal_ui
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -841,12 +845,14 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         };
         self.fullscreen_hint_started = self.panel_fullscreen.map(|_| now);
         self.selected_pane = index;
+        self.pane_highlighted = true;
     }
 
     fn inspect_panel(&mut self, index: usize) {
         self.inspecting_signal = false;
         self.inspecting_macro = None;
         self.selected_pane = index;
+        self.pane_highlighted = true;
         self.sidebar_open = true;
         self.panel_fullscreen = None;
         self.fullscreen_hint_started = None;
@@ -936,6 +942,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Some(Action::Pane(index)) if index < self.open_panes().len() => {
                 let index = self.open_panes()[index];
                 self.selected_pane = index;
+                self.pane_highlighted = true;
                 if self.panel_fullscreen.is_some() {
                     self.panel_fullscreen = Some(index);
                     self.fullscreen_hint_started = Some(now);
@@ -968,28 +975,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             && self.selected_node.is_some()
             && frame.sequence > 0
             && self.engine.analysis().is_current(frame);
-        let selected = self.selected_pane == index;
         let painter = ui.painter_at(rect);
         // A single background spans the header, content padding and rounded edges.
         // Keep foreground layout inset without restarting gradients at the canvas.
         self.background.paint_rounded(ui, rect, 7);
-        painter.rect_stroke(
-            rect,
-            7.0,
-            Stroke::new(
-                1.0,
-                if selected {
-                    mix(
-                        mix(self.theme.panel, self.theme.muted, 0.22),
-                        self.theme.accent,
-                        0.18,
-                    )
-                } else {
-                    mix(self.theme.panel, self.theme.muted, 0.22)
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
         // A camera drag must not switch inspector context at pointer-down.
         // Only a completed click selects the visual component's inspector.
         if ui.input(|input| {
@@ -1018,7 +1007,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.theme.foreground,
             Color32::from_gray(25),
         ));
-        child.horizontal(|ui| {
+        let header = child.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
             pane_title(ui, self.panes[index].kind);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1045,6 +1034,33 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 }); }
             });
         });
+        if ui.input(|input| {
+            input.pointer.any_click()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| header.response.rect.contains(pos))
+        }) && ui.rect_contains_pointer(header.response.rect)
+        {
+            self.pane_highlighted = true;
+        }
+        painter.rect_stroke(
+            rect,
+            7.0,
+            Stroke::new(
+                1.0,
+                if self.pane_highlighted && self.selected_pane == index {
+                    mix(
+                        mix(self.theme.panel, self.theme.muted, 0.22),
+                        self.theme.accent,
+                        0.18,
+                    )
+                } else {
+                    mix(self.theme.panel, self.theme.muted, 0.22)
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
         let canvas = Rect::from_min_max(
             Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
             rect.max - Vec2::splat(8.0),
@@ -1095,6 +1111,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.tiles = tree.remove(id);
         }
         self.panes[id].reset();
+        if self.selected_pane == id {
+            self.pane_highlighted = false;
+        }
         if !self.open_panes().contains(&self.selected_pane) {
             self.selected_pane = self.open_panes().first().copied().unwrap_or(0);
         }
@@ -1119,6 +1138,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.panes[target].kind = kind;
             self.panes[target].reset();
             self.selected_pane = target;
+            self.pane_highlighted = true;
             return;
         }
         if self.open_panes().len() >= MAX_PANES {
@@ -1133,6 +1153,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.tiles = Some(Tile::Pane(id));
             }
             self.selected_pane = id;
+            self.pane_highlighted = true;
         }
     }
 
@@ -1163,6 +1184,17 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         let tree = self.tiles.as_ref().unwrap();
         let (leaves, dividers) = tree.geometry(rect);
+        if ui.input(|input| {
+            input.pointer.any_click()
+                && input.pointer.interact_pos().is_some_and(|pos| {
+                    !leaves
+                        .iter()
+                        .any(|(id, cell)| *id == self.selected_pane && cell.contains(pos))
+                })
+        }) && ui.rect_contains_pointer(rect)
+        {
+            self.pane_highlighted = false;
+        }
         for divider in dividers {
             let response = ui
                 .interact(
@@ -1238,6 +1270,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         && tree.move_pane(source, target, edge)
                     {
                         self.selected_pane = source;
+                        self.pane_highlighted = true;
                     }
                 }
             }
@@ -1426,6 +1459,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.scene_library_command(command);
             }
             return;
+        }
+        // This background response only receives clicks that no control owns.
+        // Register it first so inspector fields, menus and dock controls retain
+        // their interactions and do not deselect the pane while being edited.
+        if ui
+            .interact(rect, ui.id().with("workspace-background"), Sense::click())
+            .clicked()
+        {
+            self.pane_highlighted = false;
         }
         if let Some(index) = self.panel_fullscreen {
             let mut panel_rect = rect;
@@ -2319,6 +2361,7 @@ mod workspace_interaction_tests {
             context: None,
             pending_close: None,
             selected_pane: 0,
+            pane_highlighted: true,
             sidebar_open: false,
             sidebar_width: 236.0,
             library_width: workspace_ui::LIBRARY_WIDTH,
@@ -3495,6 +3538,64 @@ mod workspace_interaction_tests {
         workspace_frame(&mut app, &ctx, now, vec![button(eye, false)]);
         assert!(app.panel_fullscreen.is_none());
         assert!(app.sidebar_open);
+    }
+
+    #[test]
+    fn blank_clicks_clear_pane_highlight_and_headers_restore_it() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.inspect_panel(0);
+        settle_drawers(&mut app, &ctx, now);
+        let cells = app
+            .tiles
+            .as_ref()
+            .unwrap()
+            .geometry(app.scene_library.canvas.unwrap())
+            .0;
+        let first = cells.iter().find(|(id, _)| *id == 0).unwrap().1;
+        let second = cells.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let click = |app: &mut SymphosApp, pos| {
+            workspace_frame(
+                app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos), button(pos, true)],
+            );
+            workspace_frame(app, &ctx, now, vec![button(pos, false)])
+        };
+        // Clicking a different canvas clears selection without breaking the
+        // existing active-pane target used by keyboard commands and controls.
+        let out = click(&mut app, second.center());
+        assert!(!app.pane_highlighted);
+        assert_eq!(app.selected_pane, 1);
+        assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(r) if r.rect == first && r.stroke.width == 1.0
+                && r.stroke.color == mix(app.theme.panel, app.theme.muted, 0.22))));
+
+        click(&mut app, first.min + Vec2::new(75.0, 20.0));
+        assert!(app.pane_highlighted);
+        assert_eq!(app.selected_pane, 0);
+        // Inspector controls keep the selection while editing this pane.
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let appearance = out
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Appearance" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        click(&mut app, appearance);
+        assert!(app.pane_highlighted);
+        // Empty footer space also deselects, without closing the inspector.
+        click(&mut app, Pos2::new(90.0, 775.0));
+        assert!(!app.pane_highlighted);
+        assert!(app.sidebar_open);
+        app.inspect_panel(0);
+        assert!(app.pane_highlighted);
     }
 
     #[test]
