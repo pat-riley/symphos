@@ -47,6 +47,7 @@ pub(super) enum MacroAction {
     Duplicate(usize),
     Delete(usize),
     Rename(usize),
+    RenameTo(usize, String),
     Color(usize, Option<[u8; 3]>),
     Insert(usize),
     Move(usize, usize),
@@ -193,7 +194,11 @@ pub(super) fn apply_macro_action(
             insert(bank, i + 1, slot);
         }
         MacroAction::Delete(i) => bank[i] = Slot::default(),
-        MacroAction::Rename(i) => menu.rename = Some((i, slot_title(&bank[i], i), true)),
+        MacroAction::Rename(i) => {
+            menu.rename = Some((i, slot_title(&bank[i], i), true));
+            ui.data_mut(|d| d.insert_temp(egui::Id::new(INSPECT_REQUEST), i));
+        }
+        MacroAction::RenameTo(i, name) => bank[i].name = Some(name),
         MacroAction::Color(i, color) => bank[i].color = color,
         MacroAction::Insert(i) => insert(bank, i, Slot::default()),
         MacroAction::Undo => {
@@ -218,44 +223,39 @@ pub(super) fn apply_macro_action(
     }
 }
 
-pub(super) fn macro_rename_dialog(
-    ctx: &egui::Context,
-    kind: ModuleKind,
-    state: &mut State,
+pub(super) fn macro_rename_field(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    index: usize,
+    color: egui::Color32,
     menu: &mut MacroMenuState,
+) -> Option<MacroAction> {
+    let (target, name, focus) = menu.rename.as_mut().filter(|(i, _, _)| *i == index)?;
+    let commit = crate::workspace_ui::inline_strip_name(ui, rect, name, focus, color)?;
+    let action = commit.then(|| MacroAction::RenameTo(*target, name.trim().to_owned()));
+    menu.rename = None;
+    action
+}
+
+pub(super) fn delete_scene_slot(
+    ctx: &egui::Context,
+    scope: &str,
+    slots: &mut [Slot; 12],
+    index: usize,
 ) {
-    let Some((index, name, focus)) = &mut menu.rename else {
+    if index >= slots.len() || slots[index] == Slot::default() {
         return;
-    };
-    let mut save = false;
-    let mut cancel = false;
-    egui::Window::new("Rename macro")
-        .id(egui::Id::new("rename-macro"))
-        .collapsible(false)
-        .resizable(false)
-        .default_width(320.0)
-        .show(ctx, |ui| {
-            let response = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
-            if *focus {
-                response.request_focus();
-                *focus = false;
-            }
-            let valid = crate::workspace::valid_name(name);
-            ui.horizontal(|ui| {
-                save = ui.add_enabled(valid, egui::Button::new("Rename")).clicked();
-                cancel = ui.button("Cancel").clicked();
-            });
-            save |= valid && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-        });
-    if save {
-        let bank = &mut state.banks[kind as usize];
-        menu.undo = Some(bank.clone());
-        bank[*index].name = Some(name.trim().to_owned());
     }
-    if save || cancel {
-        menu.rename = None;
-    }
+    let key = egui::Id::new(("macro-menu-ui", scope, ModuleKind::Waterfall as usize));
+    let mut menu = ctx
+        .data(|d| d.get_temp::<MacroMenuState>(key))
+        .unwrap_or_default();
+    menu.sync(slots);
+    menu.undo = Some(slots.clone());
+    menu.rename = None;
+    slots[index] = Slot::default();
+    menu.remember(slots);
+    ctx.data_mut(|d| d.insert_temp(key, menu));
 }
 
 #[cfg(test)]

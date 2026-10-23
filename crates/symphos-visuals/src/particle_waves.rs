@@ -11,6 +11,8 @@ pub struct Layer {
     pub a: [f32; 4],
     pub b: [f32; 4],
     pub c: [f32; 4],
+    pub gradient: [[f32; 4]; 8],
+    pub palette: [f32; 4], // count (zero keeps legacy blend), cyclic, reserved
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -590,6 +592,8 @@ mod tests {
                 a: [0.24, 0.47, 1.0, 1.0],
                 b: [0.53, 1.0, 0.13, 1.0],
                 c: [0.92, 1.0, 1.0, 1.0],
+                gradient: [[0.0; 4]; 8],
+                palette: [0.0; 4],
             }; 8],
         }
     }
@@ -752,6 +756,10 @@ mod tests {
                 layer.a = [0.28, 0.69, 1.0, 1.0];
                 layer.b = [1.0, 0.49, 0.61, 1.0];
                 layer.c = [0.96, 0.95, 0.84, 1.0];
+                layer.gradient = [
+                    layer.a, layer.b, layer.c, layer.a, layer.b, layer.c, layer.a, layer.b,
+                ];
+                layer.palette = [8.0, 0.0, 0.0, 0.0];
             }
             let field: Vec<f32> = (0..ROWS)
                 .flat_map(|y| {
@@ -847,9 +855,94 @@ mod tests {
     }
     #[test]
     fn shader_abi_and_history_size_are_aligned() {
-        assert_eq!(std::mem::size_of::<Layer>(), 96);
-        assert_eq!(std::mem::size_of::<Frame>(), 1088);
+        assert_eq!(std::mem::size_of::<Layer>(), 240);
+        assert_eq!(std::mem::offset_of!(Layer, gradient), 96);
+        assert_eq!(std::mem::offset_of!(Layer, palette), 224);
+        assert_eq!(std::mem::offset_of!(Frame, layers), 320);
+        assert_eq!(std::mem::size_of::<Frame>(), 2240);
         assert_eq!(BANDS * ROWS, 6144);
+    }
+    #[test]
+    #[ignore = "requires a real compute GPU"]
+    fn gpu_gradient_stops_cyclic_and_layer_overrides_render_without_resetting_particles() {
+        pollster::block_on(async {
+            let instance = w::Instance::default();
+            let adapter = instance.request_adapter(&Default::default()).await.unwrap();
+            let (d, q) = adapter.request_device(&Default::default()).await.unwrap();
+            let scope = d.push_error_scope(w::ErrorFilter::Validation);
+            let l = Library::new(&d, w::TextureFormat::Rgba8Unorm);
+            let size = [256, 192];
+            let mut g = Gpu::new(&d, &l, 4096, size);
+            let mut f = frame();
+            f.clock[0] = 0.0;
+            f.geometry[3] = 2.0;
+            f.optics[1] = 0.0;
+            f.look = [4.0, 0.0, 0.5, 1.0];
+            f.light = [0.0, 0.3, 0.0, 0.0];
+            let field = vec![0.6; BANDS * ROWS];
+            let red = [1.0, 0.0, 0.0, 1.0];
+            let green = [0.0, 1.0, 0.0, 1.0];
+            let blue = [0.0, 0.0, 1.0, 1.0];
+            let mut initial = None;
+            for mode in 0..5 {
+                f.layout[3] = (mode % 4) as f32;
+                f.sculpture = if mode == 4 {
+                    [1.0, 32.0, 1.0, 0.4]
+                } else {
+                    [0.0; 4]
+                };
+                f.fragments = [0.25, 0.3, 0.7, 1.0];
+                f.feedback[0] = if mode == 4 { 0.3 } else { 0.0 };
+                for (count, cyclic, t, expected) in [
+                    (3, false, 0.5, green),
+                    (3, false, 0.25, [0.5, 0.5, 0.0, 1.0]),
+                    (3, true, 1.0 / 3.0, green),
+                    (3, true, 1.0, red),
+                    (8, false, 6.0 / 7.0, blue),
+                    (8, true, 6.0 / 8.0, blue),
+                ] {
+                    f.color = [0.0, 0.0, t, 1.0];
+                    for layer in &mut f.layers {
+                        layer.rotation[2] = 1.0;
+                        layer.gradient = [red; 8];
+                        layer.gradient[1] = green;
+                        layer.gradient[6] = blue;
+                        layer.palette = [count as f32, f32::from(cyclic), 0.0, 0.0];
+                    }
+                    // Each layer carries its own gradient; showing either one
+                    // proves it is not accidentally sampling the first layer.
+                    f.layers[1].gradient = [blue; 8];
+                    for selected in 0..2 {
+                        f.layers[0].rotation[3] = f32::from(selected == 0);
+                        f.layers[1].rotation[3] = f32::from(selected == 1);
+                        step(&d, &q, &l, &mut g, f, &field, size);
+                        let pixels = pixels(&d, &q, &g);
+                        let sums: [u64; 3] = std::array::from_fn(|c| {
+                            pixels.as_chunks::<4>().0.iter().map(|p| p[c] as u64).sum()
+                        });
+                        let expected = if selected == 0 { expected } else { blue };
+                        let total = sums.iter().sum::<u64>() as f64;
+                        assert!(total > 1000.0, "mode {mode}, layer {selected} is visible");
+                        let expected_total = expected[..3].iter().sum::<f32>() as f64;
+                        for c in 0..3 {
+                            assert!(
+                                (sums[c] as f64 / total - expected[c] as f64 / expected_total)
+                                    .abs()
+                                    < 0.025,
+                                "mode {mode}, layer {selected}, stops {count}, cyclic {cyclic}: {sums:?}, expected {expected:?}"
+                            );
+                        }
+                        let state = offsets(&d, &q, &g);
+                        if let Some(initial) = &initial {
+                            assert_eq!(&state, initial, "palette edits preserve paused particles");
+                        } else {
+                            initial = Some(state);
+                        }
+                    }
+                }
+            }
+            assert!(scope.pop().await.is_none());
+        });
     }
     #[test]
     #[ignore = "requires a real compute GPU"]
@@ -917,6 +1010,12 @@ mod tests {
                 .collect();
             let mut g = Gpu::new(&d, &library, 32768, size);
             let mut f = frame();
+            for layer in &mut f.layers {
+                layer.gradient = [
+                    layer.a, layer.b, layer.c, layer.a, layer.b, layer.c, layer.a, layer.b,
+                ];
+                layer.palette = [8.0, 0.0, 0.0, 0.0];
+            }
             let mut timings = Vec::new();
             for mode in 0..4 {
                 f.layout[3] = mode as f32;
@@ -937,6 +1036,9 @@ mod tests {
                 timings[timings.len() / 2],
                 timings[timings.len() * 95 / 100]
             );
+            for layer in &mut f.layers {
+                layer.palette = [0.0; 4];
+            }
             // Save one deterministic rendered frame for visual inspection, never an input capture.
             f.layout[3] = 0.0;
             step(&d, &q, &library, &mut g, f, &field, size);

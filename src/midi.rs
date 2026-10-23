@@ -806,6 +806,42 @@ mod tests {
         );
     }
     #[test]
+    fn midi_control_inserts_normalize_and_quantize_without_an_audio_capture() {
+        use crate::signals::{Bank, Input, Processor, inserts::Effect};
+        let mut engine = engine();
+        let mut bank = Bank::default();
+        let id = bank.add_source(Input::Midi).unwrap();
+        let chain = bank.channels[0].inserts.as_mut().unwrap();
+        chain
+            .add(
+                Input::Midi,
+                0,
+                Effect::Normalize {
+                    low: 0.5,
+                    high: 1.0,
+                    automatic: false,
+                },
+            )
+            .unwrap();
+        chain
+            .add(Input::Midi, 1, Effect::Quantize { steps: 3 })
+            .unwrap();
+        let mut processor = Processor::default();
+        for (i, (cc, expected)) in [(64, 0.0), (96, 0.5), (127, 1.0)].into_iter().enumerate() {
+            engine.bytes(1, &[0xb0, 1, cc]);
+            let out = processor.step_with_midi(
+                &bank,
+                &crate::analysis::AnalysisFrame::default(),
+                i as f64 * 0.1,
+                false,
+                &engine.snapshot,
+            );
+            assert_eq!(out.values[&id].value, expected);
+            assert!(out.audio.is_empty());
+        }
+        assert!(bank.valid());
+    }
+    #[test]
     fn scene_binding_roundtrips_but_device_preferences_are_separate() {
         let mut bank = crate::signals::Bank::default();
         bank.add(crate::signals::Method::Midi);

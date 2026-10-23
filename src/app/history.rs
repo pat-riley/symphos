@@ -21,11 +21,6 @@ impl PartialEq for Snapshot {
                 if let Some(macros) = &mut pane.macros {
                     macros.open = false;
                 }
-                for settings in &mut pane.settings {
-                    if let Some(yaw) = settings.automatic_yaw() {
-                        *yaw = 0.0;
-                    }
-                }
             }
             state
         };
@@ -121,11 +116,17 @@ impl SymphosApp {
     }
     pub(super) fn finish_edit(&mut self) {
         if self.history.pending.is_some() {
+            self.refresh_scene_preset_edited();
             let state = self.history_snapshot();
             self.history.finish(state);
         }
     }
     pub(super) fn settle_edit(&mut self, ctx: &egui::Context) {
+        // Only inspect creative state during an edit transaction, capped at
+        // 10 Hz while dragging. Idle 120 FPS rendering does no preset hashing.
+        if self.history.pending.is_some() && self.scene_browser.check_edits_due() {
+            self.refresh_scene_preset_edited();
+        }
         if self.history.pending.is_some()
             && !ctx.input(|i| i.pointer.any_down())
             && !self
@@ -157,6 +158,7 @@ impl SymphosApp {
             edit.before.clone()
         };
         self.restore_edit(snapshot);
+        self.refresh_scene_preset_edited();
         if redo {
             self.history.undo.push_back(edit);
         } else {
@@ -169,6 +171,7 @@ impl SymphosApp {
             self.scenes = Arc::unwrap_or_clone(snapshot.scenes);
         }
         let mut state = snapshot.current;
+        self.background = state.background;
         let open = self.scene_macros.open;
         if scene_changed {
             state.selected_pane = state
@@ -230,6 +233,7 @@ mod tests {
     fn snapshot(width: f32) -> Snapshot {
         let pane = ModulePane::new(ModuleKind::Spectrum);
         let state = crate::project::SceneState {
+            background: Default::default(),
             macros: Some(Default::default()),
             signals: Default::default(),
             panes: vec![pane.snapshot()],

@@ -265,7 +265,14 @@ impl Library {
             history: pipeline(device, &pp, &post, "history", HDR, None),
             horizontal: pipeline(device, &pp, &post, "horizontal", HDR, None),
             vertical: pipeline(device, &pp, &post, "vertical", HDR, None),
-            composite: pipeline(device, &pp, &post, "composite", output, None),
+            composite: pipeline(
+                device,
+                &pp,
+                &post,
+                "composite",
+                output,
+                Some(w::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            ),
             sampler: device.create_sampler(&w::SamplerDescriptor {
                 label: Some("HDR linear clamp"),
                 mag_filter: w::FilterMode::Linear,

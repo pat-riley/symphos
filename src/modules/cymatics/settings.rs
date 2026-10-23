@@ -4,12 +4,16 @@ macro_rules! settings {
  #[derive(Clone,Debug,PartialEq,serde::Serialize,serde::Deserialize)]
  #[serde(default)]
  pub(crate) struct CymaticsSettings {
+ pub camera_motion: super::super::camera_motion::Settings, pub show_gizmo:bool, pub auto_orbit:bool, pub orbit_speed:f32,
  $(pub $field:f32,)*
  pub mode:u32,pub shape:u32,pub edge:u32,pub center_support:bool,pub material:u32,
  pub quality:u32,pub artistic:bool,pub auto_sensitivity:bool,pub recycle_edges:bool,pub emitters:u32,pub color_mode:u32,pub soft_grains:bool,
+ // None preserves the exact two-color gradient in older presets.
+ #[serde(skip_serializing_if="Option::is_none")]
+ pub palette:Option<crate::colors::Palette>,
  pub color_a:[u8;3],pub color_b:[u8;3],pub plate_color:[u8;3],pub orthographic:bool,pub guides:bool,
  }
- impl Default for CymaticsSettings { fn default()->Self { Self { $($field:$default,)*mode:0,shape:0,edge:0,center_support:false,material:0,quality:1,artistic:false,auto_sensitivity:true,recycle_edges:true,emitters:3,color_mode:0,soft_grains:false,color_a:[238,219,171],color_b:[255,252,239],plate_color:[20,24,30],orthographic:false,guides:false } } }
+ impl Default for CymaticsSettings { fn default()->Self { Self { camera_motion:super::super::camera_motion::Settings::y_up_default(),show_gizmo:false,auto_orbit:false,orbit_speed:10.0,$($field:$default,)*mode:0,shape:0,edge:0,center_support:false,material:0,quality:1,artistic:false,auto_sensitivity:true,recycle_edges:true,emitters:3,color_mode:0,soft_grains:false,palette:None,color_a:[238,219,171],color_b:[255,252,239],plate_color:[20,24,30],orthographic:false,guides:false } } }
  impl CymaticsSettings {
  pub fn sanitize(&mut self){$(self.$field=if self.$field.is_finite(){self.$field.clamp($min,$max)}else{$default};)*self.mode=self.mode.min(3);self.shape=self.shape.min(2);self.edge=self.edge.min(2);self.material=self.material.min(2);self.quality=self.quality.min(3);self.emitters=self.emitters.clamp(1,6);self.color_mode=self.color_mode.min(1);self.high_hz=self.high_hz.max(self.low_hz+1.0);}
  #[cfg(test)]
@@ -25,7 +29,7 @@ settings! {
  poisson: 0.33, 0.15, 0.45, "Geometry", "Poisson ratio", "Transverse contraction of the plate material. Affects bending stiffness and free-edge mode shapes. Aluminum is approximately 0.33; steel 0.30.";
  excite_x: 0.23, -0.95, 0.95, "Geometry", "Excitation X", "Position where incoming audio applies an idealized point force. A mode cannot be excited at its node. Coordinates run from -1 to +1 across the plate.";
  excite_y: 0.17, -0.95, 0.95, "Geometry", "Excitation Y", "Point-force position along the other plate axis. On a circular plate, positions outside the rim are projected inside. No support or exciter is drawn.";
- damping: 0.035, 0.005, 0.3, "Signal Response", "Damping ratio", "Resonance bandwidth. Small values emphasize narrow, persistent resonances; high values broaden and soften them. Natural frequencies still come from the physical plate.";
+ damping: 0.035, 0.005, 0.3, "Geometry", "Damping ratio", "Resonance bandwidth. Small values emphasize narrow, persistent resonances; high values broaden and soften them. Natural frequencies still come from the physical plate.";
  gain: 40.0, 0.0, 240.0, "Signal Response", "Excitation gain", "Scale incoming audio excitation. With Automatic visual sensitivity, sets the visible vibration level while preserving the modal pattern. Switch automatic sensitivity off for the original relative physical amplitudes. Silence stays silent.";
  low_hz: 20.0, 10.0, 4000.0, "Signal Response", "Low frequency Hz", "Ignore incoming spectral peaks below this frequency. Together with High frequency, isolates which part of the music excites the plate.";
  high_hz: 4000.0, 40.0, 20000.0, "Signal Response", "High frequency Hz", "Ignore incoming peaks above this frequency. Only the modeled low-order resonances are represented; a very high cutoff does not add more plate modes.";
@@ -45,8 +49,8 @@ settings! {
  glow: 0.25, 0.0, 3.0, "Appearance", "Grain glow", "Brighten the centers of grains. This is a visual effect; it does not change vibration or settling.";
  plate_opacity: 1.0, 0.0, 1.0, "Appearance", "Plate opacity", "Visibility of the plane. Zero hides the plate in Sand mode while retaining its particles and physical boundary.";
  brightness: 1.0, 0.1, 3.0, "Appearance", "Brightness", "Overall plate and particle brightness. Has no effect on measured audio or physical motion.";
- color_spread: 0.7, 0.0, 1.0, "Appearance", "Color spread", "How much of the two-color gradient is used. Zero uses a single color; one spans the full gradient.";
- color_offset: 0.0, 0.0, 1.0, "Appearance", "Color offset", "Shift the sampled range of the gradient toward its second color.";
+ color_spread: 0.7, 0.0, 1.0, "Appearance", "Color spread", "How much of the gradient is used. Zero uses a single color; one spans the full gradient.";
+ color_offset: 0.0, 0.0, 1.0, "Appearance", "Color offset", "Shift the sampled range of the gradient toward its final color.";
  contrast: 1.0, 0.2, 4.0, "Appearance", "Color contrast", "Shape the gradient distribution. Higher values concentrate the first color and preserve bright highlights.";
  displacement: 0.12, 0.0, 0.6, "Appearance", "Surface height", "Visual magnification of the wave surface. Sand remains on a flat plane. The displacement is illustrative, not a calibrated measurement in meters.";
  display_rate: 0.45, 0.0, 3.0, "Appearance", "Wave motion Hz", "Slow-motion illustration of wave phase in Wave surface and Interference modes. Zero holds the illustrated phase; incoming audio still determines the pattern and amplitude.";
@@ -69,4 +73,38 @@ settings! {
  pan_x: 0.0, -2.0, 2.0, "Camera", "Pan X", "Horizontal framing offset. Shift-drag or right-drag to pan.";
  pan_y: 0.0, -2.0, 2.0, "Camera", "Pan Y", "Vertical framing offset. Does not move the physical plate.";
  camera_distance: 4.0, 2.0, 10.0, "Camera", "Camera distance", "Distance from the camera to the plate. Works with perspective and orthographic views.";
+}
+
+impl CymaticsSettings {
+    pub fn resolved_palette(&self) -> crate::colors::Palette {
+        self.palette.unwrap_or_else(|| {
+            let mut colors = [[0; 3]; 8];
+            colors[0] = self.color_a;
+            colors[1] = self.color_b;
+            crate::colors::Palette::Custom(crate::colors::Gradient {
+                colors,
+                count: 2,
+                cyclic: false,
+            })
+        })
+    }
+    pub fn gpu_palette(&self, theme: &AppTheme) -> ([[f32; 4]; 8], [f32; 4]) {
+        let gradient = self.resolved_palette().gradient(theme);
+        (
+            gradient.colors.map(|c| {
+                [
+                    c[0] as f32 / 255.0,
+                    c[1] as f32 / 255.0,
+                    c[2] as f32 / 255.0,
+                    1.0,
+                ]
+            }),
+            [
+                gradient.count.clamp(2, 8) as f32,
+                u8::from(gradient.cyclic) as f32,
+                0.0,
+                0.0,
+            ],
+        )
+    }
 }

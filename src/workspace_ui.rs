@@ -70,12 +70,27 @@ pub fn rounded_content_corners(ui: &egui::Ui, rect: Rect, radius: f32, color: eg
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
+/// Reveal one strip before laying out nested insert editors and their scroll areas.
+pub(crate) fn scroll_offset_for_strip(ui: &egui::Ui, salt: &str, index: usize, width: f32) -> f32 {
+    let id = ui.make_persistent_id(egui::IdSalt::new(salt));
+    let current = egui::scroll_area::State::load(ui.ctx(), id)
+        .unwrap_or_default()
+        .offset
+        .x;
+    let left = index as f32 * width;
+    let right = left + width;
+    let viewport = ui.available_width().max(1.0);
+    if left < current || viewport < width {
+        left
+    } else if right > current + viewport {
+        (right - viewport).max(0.0)
+    } else {
+        current
+    }
+}
+
 pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: bool) {
-    let body = sidebar_blend(
-        ui.visuals().panel_fill,
-        ui.visuals().text_color(),
-        if selected { 0.16 } else { 0.075 },
-    );
+    let body = ui.visuals().panel_fill;
     ui.painter().rect_filled(rect, 0.0, body);
     let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 28.0));
     ui.painter().rect_filled(header, 0.0, color);
@@ -86,6 +101,81 @@ pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: 
     ui.painter()
         .vline(rect.right() - 0.5, rect.y_range(), divider);
     ui.painter().hline(rect.x_range(), header.bottom(), divider);
+    if selected {
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.0, color.gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// Edit a channel name in its header. Returns commit/cancel, or None while typing.
+pub(crate) fn inline_strip_name(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    name: &mut String,
+    focus: &mut bool,
+    color: Color32,
+) -> Option<bool> {
+    ui.painter().rect_filled(rect, 0.0, color);
+    let id = ui.id().with("inline-strip-name");
+    let starting = *focus;
+    // TextEdit can consume Enter/Escape while surrendering focus. Remember the
+    // intent first so Escape can never turn into a click-away commit.
+    let (escape, enter) = ui.input(|input| {
+        (
+            input.key_pressed(egui::Key::Escape),
+            input.key_pressed(egui::Key::Enter),
+        )
+    });
+    let response = ui.put(
+        rect.shrink2(Vec2::new(3.0, 3.0)),
+        egui::TextEdit::singleline(name)
+            .id(id)
+            .char_limit(80)
+            .font(FontId::proportional(12.0))
+            .desired_width(f32::INFINITY),
+    );
+    if starting {
+        response.request_focus();
+        if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(name.chars().count()),
+                )));
+            state.store(ui.ctx(), id);
+        }
+        *focus = false;
+    }
+    let valid = crate::workspace::valid_name(name);
+    if escape || enter {
+        ui.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        });
+    }
+    let done = if escape {
+        Some(false)
+    } else if enter {
+        if valid {
+            Some(true)
+        } else {
+            response.request_focus();
+            None
+        }
+    } else if !starting && response.lost_focus() {
+        Some(valid)
+    } else {
+        None
+    };
+    if done.is_some() {
+        response.surrender_focus();
+    }
+    done
 }
 
 pub fn strip_title(ui: &egui::Ui, rect: Rect, text: String, color: egui::Color32) {
@@ -145,31 +235,67 @@ pub fn sidebar_style(ui: &mut egui::Ui, theme: &AppTheme) {
     }
 }
 
-/// Identical inspector tab rail geometry/styles for components and signal channels.
-pub fn inspector_rail(
+/// Shared skin for every inspector; applies locally to its child UI.
+pub fn inspector_style(ui: &mut egui::Ui, theme: &AppTheme) {
+    inspector_controls_style(ui, theme);
+    ui.painter()
+        .rect_filled(ui.max_rect(), 0.0, theme.navigation);
+}
+
+/// Inspector typography, fields, rules and scrollbars without painting a surface.
+/// Dialogs can reuse this skin while keeping their own frame and rounded edges.
+pub fn inspector_controls_style(ui: &mut egui::Ui, theme: &AppTheme) {
+    sidebar_style(ui, theme);
+    ui.spacing_mut().item_spacing = Vec2::new(7.0, 6.0);
+    ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+    ui.spacing_mut().scroll.bar_width = 9.0;
+    ui.style_mut().override_font_id = Some(FontId::proportional(12.0));
+    let widgets = &mut ui.visuals_mut().widgets;
+    for widget in [
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        widget.corner_radius = egui::CornerRadius::same(1);
+        widget.expansion = 0.0;
+    }
+}
+
+/// Untabbed properties below the pinned identity header. Context is restored so
+/// flat rows and edge-to-edge rules cannot leak into the mixer or plugin windows.
+pub fn inspector_scroll(
     ui: &mut egui::Ui,
-    bounds: Rect,
-    theme: &AppTheme,
     id: impl std::hash::Hash + std::fmt::Debug,
-    tabs: impl FnOnce(&mut egui::Ui),
-) -> Rect {
-    let rect = Rect::from_min_max(
-        bounds.min,
-        egui::pos2(bounds.left() + 34.0, bounds.bottom()),
-    );
-    ui.painter().rect_filled(rect, 0.0, theme.navigation);
-    let mut rail = ui.new_child(
-        egui::UiBuilder::new()
-            .id_salt(id)
-            .max_rect(rect.shrink2(Vec2::new(3.0, 4.0))),
-    );
-    rail.set_clip_rect(rect.intersect(ui.clip_rect()));
-    rail.spacing_mut().button_padding = Vec2::splat(2.0);
-    rail.spacing_mut().item_spacing = Vec2::new(0.0, 3.0);
-    rail.spacing_mut().interact_size = Vec2::splat(28.0);
-    rail.style_mut().interaction.tooltip_delay = 0.2;
-    tabs(&mut rail);
-    Rect::from_min_max(egui::pos2(rect.right(), bounds.top()), bounds.max)
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let bounds_id = egui::Id::new("inspector-bounds");
+    let flat_id = egui::Id::new(crate::modules::FLAT_INSPECTOR);
+    let bounds = ui.available_rect_before_wrap();
+    let previous = ui.data_mut(|d| {
+        let previous = (d.get_temp::<Rect>(bounds_id), d.get_temp::<bool>(flat_id));
+        d.insert_temp(bounds_id, bounds);
+        d.insert_temp(flat_id, true);
+        previous
+    });
+    egui::ScrollArea::vertical()
+        .id_salt(id)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, body);
+        });
+    ui.data_mut(|d| {
+        d.remove::<Rect>(bounds_id);
+        d.remove::<bool>(flat_id);
+        if let Some(value) = previous.0 {
+            d.insert_temp(bounds_id, value);
+        }
+        if let Some(value) = previous.1 {
+            d.insert_temp(flat_id, value);
+        }
+    });
 }
 
 pub fn sidebar_header(
@@ -459,12 +585,6 @@ impl Manager {
         can_add: bool,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
-        ui.painter().rect_filled(rect, 0.0, theme.navigation);
-        ui.painter().vline(
-            rect.right(),
-            rect.y_range(),
-            Stroke::new(1.0, theme.foreground.gamma_multiply(0.12)),
-        );
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("component-library")
@@ -472,15 +592,21 @@ impl Manager {
         );
         // Reserve the boundary for the resize handle so a row's click/drag hit
         // area cannot add or drag a component when grabbing the drawer edge.
+        inspector_style(&mut child, theme);
         let mut body_clip = rect.intersect(ui.clip_rect());
         body_clip.max.x -= 4.0;
         child.set_clip_rect(body_clip);
-        sidebar_style(&mut child, theme);
+        // Match the inspector's section rules, including the drawer boundary.
+        ui.painter().vline(
+            rect.right(),
+            rect.y_range(),
+            child.visuals().widgets.noninteractive.bg_stroke,
+        );
         let close = egui::Frame::new()
-            .inner_margin(12)
+            .inner_margin(8)
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Components").strong());
+                    ui.label(RichText::new("Components").size(13.0).strong());
                     ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                         ui.visuals_mut().button_frame = false;
                         icons::sized_button(
@@ -499,28 +625,29 @@ impl Manager {
         if close.clicked() {
             self.library_open = false;
         }
-        egui::ScrollArea::vertical().id_salt("component-results").show(&mut child, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
+        sidebar_rule(&mut child, rect);
+        egui::ScrollArea::vertical().id_salt("component-results").auto_shrink([false, false]).show(&mut child, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             // Keep spatial instruments first, then include every registered component.
             let spatial = [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings];
             for kind in spatial.into_iter().chain(ModuleKind::ALL.into_iter().filter(|kind| !spatial.contains(kind))) {
                 if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
-                    egui::Frame::new().inner_margin(12).show(ui, |ui| {
-                        ui.label(egui::RichText::new(if kind == ModuleKind::Waterfall { "SCIENTIFIC INSTRUMENTS" } else { "VISUALIZERS" }).size(10.0).color(theme.muted));
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
+                        ui.label(RichText::new(if kind == ModuleKind::Waterfall { "Scientific instruments" } else { "Visualizers" }).strong());
                     });
                 }
                 ui.push_id(kind.label(), |ui| {
                     sidebar_rule(ui, rect);
-                    let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click_and_drag());
-                    let response = response.on_hover_cursor(egui::CursorIcon::Grab);
-                    if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, theme.card); }
-                    let badge = Rect::from_center_size(egui::pos2(row.left() + 24.0, row.center().y), Vec2::splat(22.0));
+                    let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click_and_drag());
+                    let response = drag_cursor(response);
+                    if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, ui.visuals().widgets.noninteractive.bg_fill); }
+                    let badge = Rect::from_center_size(egui::pos2(row.left() + 20.0, row.center().y), Vec2::splat(20.0));
                     icons::paint(ui, badge, kind.icon(), theme.foreground);
                     let labels = Rect::from_min_max(egui::pos2(badge.right() + 9.0, row.top()),
                         egui::pos2(row.right() - 32.0, row.bottom()));
                     // Paint labels without child widgets so the whole row keeps
                     // its click/drag interaction, including directly over text.
-                    let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(13.0), theme.foreground, labels.width());
+                    let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(12.0), theme.foreground, labels.width());
                     job.wrap.max_rows = 1;
                     let galley = ui.painter().layout_job(job);
                     let position = egui::pos2(labels.left(), labels.center().y - galley.size().y * 0.5);
@@ -533,9 +660,9 @@ impl Manager {
                 });
             }
             sidebar_rule(ui, rect);
-            egui::Frame::new().inner_margin(12).show(ui, |ui| {
-                ui.small(if can_add { "Drag to a pane edge to split, or its center to replace." }
-                    else { "16 panes are open. Close one to add, or drag to replace." });
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
+                ui.label(RichText::new(if can_add { "Drag to a pane edge to split, or its center to replace." }
+                    else { "16 panes are open. Close one to add, or drag to replace." }).size(11.0).weak());
             });
         });
         actions
@@ -708,12 +835,23 @@ fn thumbnail(ui: &egui::Ui, tree: &workspace::Tile, rect: Rect, color: Color32) 
     }
 }
 
+/// Use an open hand for a movable item, then a closed hand for the full drag,
+/// including when the pointer leaves the original handle.
+pub fn drag_cursor(response: egui::Response) -> egui::Response {
+    let cursor = if response.dragged() {
+        egui::CursorIcon::Grabbing
+    } else {
+        egui::CursorIcon::Grab
+    };
+    response.on_hover_and_drag_cursor(cursor)
+}
+
 pub fn drag_grip(ui: &mut egui::Ui, id: usize) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(18.0, 24.0), Sense::drag());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::drag());
     let color = ui.visuals().weak_text_color();
     paint_drag_grip(ui, rect, color);
     response.dnd_set_drag_payload(DragPayload::Pane(id));
-    response.on_hover_cursor(egui::CursorIcon::Grab).help_text(
+    drag_cursor(response).help_text(
         "Drag this pane to an edge to move it, or onto another pane's center to swap positions.",
     )
 }

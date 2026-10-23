@@ -1,4 +1,4 @@
-struct Frame {clock:vec4f,geometry:vec4f,motion:vec4f,grains:vec4f,recycling:vec4f,lifecycle:vec4f,surface:vec4f,light:vec4f,direction:vec4f,view:vec4f,axis_x:vec4f,axis_y:vec4f,axis_z:vec4f,camera:vec4f,color_a:vec4f,color_b:vec4f,plate_color:vec4f,color:vec4f,output:vec4f}
+struct Frame {clock:vec4f,geometry:vec4f,motion:vec4f,grains:vec4f,recycling:vec4f,lifecycle:vec4f,surface:vec4f,light:vec4f,direction:vec4f,view:vec4f,axis_x:vec4f,axis_y:vec4f,axis_z:vec4f,camera:vec4f,gradient:array<vec4f,8>,palette:vec4f,plate_color:vec4f,color:vec4f,output:vec4f}
 @group(0) @binding(0) var<uniform> f:Frame;
 @group(0) @binding(1) var<storage,read> field:array<vec4f>;
 // Render pipeline uses the same binding as read-only; compute alone writes it.
@@ -39,7 +39,16 @@ fn sample_field(p:vec2f)->vec4f {let uv=clamp((p+1.0)*32.0,vec2f(0),vec2f(64));l
 fn project(p:vec3f)->vec4f {let q=f.axis_x.xyz*p.x+f.axis_y.xyz*p.y+f.axis_z.xyz*p.z;let depth=max(0.2,f.camera.x+q.z);let divisor=select(depth,f.camera.x,f.camera.z>0.5);let scale=f.camera.y*f.view.y*min(f.view.x,1.0)/divisor;return vec4f(q.x*scale/f.view.x+f.view.z,-q.y*scale+f.view.w,clamp(depth/50.0,0.001,0.999),1.0);}
 fn world(p:vec2f,offset:f32)->vec3f {let v=sample_field(p);return vec3f(p.x,v.y*f.geometry.w+offset,p.y*f.geometry.y);}
 fn tone(c:vec3f)->vec3f {let rgb=clamp(c,vec3f(0),vec3f(1));return select(rgb,pow(rgb,vec3f(2.2)),f.output.z>0.5);}
-fn palette(t:f32)->vec3f {return mix(f.color_a.rgb,f.color_b.rgb,clamp(pow(clamp(t*f.color.y+f.color.z,0.0,1.0),f.color.w),0.0,1.0));}
+fn palette(t:f32)->vec3f {
+ let u=clamp(pow(clamp(t*f.color.y+f.color.z,0.0,1.0),f.color.w),0.0,1.0);
+ let n=u32(clamp(f.palette.x,2.0,8.0));
+ if f.palette.y>0.5 {
+    let x=fract(u)*f32(n);let i=u32(x);
+    return mix(f.gradient[i%n].rgb,f.gradient[(i+1u)%n].rgb,fract(x));
+ }
+ let x=u*f32(n-1u);let i=min(u32(x),n-2u);
+ return mix(f.gradient[i].rgb,f.gradient[i+1u].rgb,x-f32(i));
+}
 struct V {@builtin(position) p:vec4f,@location(0) uv:vec2f,@location(1) local:vec2f,@location(2) shade:f32}
 @vertex fn plate_vertex(@builtin(vertex_index) i:u32)->V {let cell=i/6u;let corner=array<vec2f,6>(vec2f(0,0),vec2f(1,0),vec2f(0,1),vec2f(0,1),vec2f(1,0),vec2f(1,1))[i%6u];let uv=(vec2f(f32(cell%64u),f32(cell/64u))+corner)/32.0-1.0;var o:V;o.p=project(world(uv,0));o.uv=uv;o.local=vec2f(0);o.shade=1;return o;}
 @fragment fn plate_fragment(v:V)->@location(0) vec4f {

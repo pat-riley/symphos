@@ -342,7 +342,7 @@ pub(super) fn bar(
                                         None => "Choose source",
                                     };
                                     ui.label("Source");
-                                    egui::ComboBox::from_id_salt("source")
+                                    crate::dropdown::ComboBox::from_id_salt("source")
                                         .selected_text(selected)
                                         .width(260.0)
                                         .show_ui(ui, |ui| {

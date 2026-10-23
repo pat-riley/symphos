@@ -14,7 +14,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use symphos_visuals::particle_waves::{Frame, Layer, ROWS};
+use symphos_visuals::particle_waves::{Frame, ROWS};
 
 pub struct ParticleWaves {
     settings: Settings,
@@ -55,18 +55,22 @@ fn choice(ui: &mut egui::Ui, label: &str, value: &mut u32, options: &[&str], hel
             .help_text(help);
     });
 }
-fn colors(ui: &mut egui::Ui, a: &mut [u8; 3], b: &mut [u8; 3], c: &mut [u8; 3]) {
-    for (label, color) in [
-        ("First color", a),
-        ("Middle color", b),
-        ("Highlight color", c),
-    ] {
-        property_row(ui, label, |ui| {
-            ui.color_edit_button_srgb(color).help_text("Saved palette color. Color driver determines where particles sample this three-color gradient.");
-        });
+fn palette_control(
+    ui: &mut egui::Ui,
+    palette: &mut Option<crate::colors::Palette>,
+    legacy: [[u8; 3]; 3],
+) {
+    let mut selected = settings::resolved_palette(*palette, legacy);
+    let previous = selected;
+    selected.controls(ui);
+    if selected != previous {
+        *palette = Some(selected);
     }
 }
 impl ParticleWaves {
+    pub(super) fn set_palette(&mut self, palette: crate::colors::Palette) {
+        self.settings.palette = Some(palette);
+    }
     pub fn spectral_bloom() -> Self {
         Self {
             settings: Settings::spectral_bloom(),
@@ -96,6 +100,10 @@ impl ParticleWaves {
         self.last = None;
         self.time = 0.0;
         self.envelope = 0.0;
+    }
+    pub fn clear_input_history(&mut self) {
+        self.history.clear();
+        self.field = Arc::new(vec![0.0; BANDS * ROWS]);
     }
     pub fn release_if_inactive(&mut self) {
         if self.last.is_some() {
@@ -147,11 +155,10 @@ impl ParticleWaves {
                 ui.checkbox(&mut layer.custom,"Override shared appearance and motion").help_text("Use this layer's palette, size, density, opacity and motion multipliers. Uncheck to use the shared settings; your overrides are retained.");
                 if layer.custom {
                     layer.numeric_controls(ui, "Override", &prefix);
-                    colors(
+                    palette_control(
                         ui,
-                        &mut layer.color_a,
-                        &mut layer.color_b,
-                        &mut layer.color_c,
+                        &mut layer.palette,
+                        [layer.color_a, layer.color_b, layer.color_c],
                     );
                 }
                 if ui.button("Reset layer").help_text("Restore only this layer's transform and overrides. Shared geometry and other layers are unaffected.").clicked(){*layer=Default::default();}
@@ -216,14 +223,14 @@ impl ParticleWaves {
         }
         settings_panel(ui, "Appearance", |ui| {
             settings_group(ui, "Palette", |ui| {
+                palette_control(ui, &mut s.palette, [s.color_a, s.color_b, s.color_c]);
                 choice(
                     ui,
                     "Color driver",
                     &mut s.color_mode,
                     &["Particle variation", "Frequency", "Spectral level", "Layer"],
-                    "Choose what samples the palette. Particle variation keeps a stable mix of blue, green and white dots; Frequency orders colors along the spectrum; Level follows incoming intensity; Layer separates stacked sheets.",
+                    "Choose what samples the palette. Particle variation gives each particle a stable color; Frequency orders colors along the spectrum; Level follows incoming intensity; Layer separates stacked sheets.",
                 );
-                colors(ui, &mut s.color_a, &mut s.color_b, &mut s.color_c);
                 s.numeric_controls(ui, "Palette", "");
             });
             settings_group(ui, "Light", |ui| {
@@ -235,12 +242,14 @@ impl ParticleWaves {
             });
         });
         settings_panel(ui, "Camera", |ui| {
-            ui.checkbox(&mut s.auto_orbit,"Auto-rotate").help_text("Orbit continuously around the layers at the chosen speed. Manual rotation stops auto-rotate; panning and zoom retain it.");
+            if super::visual_inspector(ui).is_none() {
+                ui.checkbox(&mut s.auto_orbit,"Auto-rotate").help_text("Orbit continuously around the layers at the chosen speed. Manual rotation stops auto-rotate; panning and zoom retain it.");
+            }
             ui.checkbox(&mut s.orthographic,"Orthographic").help_text("Remove perspective size changes while retaining 3D rotation. Depth of field can still show the focus plane.");
             ui.checkbox(&mut s.guides,"XYZ reference grid").help_text("Show the world-space ground grid and colored X/Y/Z axes. It follows the same camera as the particles and is hidden by default.");
             ui.horizontal(|ui| {
-                if ui.button("Front").help_text("Look directly across X and Y, centered on the layers. Stops auto-rotate.").clicked(){s.yaw=0.0;s.elevation=0.0;s.roll=0.0;s.auto_orbit=false;}
-                if ui.button("Top").help_text("Look down at the XZ plane. Stops auto-rotate.").clicked(){s.yaw=0.0;s.elevation = -std::f32::consts::FRAC_PI_2;s.roll=0.0;s.auto_orbit=false;}
+                if super::visual_inspector(ui).is_none() && ui.button("Front").help_text("Look directly across X and Y, centered on the layers. Stops auto-rotate.").clicked() {s.yaw=0.0;s.elevation=0.0;s.roll=0.0;s.auto_orbit=false;}
+                if super::visual_inspector(ui).is_none() && ui.button("Top").help_text("Look down at the XZ plane. Stops auto-rotate.").clicked() {s.yaw=0.0;s.elevation = -std::f32::consts::FRAC_PI_2;s.roll=0.0;s.auto_orbit=false;}
                 if ui.button("Reset camera").help_text("Restore the angled view and framing without changing the spectrum, focus settings or particles.").clicked(){reset_camera(s, self.sculptural);}
             });
             s.numeric_controls(ui, "Camera", "");
@@ -321,7 +330,7 @@ impl ParticleWaves {
                 - std::f32::consts::PI;
         }
         let response=ui.interact(rect,ui.id().with("particle-waves-camera"),Sense::click_and_drag()).help_text("Spectral particles · frequency shapes luminous 3D layers. Drag to rotate freely, Shift/right-drag to pan, scroll to zoom, double-click to reset. Stronger audio scatters grains; quieter passages draw them back to their spectral surface.");
-        if response.dragged() {
+        if response.dragged() && !super::camera::over_navigator(ui) {
             let delta = ui.input(|i| i.pointer.delta());
             if response.dragged_by(egui::PointerButton::Secondary)
                 || response.dragged_by(egui::PointerButton::Middle)
@@ -342,23 +351,15 @@ impl ParticleWaves {
                 s.auto_orbit = false;
             }
         }
-        if response.hovered() {
+        if response.hovered() && !super::camera::over_navigator(ui) {
             s.zoom =
                 (s.zoom * (ui.input(|i| i.smooth_scroll_delta.y) * 0.002).exp()).clamp(0.25, 4.0);
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !super::camera::over_navigator(ui) {
             reset_camera(s, self.sculptural);
         }
         let axes = trackball::orientation_axes(s.yaw, s.elevation, s.roll)
             .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0]);
-        let color = |c: [u8; 3]| {
-            [
-                c[0] as f32 / 255.0,
-                c[1] as f32 / 255.0,
-                c[2] as f32 / 255.0,
-                1.0,
-            ]
-        };
         let frame = Frame {
             clock: [dt, self.time, 0.0, s.drift_fraction],
             geometry: [s.width, s.depth, s.height, s.layer_count as f32],
@@ -428,26 +429,7 @@ impl ParticleWaves {
                 [0.0; 4]
             },
             feedback_shift: [s.bloom.shift_x, s.bloom.shift_y, s.bloom.chroma, 0.0],
-            layers: std::array::from_fn(|i| {
-                let l = &s.layers[i];
-                Layer {
-                    transform: [l.x, l.y, l.z, l.scale],
-                    rotation: [
-                        l.rotation.to_radians(),
-                        l.tilt.to_radians(),
-                        s.color_blend,
-                        f32::from(l.enabled),
-                    ],
-                    style: if l.custom {
-                        [l.size, l.density, l.speed, l.opacity]
-                    } else {
-                        [1.0; 4]
-                    },
-                    a: color(if l.custom { l.color_a } else { s.color_a }),
-                    b: color(if l.custom { l.color_b } else { s.color_b }),
-                    c: color(if l.custom { l.color_c } else { s.color_c }),
-                }
-            }),
+            layers: s.gpu_layers(theme),
         };
         self.gpu.show(
             ui,
@@ -538,6 +520,31 @@ fn draw_guides(ui: &egui::Ui, rect: Rect, s: &Settings, axes: [[f32; 4]; 3], the
                 egui::FontId::proportional(12.0),
                 c,
             );
+        }
+    }
+}
+
+impl super::camera::Controlled for ParticleWaves {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan_x,
+            pan_y: &mut s.pan_y,
+            degrees: false,
+            y_up: true,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: true,
+            default_speed: 0.14,
+            speed_limit: 1.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
         }
     }
 }

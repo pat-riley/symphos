@@ -6,16 +6,21 @@ use crate::{
         Visualizer,
         ui::{combo, envelope_editor, spectrum_editor},
     },
-    modules::{inspector_section, property_row, settings_group},
+    modules::{property_row, settings_group},
     parameter::Parameter,
     theme::AppTheme,
     workspace_ui,
 };
 use egui::{self, Rect};
 use std::sync::Mutex;
+pub(crate) mod audio_channel;
 mod history;
+mod inserts;
+mod master;
 mod midi_preview;
 mod processor;
+/// UI identity for the permanent capture, never serialized as a scene channel.
+pub(crate) const MASTER_ID: u64 = 0;
 
 pub type Shared = Arc<Mutex<Panel>>;
 pub const MIN_DOCK_HEIGHT: f32 = 320.0;
@@ -26,11 +31,15 @@ pub struct Panel {
     pub midi_snapshot: Arc<crate::midi::Snapshot>,
     midi_learning: Option<(u64, u64)>,
     pub selected: Option<u64>,
+    reveal_selected: bool,
+    pub(crate) selected_insert: Option<(u64, u64)>,
     pub show_signals: bool,
     pub inspect_requested: bool,
+    pub master_settings_requested: bool,
     pub consumers: BTreeMap<u64, Vec<String>>,
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
+    deleted_audio: Option<(audio::InputBus, usize)>,
     history: BTreeMap<u64, history::History>,
     raw_history: BTreeMap<u64, history::History>,
     processor: Option<u64>,
@@ -41,7 +50,6 @@ pub struct Panel {
     rename: Option<(u64, String, bool)>,
     learning: Option<RangeLearning>,
     learning_notice: Option<(u64, String)>,
-    sections: BTreeMap<u64, SignalSection>,
     pub close_inspector: bool,
     pub inspector_width: f32,
 }
@@ -108,11 +116,15 @@ impl Default for Panel {
             midi_snapshot: Arc::new(crate::midi::Snapshot::default()),
             midi_learning: None,
             selected: None,
+            reveal_selected: false,
+            selected_insert: None,
             show_signals: false,
             inspect_requested: false,
+            master_settings_requested: false,
             consumers: BTreeMap::new(),
             span: None,
             deleted: None,
+            deleted_audio: None,
             history: Default::default(),
             raw_history: Default::default(),
             processor: None,
@@ -123,7 +135,6 @@ impl Default for Panel {
             rename: None,
             learning: None,
             learning_notice: None,
-            sections: BTreeMap::new(),
             close_inspector: false,
             inspector_width: 236.0,
         }
@@ -166,9 +177,13 @@ impl Panel {
         }
     }
 
-    pub fn replace_bank(&mut self, bank: Bank) {
+    pub fn replace_bank(&mut self, mut bank: Bank) {
+        bank.migrate_inserts();
         self.selected = bank.channels.first().map(|d| d.id);
         self.bank = bank;
+        self.selected_insert = None;
+        self.reveal_selected = false;
+        self.master_settings_requested = false;
         self.clipboard = None;
         self.snapshot = Arc::new(Snapshot::default());
         self.last_history_time = 0.0;
@@ -176,8 +191,8 @@ impl Panel {
         self.learning = None;
         self.learning_notice = None;
         self.midi_learning = None;
-        self.sections.clear();
         self.deleted = None;
+        self.deleted_audio = None;
         self.history.clear();
         self.raw_history.clear();
         self.processor = None;
@@ -204,11 +219,9 @@ impl Panel {
                 .max_rect(rect),
         );
         page.set_clip_rect(rect.intersect(ui.clip_rect()));
-        workspace_ui::dock_style(&mut page);
+        workspace_ui::sidebar_style(&mut page, theme);
         let ui = &mut page;
         self.bank.sync_slots();
-        self.sections
-            .retain(|id, _| self.bank.channels.iter().any(|d| d.id == *id));
         self.observe_history();
         self.midi_history.retain(|id, _| {
             self.bank
@@ -243,33 +256,65 @@ impl Panel {
         }
         // Keep the dock edges aligned with the visual panes above it.
         let mixer = mixer.shrink2(egui::vec2(0.0, 8.0));
-        ui.painter()
-            .rect_filled(mixer, 7.0, ui.visuals().extreme_bg_color);
+        ui.painter().rect_filled(mixer, 7.0, theme.navigation);
         let content = mixer.shrink(1.0);
+        let (tracks, master) = master::layout(content);
         let mut board = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("signals-mixer")
-                .max_rect(content)
+                .max_rect(tracks)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        board.set_clip_rect(content.intersect(ui.clip_rect()));
+        board.set_clip_rect(tracks.intersect(ui.clip_rect()));
         let mut action = None;
         board.spacing_mut().item_spacing.x = 0.0;
         let slots = self.bank.slots.clone();
-        let mixer_output = egui::ScrollArea::horizontal()
-            .id_salt("signal-strips")
-            .auto_shrink([false, false])
-            .show(&mut board, |ui| {
-                let height = ui.available_height();
-                let viewport_right = ui.max_rect().right();
-                let mut insertion_line = None;
-                ui.horizontal_top(|ui| {
-                    for (slot, id) in slots.iter().copied().enumerate() {
-                        ui.push_id(("channel-slot", slot), |ui| {
-                            let (strip, _) = ui.allocate_exact_size(
-                                egui::vec2(156.0, height),
-                                egui::Sense::hover(),
+        let reveal_selected = std::mem::take(&mut self.reveal_selected);
+        let mut scroll = egui::ScrollArea::horizontal().id_salt("signal-strips");
+        if reveal_selected && let Some(index) = slots.iter().position(|id| *id == self.selected) {
+            scroll = scroll.horizontal_scroll_offset(workspace_ui::scroll_offset_for_strip(
+                &board,
+                "signal-strips",
+                index,
+                156.0,
+            ));
+        }
+        let mixer_output = scroll.auto_shrink([false, false]).show(&mut board, |ui| {
+            let height = ui.available_height();
+            let viewport_right = ui.max_rect().right();
+            let mut insertion_line = None;
+            ui.horizontal_top(|ui| {
+                for (slot, id) in slots.iter().copied().enumerate() {
+                    ui.push_id(("channel-slot", slot), |ui| {
+                        let mut over_inserts = false;
+                        let (strip, _) =
+                            ui.allocate_exact_size(egui::vec2(156.0, height), egui::Sense::hover());
+                        if let Some(id) = id
+                            && self
+                                .bank
+                                .channels
+                                .iter()
+                                .any(|d| d.id == id && d.inserts.is_some())
+                        {
+                            let d = self.bank.channels.iter_mut().find(|d| d.id == id).unwrap();
+                            let bus = self.bank.audio_inputs.iter_mut().find(|b| b.id == id);
+                            let output = inserts::strip(
+                                ui,
+                                strip,
+                                slot,
+                                d,
+                                bus,
+                                &self.snapshot,
+                                self.selected == Some(id),
+                                self.selected_insert,
+                                self.history.get(&id),
+                                (&self.midi_snapshot, self.midi_history.get(&id)),
                             );
+                            over_inserts = output.over_inserts;
+                            if let Some(a) = output.action {
+                                action = Some(a);
+                            }
+                        } else {
                             if let Some(id) = id
                                 && let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id)
                             {
@@ -292,113 +337,165 @@ impl Panel {
                                 ) {
                                     action = Some(a);
                                 }
+                            } else if let Some(bus) = id.and_then(|id| {
+                                self.bank.audio_inputs.iter_mut().find(|b| b.id == id)
+                            }) {
+                                let feed =
+                                    self.snapshot.audio.get(&bus.id).map(|f| f.frame.as_ref());
+                                if let Some(a) = audio_channel::strip(
+                                    ui,
+                                    strip,
+                                    slot,
+                                    bus,
+                                    feed,
+                                    self.selected == id,
+                                ) {
+                                    action = Some(a);
+                                }
                             }
-                            if ui.rect_contains_pointer(strip)
-                                && ui.input(|i| i.pointer.primary_pressed())
-                            {
-                                self.selected = id;
-                                self.inspect_requested = true;
-                            }
-                            let menu_response = ui.interact(
-                                strip,
-                                ui.id().with("channel-menu"),
-                                egui::Sense::hover(),
+                        }
+                        if let Some(id) = id {
+                            let title = Rect::from_min_max(
+                                strip.min,
+                                egui::pos2(strip.right() - 24.0, strip.top() + 28.0),
                             );
-                            let open_menu = ui.rect_contains_pointer(strip)
-                                && ui.input(|i| i.pointer.secondary_clicked());
-                            if open_menu && let Some(id) = id {
-                                self.selected = Some(id);
-                                self.inspect_requested = true;
+                            self.rename_field(ui, title, id);
+                        }
+                        if ui.rect_contains_pointer(strip)
+                            && ui.input(|i| i.pointer.primary_pressed())
+                        {
+                            self.selected = id;
+                            if !over_inserts {
+                                self.selected_insert = None;
                             }
-                            let definition =
-                                id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
-                            egui::Popup::context_menu(&menu_response)
-                                .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
-                                .show(|ui| {
-                                    if let Some(menu_action) = channel_menu(
-                                        ui,
-                                        definition,
-                                        slot,
-                                        self.can_paste(),
-                                        self.bank.channels.len() < MAX_SIGNALS,
-                                        self.deleted.is_some(),
-                                    ) {
-                                        action = Some(menu_action);
-                                    }
-                                });
-                            if ui.rect_contains_pointer(strip)
-                                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-                            {
-                                let (boundary, x) = if pos.x < strip.center().x {
-                                    (slot, strip.left())
-                                } else {
-                                    (slot + 1, strip.right())
-                                };
-                                insertion_line = Some((
-                                    boundary,
-                                    egui::pos2(x, strip.top()),
-                                    egui::pos2(x, strip.bottom()),
-                                ));
-                            }
-                        });
-                    }
-                    // Fill only the remaining viewport; adding an offscreen blank
-                    // track's worth of space would force an unnecessary scrollbar.
-                    let free_width = (viewport_right - ui.next_widget_position().x - 1.0).max(0.0);
-                    let (space, response) = ui
-                        .allocate_exact_size(egui::vec2(free_width, height), egui::Sense::hover());
-                    if slots.is_empty() {
-                        ui.painter().text(
-                            space.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Right-click to add a channel",
-                            egui::FontId::proportional(13.0),
-                            ui.visuals().weak_text_color(),
-                        );
-                    }
-                    let open_menu = ui.rect_contains_pointer(space)
-                        && ui.input(|i| i.pointer.secondary_clicked());
-                    egui::Popup::context_menu(&response)
+                            self.inspect_requested = true;
+                        }
+                        let menu_response =
+                            ui.interact(strip, ui.id().with("channel-menu"), egui::Sense::hover());
+                        let open_menu = ui.rect_contains_pointer(strip)
+                            && !over_inserts
+                            && ui.input(|i| i.pointer.secondary_clicked());
+                        if open_menu && let Some(id) = id {
+                            self.selected = Some(id);
+                            self.selected_insert = None;
+                            self.inspect_requested = true;
+                        }
+                        let definition =
+                            id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
+                        crate::dropdown::styled_popup(
+                            ui,
+                            egui::Popup::context_menu(&menu_response),
+                        )
                         .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
                         .show(|ui| {
-                            if let Some(menu_action) = channel_menu(
+                            if definition.is_none()
+                                && let Some(bus) = id.and_then(|id| {
+                                    self.bank.audio_inputs.iter().find(|b| b.id == id)
+                                })
+                            {
+                                if let Some(a) = audio_channel::menu(
+                                    ui,
+                                    bus,
+                                    slot,
+                                    self.bank.audio_inputs.len() < audio::MAX_INPUTS,
+                                ) {
+                                    action = Some(a);
+                                }
+                            } else if let Some(menu_action) = channel_menu(
                                 ui,
-                                None,
-                                slots.len(),
+                                definition,
+                                slot,
                                 self.can_paste(),
                                 self.bank.channels.len() < MAX_SIGNALS,
-                                self.deleted.is_some(),
+                                self.deleted.is_some() || self.deleted_audio.is_some(),
                             ) {
                                 action = Some(menu_action);
                             }
                         });
-                    if ui.rect_contains_pointer(space) {
-                        insertion_line = Some((slots.len(), space.left_top(), space.left_bottom()));
-                    }
-                });
-                // Resolve after every header has registered its payload, so moving
-                // left shows the guide immediately too. Paint above neighboring tracks.
-                if let Some((boundary, top, bottom)) = insertion_line
-                    && let Some(payload) = egui::DragAndDrop::payload::<ChannelDrag>(ui.ctx())
-                {
-                    ui.painter().line_segment(
-                        [top, bottom],
-                        egui::Stroke::new(1.5, ui.visuals().text_color()),
+                        if ui.rect_contains_pointer(strip)
+                            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                        {
+                            let (boundary, x) = if pos.x < strip.center().x {
+                                (slot, strip.left())
+                            } else {
+                                (slot + 1, strip.right())
+                            };
+                            insertion_line = Some((
+                                boundary,
+                                egui::pos2(x, strip.top()),
+                                egui::pos2(x, strip.bottom()),
+                            ));
+                        }
+                    });
+                }
+                // Fill only the remaining viewport; adding an offscreen blank
+                // track's worth of space would force an unnecessary scrollbar.
+                let free_width = (viewport_right - ui.next_widget_position().x - 1.0).max(0.0);
+                let (space, response) =
+                    ui.allocate_exact_size(egui::vec2(free_width, height), egui::Sense::hover());
+                if slots.is_empty() {
+                    ui.painter().text(
+                        space.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Right-click to add a channel",
+                        egui::FontId::proportional(13.0),
+                        ui.visuals().weak_text_color(),
                     );
-                    if ui.input(|i| i.pointer.any_released()) {
-                        action = Some(StripAction::Insert(payload.0, boundary));
-                        egui::DragAndDrop::take_payload::<ChannelDrag>(ui.ctx());
-                    }
+                }
+                let open_menu =
+                    ui.rect_contains_pointer(space) && ui.input(|i| i.pointer.secondary_clicked());
+                crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response))
+                    .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                    .show(|ui| {
+                        if let Some(menu_action) = channel_menu(
+                            ui,
+                            None,
+                            slots.len(),
+                            self.can_paste(),
+                            self.bank.channels.len() < MAX_SIGNALS,
+                            self.deleted.is_some() || self.deleted_audio.is_some(),
+                        ) {
+                            action = Some(menu_action);
+                        }
+                    });
+                if ui.rect_contains_pointer(space) {
+                    insertion_line = Some((slots.len(), space.left_top(), space.left_bottom()));
                 }
             });
+            // Resolve after every header has registered its payload, so moving
+            // left shows the guide immediately too. Paint above neighboring tracks.
+            if let Some((boundary, top, bottom)) = insertion_line
+                && let Some(payload) = egui::DragAndDrop::payload::<ChannelDrag>(ui.ctx())
+            {
+                ui.painter().line_segment(
+                    [top, bottom],
+                    egui::Stroke::new(1.5, ui.visuals().text_color()),
+                );
+                if ui.input(|i| i.pointer.any_released()) {
+                    action = Some(StripAction::Insert(payload.0, boundary));
+                    egui::DragAndDrop::take_payload::<ChannelDrag>(ui.ctx());
+                }
+            }
+        });
         debug_assert!(mixer_output.content_size.y <= mixer_output.inner_rect.height() + 1.0);
         debug_assert!(
             slots.len() as f32 * 156.0 > mixer_output.inner_rect.width()
                 || mixer_output.content_size.x <= mixer_output.inner_rect.width()
         );
+        let (selected, settings) = master::strip(
+            ui,
+            master,
+            frame,
+            self.selected == Some(MASTER_ID),
+            theme.accent,
+        );
+        if selected {
+            self.act(StripAction::Select(MASTER_ID));
+        }
+        self.master_settings_requested |= settings;
         // egui's scissor is rectangular. Mask the track and scrollbar corners after
         // drawing, then paint the shared border above them for a continuous edge.
-        workspace_ui::rounded_content_corners(ui, content, 6.0, ui.visuals().extreme_bg_color);
+        workspace_ui::rounded_content_corners(ui, content, 6.0, theme.navigation);
         ui.painter().rect_stroke(
             mixer,
             7.0,
@@ -408,7 +505,7 @@ impl Panel {
         if let Some(action) = action {
             self.act(action);
         }
-        self.rename_dialog(ui.ctx());
+        self.bank.sync_audio_channels();
         if inspector_open {
             self.show_inspector(ui, inspector, frame, theme);
         }
@@ -422,6 +519,18 @@ impl Panel {
         theme: &AppTheme,
     ) {
         self.close_inspector = false;
+        if self.selected == Some(MASTER_ID) {
+            let (close, settings) = master::inspector(ui, inspector, frame, theme);
+            self.close_inspector = close;
+            self.master_settings_requested |= settings;
+            return;
+        }
+        if let Some(id) = self.selected
+            && self.has_insert_channel(id)
+        {
+            self.chain_inspector(ui, inspector, theme, id);
+            return;
+        }
         let mut editor = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("signal-inspector")
@@ -430,7 +539,7 @@ impl Panel {
         );
         editor.set_clip_rect(inspector);
         // Restore the app skin before applying the common compact inspector.
-        workspace_ui::sidebar_style(&mut editor, theme);
+        workspace_ui::inspector_style(&mut editor, theme);
         let definition = self
             .selected
             .and_then(|id| self.bank.channels.iter().find(|d| d.id == id))
@@ -483,102 +592,170 @@ impl Panel {
             "Close the signal inspector",
         )
         .clicked();
-        let mut section = self
-            .selected
-            .and_then(|id| self.sections.get(&id))
-            .copied()
-            .unwrap_or_default();
-        let lfo = definition.as_ref().is_some_and(|d| d.input == Input::Lfo);
-        let midi = definition.as_ref().is_some_and(|d| d.input == Input::Midi);
-        if midi && matches!(section, SignalSection::Detection | SignalSection::Response) {
-            section = SignalSection::Source;
-        }
-        if lfo && section == SignalSection::Response {
-            section = SignalSection::Detection;
-        }
-        let bounds = editor.available_rect_before_wrap();
-        let content = workspace_ui::inspector_rail(
-            &mut editor,
-            bounds,
-            theme,
-            ("signal-tabs", self.selected),
-            |rail| {
-                for tab in SignalSection::ALL {
-                    if midi && matches!(tab, SignalSection::Detection | SignalSection::Response) {
-                        continue;
-                    }
-                    if tab == SignalSection::Response && lfo {
-                        continue;
-                    }
-                    if icons::sized_button(
-                        rail,
-                        tab.icon(lfo),
-                        section == tab,
-                        28.0,
-                        tab.title(lfo),
-                    )
-                    .help_text(tab.title(lfo))
-                    .clicked()
-                    {
-                        section = tab;
-                    }
-                }
-            },
-        );
-        if let Some(id) = self.selected {
-            self.sections.insert(id, section);
-        }
-        let mut properties = editor.new_child(
-            egui::UiBuilder::new()
-                .id_salt("signal-properties")
-                .max_rect(content),
-        );
-        properties.set_clip_rect(content.intersect(editor.clip_rect()));
-        properties.data_mut(|d| {
-            d.insert_temp(egui::Id::new("inspector-bounds"), content);
-            d.insert_temp(egui::Id::new("property-row-index"), 0_usize);
+        editor.data_mut(|d| {
             d.insert_temp(
                 egui::Id::new("parameter-context"),
                 format!("Signal · {title}"),
             );
         });
-        egui::ScrollArea::vertical()
-            .id_salt(("signal-detail-scroll", self.selected, section))
-            .auto_shrink([false, false])
-            .show(&mut properties, |ui| {
-                inspector_section(ui, section.title(lfo), |ui| {
-                    if let Some(id) = self.selected {
-                        ui.push_id(id, |ui| self.configure(ui, frame, id, section));
-                    } else {
-                        ui.small("Select a signal channel to configure it.");
+        workspace_ui::inspector_scroll(
+            &mut editor,
+            ("signal-detail-scroll", self.selected),
+            |ui| {
+                if let Some(id) = self.selected {
+                    for section in SignalSection::ALL {
+                        // Re-read the input after Source: changing it reveals the
+                        // appropriate controls during this same frame.
+                        let input = self
+                            .bank
+                            .channels
+                            .iter()
+                            .find(|d| d.id == id)
+                            .map(|d| d.input);
+                        if (input == Some(Input::Midi)
+                            && matches!(
+                                section,
+                                SignalSection::Detection | SignalSection::Response
+                            ))
+                            || (input == Some(Input::Lfo) && section == SignalSection::Response)
+                        {
+                            continue;
+                        }
+                        ui.push_id((id, section), |ui| self.configure(ui, frame, id, section));
                     }
-                });
-                egui::Frame::new()
-                    .inner_margin(8)
-                    .show(ui, |ui| self.editor_actions(ui));
-            });
-        properties.data_mut(|d| {
-            d.remove::<Rect>(egui::Id::new("inspector-bounds"));
+                    crate::modules::inspector_rule(ui);
+                    self.editor_actions(ui);
+                } else {
+                    ui.weak("Select a signal channel to configure it.");
+                }
+            },
+        );
+        editor.data_mut(|d| {
             d.remove::<String>(egui::Id::new("parameter-context"));
         });
     }
+
+    /// Follow mixer order, including the fixed input at the right-hand end.
+    pub(crate) fn select_relative(&mut self, forward: bool) {
+        let order: Vec<_> = self
+            .bank
+            .slots
+            .iter()
+            .flatten()
+            .copied()
+            .chain(std::iter::once(MASTER_ID))
+            .collect();
+        let Some(index) = self
+            .selected
+            .and_then(|id| order.iter().position(|value| *value == id))
+        else {
+            return;
+        };
+        let next = if forward {
+            (index + 1).min(order.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
+        self.act(StripAction::Select(order[next]));
+        self.reveal_selected = true;
+    }
+
+    pub(crate) fn delete_selection(&mut self) {
+        let Some(id) = self.selected else {
+            return;
+        };
+        if id == MASTER_ID {
+            return;
+        }
+        if let Some((channel, insert)) = self.selected_insert.filter(|(channel, _)| *channel == id)
+        {
+            // An expired insert selection must never fall through to deleting its channel.
+            self.act(StripAction::RemoveEffect(channel, insert));
+        } else {
+            self.act(StripAction::Delete(id));
+        }
+    }
+
     fn act(&mut self, action: StripAction) {
         match action {
+            StripAction::InspectEffect(id, insert) => {
+                self.selected = Some(id);
+                self.selected_insert = Some((id, insert));
+                self.inspect_requested = true;
+            }
+            StripAction::AddEffect(id, index, effect) => {
+                if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id)
+                    && let Some(chain) = &mut d.inserts
+                    && let Some(insert) = chain.add(d.input, index, effect)
+                {
+                    self.selected = Some(id);
+                    self.selected_insert = Some((id, insert));
+                    self.inspect_requested = true;
+                }
+            }
+            StripAction::MoveEffect(id, insert, boundary) => {
+                if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id)
+                    && let Some(chain) = &mut d.inserts
+                {
+                    chain.move_to(d.input, insert, boundary);
+                }
+            }
+            StripAction::RemoveEffect(id, insert) => {
+                if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id)
+                    && let Some(chain) = &mut d.inserts
+                {
+                    chain.remove(insert);
+                }
+                self.selected_insert = None;
+            }
+            StripAction::BypassEffect(id, insert) => {
+                if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id)
+                    && let Some(chain) = &mut d.inserts
+                    && let Some(stage) = chain.stages.iter_mut().find(|s| s.id == insert)
+                {
+                    stage.enabled = !stage.enabled;
+                }
+            }
             StripAction::Processor(id) => {
+                if self.has_insert_channel(id) {
+                    self.selected = Some(id);
+                    self.selected_insert = None;
+                    self.inspect_requested = true;
+                    return;
+                }
                 self.processor = Some(id);
                 self.processor_section = SignalSection::Output;
             }
             StripAction::Select(id) => {
+                self.selected_insert = None;
                 self.selected = Some(id);
                 self.inspect_requested = true;
             }
             StripAction::Delete(id) => {
+                if id == MASTER_ID {
+                    return;
+                }
+                if self
+                    .selected_insert
+                    .is_some_and(|(channel, _)| channel == id)
+                {
+                    self.selected_insert = None;
+                }
                 if self.rename.as_ref().is_some_and(|(v, _, _)| *v == id) {
                     self.rename = None;
                 }
-                self.deleted = self.bank.remove_channel(id);
+                if self.bank.channels.iter().any(|d| d.id == id) {
+                    self.deleted = self.bank.remove_channel(id);
+                    self.deleted_audio = None;
+                } else if self.bank.audio_inputs.iter().any(|b| b.id == id) {
+                    self.deleted_audio = self.bank.remove_audio_input(id);
+                    self.deleted = None;
+                } else {
+                    self.deleted = self.bank.remove_channel(id);
+                    self.deleted_audio = None;
+                }
                 if self.selected == Some(id) {
-                    self.selected = self.bank.channels.first().map(|d| d.id);
+                    self.selected = self.bank.slots.first().copied().flatten();
                 }
             }
             StripAction::Insert(id, slot) => self.bank.insert_channel(id, slot),
@@ -594,7 +771,11 @@ impl Panel {
                 }
             }
             StripAction::Duplicate(id, boundary) => {
-                if let Some(copy) = self.bank.duplicate(id) {
+                if let Some(copy) = self
+                    .bank
+                    .duplicate(id)
+                    .or_else(|| self.bank.duplicate_audio_input(id))
+                {
                     self.bank.sync_slots();
                     self.bank
                         .insert_channel(copy, boundary.min(self.bank.slots.len()));
@@ -633,17 +814,54 @@ impl Panel {
                 }
             }
             StripAction::Rename(id) => {
-                if let Some(d) = self.bank.channels.iter().find(|d| d.id == id) {
-                    self.rename = Some((id, d.name.clone(), true));
+                if let Some(name) = self
+                    .bank
+                    .channels
+                    .iter()
+                    .find(|d| d.id == id)
+                    .map(|d| d.name.clone())
+                    .or_else(|| {
+                        self.bank
+                            .audio_inputs
+                            .iter()
+                            .find(|b| b.id == id)
+                            .map(|b| b.name.clone())
+                    })
+                {
+                    self.rename = Some((id, name, true));
+                    self.selected = Some(id);
+                    self.selected_insert = None;
+                    self.inspect_requested = true;
                 }
             }
             StripAction::Color(id, color) => {
                 if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id) {
                     d.color = Some(color);
                 }
+                if let Some(b) = self.bank.audio_inputs.iter_mut().find(|b| b.id == id) {
+                    b.color = Some(color);
+                }
+            }
+            StripAction::AddAudioAt(boundary) => {
+                if let Some(id) = self.bank.add_source(Input::System) {
+                    self.bank.sync_slots();
+                    self.bank
+                        .insert_channel(id, boundary.min(self.bank.slots.len()));
+                    self.selected = Some(id);
+                    self.inspect_requested = true;
+                }
             }
             StripAction::AddAt(method, boundary) => {
-                if let Some(id) = self.bank.add(method) {
+                let id = if matches!(method, Method::Lfo | Method::Midi) {
+                    self.bank.add_source(if method == Method::Lfo {
+                        Input::Lfo
+                    } else {
+                        Input::Midi
+                    })
+                } else {
+                    self.bank.add(method)
+                };
+                if let Some(id) = id {
                     self.bank.sync_slots();
                     self.bank
                         .insert_channel(id, boundary.min(self.bank.slots.len()));
@@ -651,6 +869,18 @@ impl Panel {
                 }
             }
             StripAction::Undo => {
+                if let Some((bus, slot)) = self.deleted_audio.take() {
+                    if self.bank.audio_inputs.len() < audio::MAX_INPUTS {
+                        let id = bus.id;
+                        self.bank.audio_inputs.push(bus);
+                        self.bank.sync_slots();
+                        self.bank
+                            .insert_channel(id, slot.min(self.bank.slots.len()));
+                        self.selected = Some(id);
+                    } else {
+                        self.deleted_audio = Some((bus, slot));
+                    }
+                }
                 if let Some((d, slot)) = self.deleted.take() {
                     if self.bank.channels.len() < MAX_SIGNALS {
                         self.selected = Some(d.id);
@@ -666,45 +896,43 @@ impl Panel {
             }
         }
     }
-    fn rename_dialog(&mut self, ctx: &egui::Context) {
-        let Some((id, name, focus)) = &mut self.rename else {
+    fn rename_field(&mut self, ui: &mut egui::Ui, rect: Rect, target: u64) {
+        if !self.rename.as_ref().is_some_and(|(id, _, _)| *id == target) {
+            return;
+        }
+        let color = self
+            .bank
+            .channels
+            .iter()
+            .find(|d| d.id == target)
+            .map(channel_color)
+            .or_else(|| {
+                self.bank
+                    .audio_inputs
+                    .iter()
+                    .find(|bus| bus.id == target)
+                    .map(|bus| {
+                        let [r, g, b] = bus.color_rgb();
+                        egui::Color32::from_rgb(r, g, b)
+                    })
+            })
+            .unwrap_or(ui.visuals().panel_fill);
+        let Some((id, name, focus)) = self.rename.as_mut().filter(|(id, _, _)| *id == target)
+        else {
             return;
         };
-        let mut open = true;
-        let mut apply = false;
-        let mut cancel = false;
-        egui::Window::new("Rename channel")
-            .id(egui::Id::new("rename-signal-channel"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                let field = ui.add(
-                    egui::TextEdit::singleline(name)
-                        .char_limit(80)
-                        .desired_width(280.0),
-                );
-                if *focus {
-                    field.request_focus();
-                    *focus = false;
-                }
-                let valid = crate::workspace::valid_name(name);
-                if !valid {
-                    ui.small("Enter a name of 1–80 characters, without control characters.");
-                }
-                ui.horizontal(|ui| {
-                    apply = ui.add_enabled(valid, egui::Button::new("Rename")).clicked();
-                    cancel = ui.button("Cancel").clicked();
-                });
-                apply |= valid && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-            });
-        if apply && let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == *id) {
-            d.name = name.trim().into();
+        let Some(commit) = workspace_ui::inline_strip_name(ui, rect, name, focus, color) else {
+            return;
+        };
+        if commit {
+            if let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == *id) {
+                d.name = name.trim().into();
+            }
+            if let Some(b) = self.bank.audio_inputs.iter_mut().find(|b| b.id == *id) {
+                b.name = name.trim().into();
+            }
         }
-        if apply || cancel || !open {
-            self.rename = None;
-        }
+        self.rename = None;
     }
     fn editor_actions(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
@@ -717,7 +945,9 @@ impl Panel {
                     action = Some(StripAction::Delete(id));
                 }
             }
-            if self.deleted.is_some() && ui.small_button("Undo delete").clicked() {
+            if (self.deleted.is_some() || self.deleted_audio.is_some())
+                && ui.small_button("Undo delete").clicked()
+            {
                 action = Some(StripAction::Undo);
             }
         });
@@ -738,6 +968,11 @@ impl Panel {
         let sample = self.snapshot.values.get(&id).cloned().unwrap_or_default();
         match section {
             SignalSection::Source => settings_group(ui, "Channel", |ui| {
+                if d.input == Input::System {
+                    property_row(ui, "Audio feed", |ui| {
+                        audio::connection_picker(ui, &mut d.audio_input, &self.bank.audio_inputs);
+                    });
+                }
                 property_row(ui, "Name", |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut d.name)
@@ -746,7 +981,7 @@ impl Panel {
                     );
                 });
                 property_row(ui, "Input", |ui| {
-                    egui::ComboBox::from_id_salt("signal-input")
+                    crate::dropdown::ComboBox::from_id_salt("signal-input")
                         .width(ui.available_width())
                         .truncate()
                         .selected_text(d.input.label())
@@ -907,13 +1142,6 @@ enum SignalSection {
     Routing,
 }
 impl SignalSection {
-    const ALL: [Self; 5] = [
-        Self::Source,
-        Self::Detection,
-        Self::Response,
-        Self::Output,
-        Self::Routing,
-    ];
     fn title(self, lfo: bool) -> &'static str {
         match self {
             Self::Source => "Source",
@@ -924,16 +1152,14 @@ impl SignalSection {
             Self::Routing => "Mappings",
         }
     }
-    fn icon(self, lfo: bool) -> Icon {
-        match self {
-            Self::Source => Icon::AudioMappings,
-            Self::Detection if lfo => Icon::Oscilloscope,
-            Self::Detection => Icon::Bars,
-            Self::Response => Icon::Waveform,
-            Self::Output => Icon::Settings,
-            Self::Routing => Icon::Inspector,
-        }
-    }
+
+    const ALL: [Self; 5] = [
+        Self::Source,
+        Self::Detection,
+        Self::Response,
+        Self::Output,
+        Self::Routing,
+    ];
 }
 
 fn normalization_editor(
@@ -1124,7 +1350,7 @@ fn normalization_editor(
 
 #[derive(Clone, Copy)]
 struct ChannelDrag(u64);
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum StripAction {
     Select(u64),
     Processor(u64),
@@ -1138,6 +1364,12 @@ enum StripAction {
     Rename(u64),
     Color(u64, [u8; 3]),
     AddAt(Method, usize),
+    AddAudioAt(usize),
+    InspectEffect(u64, u64),
+    AddEffect(u64, usize, crate::signals::inserts::Effect),
+    MoveEffect(u64, u64, usize),
+    RemoveEffect(u64, u64),
+    BypassEffect(u64, u64),
 }
 pub(crate) fn channel_color(d: &Definition) -> egui::Color32 {
     let [r, g, b] = d.color_rgb();
@@ -1237,7 +1469,7 @@ fn channel_menu(
     can_create: bool,
     can_undo: bool,
 ) -> Option<StripAction> {
-    ui.set_min_width(328.0);
+    ui.set_min_width(190.0);
     let mut action = None;
     if let Some(d) = d {
         for (label, value, enabled) in [
@@ -1249,7 +1481,7 @@ fn channel_menu(
                 StripAction::Duplicate(d.id, slot + 1),
                 can_create,
             ),
-            ("Delete", StripAction::Delete(d.id), true),
+            ("Delete channel", StripAction::Delete(d.id), true),
         ] {
             if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                 action = Some(value);
@@ -1257,7 +1489,14 @@ fn channel_menu(
             }
         }
         ui.separator();
-        if ui.button("Open signal processor…").clicked() {
+        if ui
+            .button(if d.inserts.is_some() {
+                "Inspect channel & inserts"
+            } else {
+                "Open signal processor…"
+            })
+            .clicked()
+        {
             action = Some(StripAction::Processor(d.id));
             ui.close();
         }
@@ -1280,8 +1519,19 @@ fn channel_menu(
                 "Add channel"
             },
             |ui| {
-                for method in Method::ALL {
-                    if ui.button(method.label()).clicked() {
+                if ui.button("Audio").clicked() {
+                    action = Some(StripAction::AddAudioAt(slot + usize::from(d.is_some())));
+                    ui.close();
+                }
+                for method in [Method::Lfo, Method::Midi] {
+                    if ui
+                        .button(if method == Method::Midi {
+                            "MIDI"
+                        } else {
+                            "LFO"
+                        })
+                        .clicked()
+                    {
                         action = Some(StripAction::AddAt(method, slot + usize::from(d.is_some())));
                         ui.close();
                     }
@@ -1386,14 +1636,15 @@ fn channel_strip(
         format!("{} {}", slot + 1, d.name),
         dark,
     );
-    let response = ui
-        .interact(
-            title,
-            ui.id().with("channel-title"),
-            egui::Sense::click_and_drag(),
-        )
-        .help_text("Select channel · drag to reorder");
-    if response.clicked() {
+    let response = workspace_ui::drag_cursor(ui.interact(
+        title,
+        ui.id().with("channel-title"),
+        egui::Sense::click_and_drag(),
+    ))
+    .help_text("Select channel · double-click to rename · drag to reorder");
+    if response.double_clicked() {
+        action = Some(StripAction::Rename(d.id));
+    } else if response.clicked() {
         action = Some(StripAction::Select(d.id));
     }
     if response.drag_started() {
@@ -1423,7 +1674,7 @@ fn channel_strip(
     controls.spacing_mut().item_spacing.y = 3.0;
     controls.spacing_mut().interact_size.y = 21.0;
     controls.small("Source");
-    egui::ComboBox::from_id_salt("strip-input")
+    crate::dropdown::ComboBox::from_id_salt("strip-input")
         .width(142.0)
         .selected_text(d.input.label())
         .show_ui(&mut controls, |ui| input_options(ui, d))
@@ -1434,7 +1685,7 @@ fn channel_strip(
         crate::midi::ui::message_picker(&mut controls, &mut d.midi.message);
     } else {
         controls.small("Detector");
-        egui::ComboBox::from_id_salt("strip-method")
+        crate::dropdown::ComboBox::from_id_salt("strip-method")
             .width(142.0)
             .selected_text(d.method.label())
             .show_ui(&mut controls, |ui| {
@@ -1516,6 +1767,19 @@ fn channel_strip(
                 .add(egui::Shape::line(points, egui::Stroke::new(1.7, color)));
         }
     }
+    channel_footer(ui, rect, d, sample, color, dark);
+    action
+}
+
+fn channel_footer(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    d: &mut Definition,
+    sample: &Sample,
+    color: egui::Color32,
+    dark: egui::Color32,
+) {
+    let bottom = rect.bottom() - 144.0;
     ui.painter().hline(
         rect.x_range(),
         bottom,
@@ -1535,7 +1799,7 @@ fn channel_strip(
     influence_knob(ui, knob, &mut d.influence, color);
     let value_rect = Rect::from_min_size(
         egui::pos2(rect.left() + 12.0, bottom + 88.0),
-        egui::vec2(56.0, 22.0),
+        egui::vec2(76.0, 22.0),
     );
     let mut value_ui = ui.new_child(
         egui::UiBuilder::new()
@@ -1604,62 +1868,82 @@ fn channel_strip(
             ui.visuals().weak_text_color(),
         );
     }
-    let mut footer = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(Rect::from_min_max(
-                egui::pos2(rect.left() + 8.0, rect.bottom() - 28.0),
-                egui::pos2(rect.right() - 8.0, rect.bottom() - 3.0),
-            ))
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    channel_buttons(
+        ui,
+        value_rect,
+        color,
+        dark,
+        &mut d.enabled,
+        &mut d.solo,
+        if d.inserts.is_some() && d.input == Input::System {
+            "Mute this channel's audio and control outputs"
+        } else {
+            "Mute this channel's visual modulation output"
+        },
+        "Solo this channel's visual modulation output · multiple solos are allowed",
     );
-    footer.set_clip_rect(footer.max_rect().intersect(ui.clip_rect()));
-    footer.visuals_mut().selection.bg_fill = color;
-    footer.visuals_mut().selection.stroke.color = dark;
-    footer.spacing_mut().interact_size.y = 20.0;
-    footer.spacing_mut().button_padding = egui::vec2(4.0, 1.0);
-    footer.spacing_mut().item_spacing.x = 4.0;
-    footer.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    for (label, active, hint) in [
-        (
-            "M",
-            !d.enabled,
-            "Mute this channel's visual modulation output",
-        ),
-        (
-            "S",
-            d.solo,
-            "Solo this channel's visual modulation output · multiple solos are allowed",
-        ),
-    ] {
-        if footer
-            .add_sized(
-                [32.0, 22.0],
-                egui::Button::new(egui::RichText::new(label).strong().color(if active {
-                    dark
-                } else {
-                    footer.visuals().text_color()
-                }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn channel_buttons(
+    ui: &mut egui::Ui,
+    value_rect: Rect,
+    color: egui::Color32,
+    ink: egui::Color32,
+    enabled: &mut bool,
+    solo: &mut bool,
+    mute_hint: &str,
+    solo_hint: &str,
+) {
+    let row = Rect::from_min_size(
+        value_rect.left_bottom() + egui::vec2(0.0, 6.0),
+        egui::vec2(value_rect.width(), 22.0),
+    );
+    let mut buttons = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("channel-mute-solo")
+            .max_rect(row),
+    );
+    buttons.set_clip_rect(row.intersect(ui.clip_rect()));
+    buttons.spacing_mut().interact_size.y = row.height();
+    buttons.spacing_mut().button_padding = egui::vec2(4.0, 1.0);
+    let width = (row.width() - 4.0) * 0.5;
+    for (i, label, active, hint) in [(0, "M", !*enabled, mute_hint), (1, "S", *solo, solo_hint)] {
+        let bounds = Rect::from_min_size(
+            row.min + egui::vec2(i as f32 * (width + 4.0), 0.0),
+            egui::vec2(width, row.height()),
+        );
+        if buttons
+            .put(
+                bounds,
+                egui::Button::new(egui::RichText::new(label).size(11.0).strong().color(
+                    if active {
+                        ink
+                    } else {
+                        ui.visuals().text_color()
+                    },
+                ))
                 .fill(if active {
                     color
                 } else {
-                    footer.visuals().extreme_bg_color
+                    ui.visuals().extreme_bg_color
                 })
+                .corner_radius(3.0)
                 .stroke(egui::Stroke::new(
                     1.0,
-                    footer.visuals().text_color().gamma_multiply(0.25),
+                    ui.visuals().text_color().gamma_multiply(0.25),
                 )),
             )
             .help_text(hint)
             .clicked()
         {
-            if label == "M" {
-                d.enabled = !d.enabled;
+            if i == 0 {
+                *enabled = !*enabled;
             } else {
-                d.solo = !d.solo;
+                *solo = !*solo;
             }
         }
     }
-    action
 }
 
 fn input_options(ui: &mut egui::Ui, d: &mut Definition) {
@@ -1687,7 +1971,7 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
             ui.id().with("influence-knob"),
             egui::Sense::click_and_drag(),
         )
-        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical)
         .help_text("Visual influence · drag vertically · Shift: fine · double-click: 100%");
     let speed = if ui.input(|i| i.modifiers.shift) {
         0.002
@@ -1764,7 +2048,7 @@ pub fn mapping_editor(ui: &mut egui::Ui, route: &mut Route, _kind: Visualizer) -
             },
             |d| d.name.as_str(),
         );
-    egui::ComboBox::from_id_salt(("named-signal", route.id))
+    crate::dropdown::ComboBox::from_id_salt(("named-signal", route.id))
         .selected_text(selected)
         .width(ui.available_width())
         .show_ui(ui, |ui| {
@@ -1890,9 +2174,231 @@ pub(crate) fn lfo_editor(ui: &mut egui::Ui, lfo: &mut Lfo) {
 mod tests {
     use super::*;
     fn test_panel() -> Panel {
+        Panel {
+            bank: Bank::test_sources(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn keyboard_selection_reveals_offscreen_signals_and_handles_a_master_only_mixer() {
+        let ctx = egui::Context::default();
+        let mut panel = Panel {
+            selected: Some(MASTER_ID),
+            ..Default::default()
+        };
+        for forward in [false, true] {
+            panel.select_relative(forward);
+            assert_eq!(panel.selected, Some(MASTER_ID));
+        }
+        assert!(panel.bank.channels.is_empty());
+        for _ in 0..12 {
+            panel.bank.add_source(Input::Lfo).unwrap();
+        }
+        let last = panel.bank.slots.last().copied().flatten().unwrap();
+        let bank = panel.bank.clone();
+        let render = |panel: &mut Panel| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.show(
+                        ui,
+                        ui.available_rect_before_wrap(),
+                        &AnalysisFrame::default(),
+                        false,
+                        &AppTheme::default(),
+                    )
+                },
+            );
+            out.textures_delta.clear();
+            out
+        };
+        render(&mut panel);
+        panel.select_relative(false); // From the pinned master to the last scene signal.
+        render(&mut panel);
+        let out = render(&mut panel);
+        assert_eq!(panel.selected, Some(last));
+        let (clip, label) = out
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "12 LFO" => Some((
+                    shape.clip_rect,
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            clip.contains_rect(label),
+            "the selected signal must scroll into view: clip {clip:?}, label {label:?}"
+        );
+        assert_eq!(panel.bank, bank);
+    }
+
+    #[test]
+    fn master_cannot_be_deleted_and_does_not_consume_channel_undo() {
+        let mut panel = test_panel();
+        panel.act(StripAction::Delete(1));
+        let bank = panel.bank.clone();
+        panel.act(StripAction::Select(MASTER_ID));
+        panel.delete_selection();
+        panel.act(StripAction::Delete(MASTER_ID));
+        assert_eq!(panel.selected, Some(MASTER_ID));
+        assert_eq!(panel.bank, bank);
+        assert_eq!(panel.deleted.as_ref().unwrap().0.id, 1);
+        panel.act(StripAction::Undo);
+        assert!(panel.bank.channels.iter().any(|d| d.id == 1));
+        assert!(panel.bank.valid());
+        assert!(!panel.bank.slots.contains(&Some(MASTER_ID)));
+    }
+
+    #[test]
+    fn audio_channels_share_mixer_order_actions_and_have_spectral_previews() {
         let mut panel = Panel::default();
-        panel.replace_bank(Bank::test_sources());
-        panel
+        panel.act(StripAction::AddAt(Method::Lfo, 0));
+        let lfo = panel.selected.unwrap();
+        panel.act(StripAction::AddAudioAt(0));
+        let id = panel.selected.unwrap();
+        assert_eq!(panel.bank.slots, vec![Some(id), Some(lfo)]);
+        let frame = AnalysisFrame {
+            sequence: 1,
+            bins: vec![crate::analysis::FrequencyBin {
+                frequency_hz: 1000.0,
+                magnitude: 0.5,
+                dbfs: -6.0,
+            }]
+            .into(),
+            mix_rms: 0.2,
+            ..Default::default()
+        };
+        panel.snapshot = Arc::new(Processor::default().step(&panel.bank, &frame, 0.02, true));
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                panel.show(
+                    ui,
+                    ui.available_rect_before_wrap(),
+                    &frame,
+                    false,
+                    &AppTheme::default(),
+                );
+            },
+        );
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(
+            |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="AUDIO · SPECTRUM")
+        ));
+        assert!(
+            output.shapes.iter().any(
+                |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="System audio")
+            )
+        );
+        assert_eq!(panel.bank.channels.len(), 2);
+        assert!(panel.bank.valid());
+        panel.act(StripAction::Insert(id, 2));
+        assert_eq!(panel.bank.slots, vec![Some(lfo), Some(id)]);
+        panel.act(StripAction::Color(id, [10, 20, 30]));
+        panel.act(StripAction::Duplicate(id, 2));
+        assert_eq!(panel.bank.audio_inputs.len(), 2);
+        let copy = panel.selected.unwrap();
+        assert_eq!(
+            panel
+                .bank
+                .audio_inputs
+                .iter()
+                .find(|b| b.id == copy)
+                .unwrap()
+                .color,
+            Some([10, 20, 30])
+        );
+        panel.act(StripAction::Delete(copy));
+        panel.act(StripAction::Undo);
+        assert_eq!(panel.bank.audio_inputs.len(), 2);
+        assert!(panel.bank.valid());
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn audio_strip_controls_fit_with_horizontal_parent_and_large_app_font() {
+        let ctx = egui::Context::default();
+        let mut bank = Bank::default();
+        bank.add_audio_input();
+        let bus = &mut bank.audio_inputs[0];
+        let bounds = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(156.0, 300.0));
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.style_mut().override_font_id = Some(egui::FontId::proportional(18.0));
+                ui.horizontal(|ui| {
+                    audio_channel::strip(ui, bounds, 0, bus, None, false);
+                });
+            });
+            for label in ["Source", "System audio", "Audio signal", "M", "S"] {
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => Some(text),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {label}"));
+                assert!(
+                    bounds.contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                    "{label} overflows channel"
+                );
+            }
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn audio_preview_bar_height_tracks_frequency_energy_and_silence() {
+        let context = egui::Context::default();
+        let render = |magnitude| {
+            let frame = AnalysisFrame {
+                bins: vec![crate::analysis::FrequencyBin {
+                    frequency_hz: 1000.0,
+                    magnitude,
+                    ..Default::default()
+                }]
+                .into(),
+                ..Default::default()
+            };
+            let mut output = context.run_ui(Default::default(), |ui| {
+                audio_channel::spectrum(
+                    ui,
+                    Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(180.0, 160.0)),
+                    Some(&frame),
+                    egui::Color32::RED,
+                )
+            });
+            let height = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.fill == egui::Color32::RED => Some(r.rect.height()),
+                    _ => None,
+                })
+                .fold(0.0_f32, f32::max);
+            output.textures_delta.clear();
+            height
+        };
+        assert!(render(0.5) > 100.0);
+        assert!(render(0.01) < 100.0);
+        assert_eq!(render(0.0), 0.0);
     }
     #[test]
     fn range_learning_finishes_with_both_editors_hidden() {
@@ -1901,6 +2407,8 @@ mod tests {
         panel.learning = Some(RangeLearning::new(id, 0.0));
         for (time, raw) in [(1.0, 0.50), (5.1, 0.55)] {
             panel.snapshot = Arc::new(Snapshot {
+                inserts: Default::default(),
+                audio: Default::default(),
                 time,
                 values: [(
                     id,
@@ -1936,6 +2444,8 @@ mod tests {
     fn range_learning_uses_changing_live_raw_samples_and_ignores_disconnections() {
         let mut learning = RangeLearning::new(1, 0.0);
         let mut snapshot = Snapshot {
+            inserts: Default::default(),
+            audio: Default::default(),
             time: 1.0,
             values: [(
                 1,
@@ -2098,7 +2608,7 @@ mod tests {
                 "Copy",
                 "Paste",
                 "Duplicate",
-                "Delete",
+                "Delete channel",
                 "Rename",
                 "Insert new channel",
                 "Channel color",
@@ -2225,6 +2735,85 @@ mod tests {
     }
 
     #[test]
+    fn double_click_renames_audio_lfo_midi_and_legacy_signal_headers_inline() {
+        for input in [Input::System, Input::Lfo, Input::Midi] {
+            for legacy in [false, true] {
+                let ctx = egui::Context::default();
+                let mut panel = Panel::default();
+                let id = panel.bank.add_source(input).unwrap();
+                panel.bank.channels[0].name = "Original".into();
+                if legacy {
+                    panel.bank.channels[0].inserts = None;
+                    // Legacy control-only channels have no same-ID audio bus.
+                    panel.bank.audio_inputs.clear();
+                }
+                assert!(panel.bank.valid());
+                let render = |panel: &mut Panel, events| {
+                    let mut out = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(800.0, 500.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            panel.show(
+                                ui,
+                                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 400.0)),
+                                &AnalysisFrame::default(),
+                                false,
+                                &AppTheme::default(),
+                            )
+                        },
+                    );
+                    out.textures_delta.clear();
+                    out
+                };
+                render(&mut panel, vec![]);
+                let pos = egui::pos2(65.0, 22.0);
+                for _ in 0..2 {
+                    render(&mut panel, vec![egui::Event::PointerMoved(pos)]);
+                    for pressed in [true, false] {
+                        render(
+                            &mut panel,
+                            vec![egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            }],
+                        );
+                    }
+                }
+                let out = render(&mut panel, vec![]);
+                assert!(panel.rename.is_some(), "{input:?}, legacy {legacy}");
+                assert!(crate::shortcuts::editing_text(&ctx));
+                assert!(!out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Rename channel")));
+                render(&mut panel, vec![egui::Event::Text("New signal".into())]);
+                render(
+                    &mut panel,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+                assert_eq!(panel.bank.channels[0].name, "New signal");
+                assert_eq!(panel.selected, Some(id));
+                if let Some(bus) = panel.bank.audio_inputs.iter().find(|b| b.id == id) {
+                    assert_eq!(bus.name, "New signal");
+                }
+                assert!(panel.rename.is_none());
+                assert!(panel.bank.valid());
+            }
+        }
+    }
+
+    #[test]
     fn rename_commits_on_enter_and_cancel_leaves_the_definition_untouched() {
         let ctx = egui::Context::default();
         let mut panel = test_panel();
@@ -2245,7 +2834,13 @@ mod tests {
                         .unwrap_or_default(),
                     ..Default::default()
                 },
-                |ui| panel.rename_dialog(ui.ctx()),
+                |ui| {
+                    panel.rename_field(
+                        ui,
+                        Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(156.0, 28.0)),
+                        1,
+                    )
+                },
             );
             out.textures_delta.clear();
         };
@@ -2259,6 +2854,14 @@ mod tests {
         panel.rename.as_mut().unwrap().1 = "Discarded".into();
         render(&mut panel, Some(egui::Key::Escape));
         assert_eq!(panel.bank.channels[0].name, "Kick pulse");
+        assert!(panel.rename.is_none());
+        panel.act(StripAction::Rename(1));
+        render(&mut panel, None);
+        panel.rename.as_mut().unwrap().1 = "   ".into();
+        render(&mut panel, Some(egui::Key::Enter));
+        assert_eq!(panel.bank.channels[0].name, "Kick pulse");
+        assert!(panel.rename.is_some(), "invalid names remain editable");
+        render(&mut panel, Some(egui::Key::Escape));
         assert!(panel.rename.is_none());
     }
 
@@ -2462,7 +3065,7 @@ mod tests {
         drag(
             &mut panel,
             egui::pos2(left + 40.0, 22.0),
-            egui::pos2(left + 810.0, 90.0),
+            egui::pos2(left + 790.0, 90.0),
             left + 780.0,
         );
         assert_eq!(
@@ -2471,6 +3074,70 @@ mod tests {
         );
         for d in &original {
             assert_eq!(panel.bank.channels.iter().find(|v| v.id == d.id), Some(d));
+        }
+    }
+
+    #[test]
+    fn untabbed_inspectors_keep_source_and_processing_controls_together_and_scoped() {
+        for width in [236.0, 420.0] {
+            for input in [Input::System, Input::Lfo, Input::Midi] {
+                for legacy in [false, true] {
+                    let ctx = egui::Context::default();
+                    ctx.memory_mut(|m| m.set_everything_is_visible(true));
+                    let mut panel = Panel::default();
+                    let id = panel.bank.add_source(input).unwrap();
+                    panel.selected = Some(id);
+                    if legacy {
+                        panel.bank.channels[0].inserts = None;
+                    }
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 5000.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let before = ui.style().clone();
+                            panel.show_inspector(
+                                ui,
+                                ui.available_rect_before_wrap(),
+                                &AnalysisFrame::default(),
+                                &AppTheme::default(),
+                            );
+                            assert_eq!(ui.style(), &before);
+                            assert!(crate::modules::inspector_bounds(ui).is_none());
+                            assert!(
+                                ui.data(|d| d.get_temp::<bool>(egui::Id::new(
+                                    crate::modules::FLAT_INSPECTOR
+                                )))
+                                .is_none()
+                            );
+                        },
+                    );
+                    let labels: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            egui::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    for label in if legacy {
+                        ["Channel", "Normalization", "Used by"]
+                    } else {
+                        ["Channel", "Inserts", "Output"]
+                    } {
+                        assert!(
+                            labels.contains(&label),
+                            "{input:?}, legacy={legacy}: missing {label}"
+                        );
+                    }
+                    assert!(!labels.contains(&"Geometry") && !labels.contains(&"Appearance"));
+                    output.textures_delta.clear();
+                }
+            }
         }
     }
 
@@ -2485,17 +3152,11 @@ mod tests {
                 .iter()
                 .find(|d| d.method == method)
                 .map(|d| d.id);
-            for (section, size) in SignalSection::ALL.into_iter().flat_map(|section| {
-                [
-                    egui::vec2(512.0, 300.0),
-                    egui::vec2(1024.0, 650.0),
-                    egui::vec2(1800.0, 1000.0),
-                ]
-                .map(|size| (section, size))
-            }) {
-                if let Some(id) = panel.selected {
-                    panel.sections.insert(id, section);
-                }
+            for size in [
+                egui::vec2(512.0, 300.0),
+                egui::vec2(1024.0, 650.0),
+                egui::vec2(1800.0, 1000.0),
+            ] {
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),

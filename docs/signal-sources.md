@@ -21,23 +21,31 @@ flowchart LR
 
 ## First use
 
-1. Choose system playback in Settings → Audio.
-2. Open **Signals** in the bottom toolbar. Right-click the blank workspace to
-   manually add Overall intensity, Band energy, Bass hits, Spectral change,
-   Stereo balance, or an LFO. New projects start with no sources.
+1. Choose system playback or your default input in Settings → Audio.
+2. Open **Signals** using the levels icon in the top toolbar. The default input
+   stays pinned at the far right, with a live spectrum and stereo meters. It
+   cannot be deleted and is not saved as a removable scene channel. Its
+   **Audio settings…** button opens capture settings. Right-click the blank
+   workspace to add **Audio**, **LFO**, or **MIDI** channels; add audio detectors
+   and control processors using **+ Insert** on a channel.
 3. Click a channel name. Its right inspector edits the frequency range,
    sensitivity, and response. Input and output meters help distinguish capture
    from shaping. The input meter shows measured activity before envelopes, so
    centered stereo can show input while its balance output remains zero. Bass hits has a hit indicator, threshold, and retrigger/hold.
-4. Click a visual pane (or its Inspect button), open Flux, Veroni, or Strata's inspector, and select
+4. Right-click a visual pane and choose **Inspect**, open Flux, Veroni, or Strata's inspector, and select
    Audio mappings. Choose a named signal and a destination. Depth, inversion,
    and range belong to this mapping only.
 5. **Edit signal** opens its shared configuration. To make an independent source,
    duplicate it in Signals, then assign the copy in Visualize.
 
-Signals uses vivid channel colors, rounded cards and recessed controls matching
-the Visualize workspace. Bright meter fills and activity traces sit against darker
-plots, with clear text and field borders.
+Every visualizer’s **Driven by** dropdown separates an **Always available**
+default input from **Scene signals**, even when no scene channels exist. The
+master strip follows the input selected in Settings. Inspecting it opens its
+capture information; custom channels provide independent inserts and processing.
+
+Signals shares the inspector panel background and compact themed menus.
+Channel colors remain in headers, meters, and activity traces; selecting a
+channel adds a subtle border without changing its background.
 
 Channel knobs adjust **visual influence** (0–200%, with 100% as unity). Drag
 vertically, hold Shift for fine adjustment, double-click to reset, or type a percentage.
@@ -60,7 +68,12 @@ Colors are saved with channels and follow their meters, traces, and macro source
 rings through reorder, duplication, and preset import. Dark header colors use light
 text for readability. Drag a header to reorder; a thin line marks the insertion
 boundary, including at the end of the track list. **Undo delete / cut** restores the
-source identity, settings, and order. Track order is saved in projects; vacant
+source identity, settings, and order. Double-click a colored channel title to
+rename it inline; typing replaces the selected name. Enter commits, Escape
+cancels, and clicking away commits a valid name. Delete or Backspace removes the
+selected channel (or selected insert), while either key edits text during a
+rename. The permanent default input cannot be renamed or deleted.
+Track order is saved in projects; vacant
 slots in older projects are removed when displayed.
 The mixer scrolls horizontally and vertically when space is limited. Deletion
 clears that channel's mappings across all retained visualizer configurations.
@@ -357,3 +370,31 @@ navbar inspector toggle both retract it.
 - **Mappings:** visualizer parameters consuming the selected channel.
 
 Each channel remembers its selected tab for the current app session.
+
+The top navigation has a knob icon for Macros and a levels icon for Signals,
+beside the inspector toggle. These buttons open the existing bottom docks;
+keyboard shortcuts and saved open states are unchanged. The footer keeps Info
+View on the left, followed by measured FPS and capture sample rate. Clicking FPS
+opens the local 30/60/90/120 target selector, shared with Settings. The labeled
+System audio meters on the right show the master capture before Signals inserts
+or channel gain (Audio input/Demo audio is labeled accordingly when selected).
+The display target never changes audio analysis or recording frame rate.
+
+### Inline macro titles
+
+Double-click a macro’s colored title to edit its name in place. Enter confirms,
+Escape cancels, and clicking away commits a valid name. Click a macro and press
+Delete or Backspace to clear that slot, including its parameter assignment and
+modulation link. The visualizer’s manual parameter value stays unchanged.
+Scene Undo restores the deleted macro; the macro context menu also offers
+**Undo last edit**. Delete and Backspace edit text while a name or other text
+field has focus.
+
+### Keyboard channel navigation
+
+After selecting a macro or signal, Left/Up selects the previous channel and
+Right/Down selects the next in displayed order. Selection stops at the ends;
+the fixed default input is the final signal. The inspector follows selection,
+and horizontal scrolling reveals offscreen channels. Navigation does not change
+values or create an undo entry. Focused controls, text editing, open menus, and
+modal dialogs retain their normal keyboard behavior.

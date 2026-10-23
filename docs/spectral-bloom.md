@@ -1,7 +1,8 @@
 # Spectral Bloom
 
 Add **Spectral Bloom** from **+** or **Create → Component**. It starts with
-three cascading cyan, rose and ivory spectrum curtains. The reference image's
+three cascading spectrum curtains using the default visualizer palette in
+Settings. Existing presets retain their saved colors. The reference image's
 code/text is deliberately absent; this component visualizes the incoming audio.
 
 ## Shape
@@ -73,3 +74,12 @@ existing Particle Waves, Orbital and Cymatics GPU tests also pass with the share
 renderer changes. GPU timings exclude audio analysis, UI, presentation and
 recording/encoding; complex scenes and large outputs can still exceed a frame's
 budget.
+
+## Gradient palettes
+
+**Appearance → Palette** uses the shared factory/saved gradient browser and
+**Edit gradient & swatches** editor, including 2–8 stops and cyclic gradients.
+Individual layer overrides have the same picker. Color driver, spread, offset,
+saturation and Gradient blend still control the mapping. Existing presets keep
+their original three-color distribution until a palette is selected. Color edits
+preserve particle motion and the incoming spectrum history.

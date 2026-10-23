@@ -12,7 +12,16 @@ mod menu;
 pub mod scene;
 pub const INSPECT_REQUEST: &str = "macro-inspect-request";
 pub const INSPECT_SELECTION: &str = "macro-inspect-selection";
+pub(crate) const REVEAL_SELECTION: &str = "macro-reveal-selection";
 use menu::*;
+pub(crate) fn delete_scene_slot(
+    ctx: &egui::Context,
+    scope: &str,
+    slots: &mut [Slot; 12],
+    index: usize,
+) {
+    menu::delete_scene_slot(ctx, scope, slots, index);
+}
 pub(crate) fn clear_clipboard(ctx: &egui::Context) {
     menu::clear_clipboard(ctx);
 }
@@ -140,7 +149,7 @@ impl State {
         if !self.has_modulation(kind, snapshot) {
             return Vec::new();
         }
-        let document = serde_json::to_value(settings).ok().unwrap_or_default();
+        let document = settings.parameter_document().ok().unwrap_or_default();
         self.effective_document(kind, &document, snapshot)
     }
     // Apply all live values in one settings round-trip and return only the
@@ -154,7 +163,7 @@ impl State {
         if !self.has_modulation(kind, snapshot) {
             return Vec::new();
         }
-        let Ok(mut document) = serde_json::to_value(&*settings) else {
+        let Ok(mut document) = settings.parameter_document() else {
             return Vec::new();
         };
         let changes = self.effective_document(kind, &document, snapshot);
@@ -167,7 +176,7 @@ impl State {
             }
         }
         if !restore.is_empty() {
-            let Ok(updated) = serde_json::from_value(document) else {
+            let Ok(updated) = settings.updated_parameters(document) else {
                 return Vec::new();
             };
             *settings = updated;
@@ -253,7 +262,7 @@ pub fn inspector_indicators(
         .as_ref()
         .map(|s| s.lock().unwrap_or_else(|e| e.into_inner()));
     let effective = state.effective(kind, settings, panel.as_ref().map(|s| s.snapshot.as_ref()));
-    let document = serde_json::to_value(settings).ok().unwrap_or_default();
+    let document = settings.parameter_document().ok().unwrap_or_default();
     let values = state.banks[kind as usize]
         .iter()
         .enumerate()
@@ -305,7 +314,7 @@ fn field<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json:
     Some(value)
 }
 pub fn get(settings: &ModuleSettings, path: &str) -> Option<f64> {
-    field(&serde_json::to_value(settings).ok()?, path)?.as_f64()
+    field(&settings.parameter_document().ok()?, path)?.as_f64()
 }
 pub fn set(settings: &mut ModuleSettings, path: &str, value: f64) -> bool {
     set_many(settings, &[(path.to_owned(), value)])
@@ -314,7 +323,7 @@ pub fn set_many(settings: &mut ModuleSettings, changes: &[(String, f64)]) -> boo
     if changes.is_empty() {
         return false;
     }
-    let Ok(mut document) = serde_json::to_value(&*settings) else {
+    let Ok(mut document) = settings.parameter_document() else {
         return false;
     };
     let mut changed = false;
@@ -324,7 +333,7 @@ pub fn set_many(settings: &mut ModuleSettings, changes: &[(String, f64)]) -> boo
     if !changed {
         return false;
     }
-    let Ok(updated) = serde_json::from_value(document) else {
+    let Ok(updated) = settings.updated_parameters(document) else {
         return false;
     };
     *settings = updated;
@@ -411,6 +420,7 @@ fn bar_impl(
         .unwrap_or_default();
     menu_state.sync(&state.banks[kind as usize]);
     let mut action = None;
+    let reveal = ui.data_mut(|data| data.remove_temp::<usize>(egui::Id::new(REVEAL_SELECTION)));
     let shared =
         ui.data(|d| d.get_temp::<signals::ui::Shared>(egui::Id::new(signals::ui::CONTEXT_KEY)));
     let snapshot = shared
@@ -430,7 +440,7 @@ fn bar_impl(
     let document = state.banks[kind as usize]
         .iter()
         .any(|s| s.parameter.is_some())
-        .then(|| serde_json::to_value(&*settings).ok().unwrap_or_default());
+        .then(|| settings.parameter_document().ok().unwrap_or_default());
     let width = ((child.available_width() - 1.0) / 12.0).max(116.0);
     let row_bounds = Rect::from_min_max(
         child.available_rect_before_wrap().min,
@@ -442,10 +452,18 @@ fn bar_impl(
             .max_rect(row_bounds),
     );
     row.set_clip_rect(row_bounds.intersect(child.clip_rect()));
-    egui::ScrollArea::horizontal()
+    let mut scroll = egui::ScrollArea::horizontal()
         .id_salt("assignable-macro-row")
-        .auto_shrink([false, false])
-        .show(&mut row, |ui| {
+        .auto_shrink([false, false]);
+    if let Some(index) = reveal {
+        scroll = scroll.horizontal_scroll_offset(crate::workspace_ui::scroll_offset_for_strip(
+            &row,
+            "assignable-macro-row",
+            index,
+            width,
+        ));
+    }
+    scroll.show(&mut row, |ui| {
             let row_height = ui.available_height();
             let mut insertion = None;
             ui.horizontal_top(|ui| {
@@ -493,12 +511,12 @@ fn bar_impl(
                             let (header, _) = ui
                                 .allocate_exact_size(Vec2::new(width, 28.0), egui::Sense::hover());
                             let title = slot_title(slot, i);
-                            let drag = ui
+                            let drag = crate::workspace_ui::drag_cursor(ui
                                 .interact(
                                     header,
                                     ui.id().with("macro-header"),
                                     egui::Sense::click_and_drag(),
-                                )
+                                ))
                                 .help_text(
                                     "Click to inspect · drag to reorder · double-click to rename",
                                 );
@@ -530,6 +548,9 @@ fn bar_impl(
                                 header.max - Vec2::new(6.0, 0.0),
                             );
                             crate::workspace_ui::strip_title(ui, header, title, title_color);
+                            if let Some(rename) = macro_rename_field(ui, header, i, header_color, &mut menu_state) {
+                                action = Some(rename);
+                            }
                             egui::Frame::new()
                                 .inner_margin(egui::Margin::symmetric(8, 3))
                                 .show(ui, |ui| {
@@ -708,7 +729,7 @@ fn bar_impl(
                                                             d.name.as_str()
                                                         });
                                                     ui.label("Source");
-                                                    egui::ComboBox::from_id_salt("source")
+                                                    crate::dropdown::ComboBox::from_id_salt("source")
                                                         .width(260.0)
                                                         .selected_text(selected)
                                                         .show_ui(ui, |ui| {
@@ -717,7 +738,7 @@ fn bar_impl(
                                                                 None,
                                                                 "No modulation",
                                                             );
-                                                            for d in &panel.bank.channels {
+                                                            for d in panel.bank.channels.iter().filter(|d| d.has_control_output()) {
                                                                 ui.selectable_value(
                                                                     &mut signal,
                                                                     Some(d.id),
@@ -908,7 +929,6 @@ fn bar_impl(
     if let Some(action) = action {
         apply_macro_action(ui, pane, kind, state, action, &mut menu_state);
     }
-    macro_rename_dialog(ui.ctx(), kind, state, &mut menu_state);
     menu_state.remember(&state.banks[kind as usize]);
     ui.data_mut(|d| d.insert_temp(ui_key, menu_state));
     crate::workspace_ui::rounded_content_corners(
@@ -1584,5 +1604,148 @@ mod source_picker_tests {
         assert_eq!(pane.copy_settings(), manual);
         assert_ne!(audio, lfo);
         assert_eq!(shared.lock().unwrap().bank, original);
+    }
+}
+
+#[cfg(test)]
+mod inline_title_tests {
+    use super::*;
+    fn render(
+        ctx: &egui::Context,
+        state: &mut State,
+        settings: &mut ModuleSettings,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1400.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                bar(
+                    ui,
+                    Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1400.0, 320.0)),
+                    &AppTheme::default(),
+                    "inline-test",
+                    ModuleKind::Waterfall,
+                    state,
+                    settings,
+                );
+            },
+        );
+        out.textures_delta.clear();
+        out
+    }
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+    #[test]
+    fn double_click_edits_macro_in_its_header_with_replace_cancel_and_click_away() {
+        for ending in [Some(egui::Key::Enter), Some(egui::Key::Escape), None] {
+            let ctx = egui::Context::default();
+            let mut state = State::default();
+            state.banks[0][0].name = Some("Original".into());
+            state.banks[0][0].color = Some([85, 170, 230]);
+            let mut settings =
+                crate::modules::ModulePane::new(ModuleKind::Waterfall).copy_settings();
+            let original_settings = settings.clone();
+            let out = render(&ctx, &mut state, &mut settings, vec![]);
+            let pos = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == "Original" => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            for _ in 0..2 {
+                render(
+                    &ctx,
+                    &mut state,
+                    &mut settings,
+                    vec![egui::Event::PointerMoved(pos)],
+                );
+                for pressed in [true, false] {
+                    render(
+                        &ctx,
+                        &mut state,
+                        &mut settings,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+            }
+            let out = render(&ctx, &mut state, &mut settings, vec![]);
+            assert!(crate::shortcuts::editing_text(&ctx));
+            assert!(!out.shapes.iter().any(
+                |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Rename macro")
+            ));
+            // Delete edits the selected title text; it must not remove the macro.
+            render(
+                &ctx,
+                &mut state,
+                &mut settings,
+                vec![key(egui::Key::Delete)],
+            );
+            assert_eq!(state.banks[0][0].name.as_deref(), Some("Original"));
+            // Typing replaces the selected original name without a separate dialog.
+            render(
+                &ctx,
+                &mut state,
+                &mut settings,
+                vec![egui::Event::Text("  Northern lights  ".into())],
+            );
+            if let Some(keycode) = ending {
+                render(&ctx, &mut state, &mut settings, vec![key(keycode)]);
+            } else {
+                let pos = egui::pos2(1100.0, 550.0);
+                for pressed in [true, false] {
+                    render(
+                        &ctx,
+                        &mut state,
+                        &mut settings,
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                render(&ctx, &mut state, &mut settings, vec![]);
+            }
+            assert_eq!(
+                state.banks[0][0].name.as_deref(),
+                Some(if ending == Some(egui::Key::Escape) {
+                    "Original"
+                } else {
+                    "Northern lights"
+                })
+            );
+            assert_eq!(settings, original_settings);
+            // Stored edits remain normal serialized macro names.
+            let saved: State =
+                serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            assert_eq!(saved, state);
+        }
     }
 }

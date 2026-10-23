@@ -1,11 +1,15 @@
-use crate::help::HoverHelp;
+use crate::{
+    colors::{Gradient, Palette},
+    help::HoverHelp,
+    theme::AppTheme,
+};
 use egui::Ui;
 
 macro_rules! numeric {
     ($name:ident { $($field:ident: $default:expr, $min:expr, $max:expr, $section:literal, $label:literal, $help:literal;)* }) => {
         impl $name {
             pub fn numeric_controls(&mut self, ui: &mut Ui, section: &str, prefix: &str) {
-                $(if section == $section || (section == "Bloom drift" && $section == "Drift and return" && stringify!($field) != "drift_fraction") || (section == "Bloom layout" && $section == "Layout" && !matches!(stringify!($field), "radius" | "turns" | "twist")) {
+                $(if !(section == "Camera" && stringify!($field) == "orbit_speed" && super::super::visual_inspector(ui).is_some()) && (section == $section || (section == "Bloom drift" && $section == "Drift and return" && stringify!($field) != "drift_fraction") || (section == "Bloom layout" && $section == "Layout" && !matches!(stringify!($field), "radius" | "turns" | "twist"))) {
                     ui.add(crate::parameter::Parameter::new(&mut self.$field, $min..=$max, $default)
                         .key(&format!("{prefix}{}", stringify!($field))).text($label)).help_text($help);
                 })*
@@ -31,6 +35,9 @@ pub(crate) struct Layer {
     pub density: f32,
     pub speed: f32,
     pub opacity: f32,
+    // Absent in older presets: retain their original three-color blend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette: Option<Palette>,
     pub color_a: [u8; 3],
     pub color_b: [u8; 3],
     pub color_c: [u8; 3],
@@ -50,6 +57,7 @@ impl Default for Layer {
             density: 1.0,
             speed: 1.0,
             opacity: 1.0,
+            palette: None,
             color_a: [61, 119, 255],
             color_b: [136, 255, 32],
             color_c: [235, 255, 255],
@@ -72,6 +80,8 @@ numeric!(Layer {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
+    pub show_gizmo: bool,
+    pub camera_motion: super::super::camera_motion::Settings,
     pub bloom: Bloom,
     pub frequency: super::super::frequency::FrequencySettings,
     pub layers: [Layer; 8],
@@ -84,6 +94,9 @@ pub(crate) struct Settings {
     pub auto_orbit: bool,
     pub guides: bool,
     pub depth_of_field: bool,
+    // Absent in older presets: retain their original three-color blend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette: Option<Palette>,
     pub color_a: [u8; 3],
     pub color_b: [u8; 3],
     pub color_c: [u8; 3],
@@ -137,6 +150,8 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            camera_motion: super::super::camera_motion::Settings::y_up_default(),
+            show_gizmo: false,
             bloom: Bloom::default(),
             frequency: super::super::frequency::FrequencySettings {
                 floor: -72.0,
@@ -155,6 +170,7 @@ impl Default for Settings {
             auto_orbit: false,
             guides: false,
             depth_of_field: true,
+            palette: None,
             color_a: [61, 119, 255],
             color_b: [136, 255, 32],
             color_c: [235, 255, 255],
@@ -223,8 +239,8 @@ numeric!(Settings {
     softness:0.35,0.0,1.0,"Particle size","Edge softness","Round the edge of each particle from a crisp point to a soft luminous dot. Camera defocus adds further softness.";
     glow:0.45,0.0,2.0,"Light","Glow","Add a broad luminous halo around each particle. Dense layers can become brighter where halos overlap.";
     brightness:0.85,0.0,4.0,"Light","Brightness","Overall emitted light. Has no effect on the incoming audio or particle forces.";
-    color_spread:1.0,0.0,1.0,"Palette","Color spread","Portion of the three-color gradient used by particles. Lower values concentrate the first color.";
-    color_blend:0.2,0.0,1.0,"Palette","Gradient blend","Blend the three palette colors smoothly or keep distinct colored particles. Low values preserve separate blue, lime and white lights; high values create a continuous gradient.";
+    color_spread:1.0,0.0,1.0,"Palette","Color spread","Portion of the gradient used by particles. Lower values concentrate the first color.";
+    color_blend:0.2,0.0,1.0,"Palette","Gradient blend","Blend neighboring gradient stops or keep distinct colored particles. Low values emphasize separate swatches; high values create continuous color transitions.";
     color_offset:0.0,0.0,1.0,"Palette","Color offset","Shift which part of the palette is sampled by the color driver.";
     saturation:1.0,0.0,2.0,"Palette","Saturation","Zero creates monochrome particles; one uses the chosen colors; above one intensifies their saturation.";
     drift:0.3,0.0,3.0,"Drift and return","Drift strength","Audio-driven force that lets grains leave their spectral surface. Zero keeps a precisely attached spectrum. Silence stops new agitation and the return spring gathers particles back.";
@@ -287,9 +303,6 @@ impl Settings {
         f.max_hz = f.max_hz.max(f.min_hz + 1.0);
         f.ceiling = f.ceiling.max(f.floor + 1.0);
         f.frequency_smoothing = f.frequency_smoothing.min(8);
-    }
-    pub fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        self.auto_orbit.then_some(&mut self.yaw)
     }
 }
 
@@ -395,5 +408,68 @@ impl Settings {
             zoom: 1.1,
             ..Self::default()
         }
+    }
+}
+
+// This preview becomes a standard gradient only after the user edits or chooses
+// a palette. Until then the GPU retains the original nonuniform three-color blend.
+pub(super) fn resolved_palette(palette: Option<Palette>, legacy: [[u8; 3]; 3]) -> Palette {
+    palette.unwrap_or_else(|| {
+        let mut colors = [[0; 3]; 8];
+        colors[..3].copy_from_slice(&legacy);
+        Palette::Custom(Gradient {
+            colors,
+            count: 3,
+            cyclic: false,
+        })
+    })
+}
+impl Settings {
+    pub fn gpu_layers(&self, theme: &AppTheme) -> [symphos_visuals::particle_waves::Layer; 8] {
+        let color = |c: [u8; 3]| {
+            [
+                c[0] as f32 / 255.0,
+                c[1] as f32 / 255.0,
+                c[2] as f32 / 255.0,
+                1.0,
+            ]
+        };
+        std::array::from_fn(|i| {
+            let l = &self.layers[i];
+            let (palette, legacy) = if l.custom {
+                (l.palette, [l.color_a, l.color_b, l.color_c])
+            } else {
+                (self.palette, [self.color_a, self.color_b, self.color_c])
+            };
+            let gradient = resolved_palette(palette, legacy).gradient(theme);
+            symphos_visuals::particle_waves::Layer {
+                transform: [l.x, l.y, l.z, l.scale],
+                rotation: [
+                    l.rotation.to_radians(),
+                    l.tilt.to_radians(),
+                    self.color_blend,
+                    f32::from(l.enabled),
+                ],
+                style: if l.custom {
+                    [l.size, l.density, l.speed, l.opacity]
+                } else {
+                    [1.0; 4]
+                },
+                a: color(legacy[0]),
+                b: color(legacy[1]),
+                c: color(legacy[2]),
+                gradient: gradient.colors.map(color),
+                palette: [
+                    if palette.is_some() {
+                        gradient.count.clamp(2, 8) as f32
+                    } else {
+                        0.0
+                    },
+                    f32::from(gradient.cyclic),
+                    0.0,
+                    0.0,
+                ],
+            }
+        })
     }
 }

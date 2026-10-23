@@ -31,6 +31,11 @@ impl ColorMode {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct FluxSettings {
+    camera_motion: super::camera_motion::Settings,
+    show_gizmo: bool,
+    show_grid: bool,
+    pan_x: f32,
+    pan_y: f32,
     #[serde(default)]
     pub(crate) modulation: Option<ModulationSettings>,
     brightness: f32,
@@ -86,6 +91,11 @@ pub(crate) struct FluxSettings {
 impl Default for FluxSettings {
     fn default() -> Self {
         Self {
+            camera_motion: Default::default(),
+            show_gizmo: false,
+            show_grid: false,
+            pan_x: 0.0,
+            pan_y: 0.0,
             modulation: Some(ModulationSettings::for_visualizer(Visualizer::Flux)),
             brightness: 1.0,
             expansion: 1.0,
@@ -158,7 +168,7 @@ impl FluxSettings {
             size: 0.3, 3.0; size_variation: 0.0, 1.0; opacity: 0.0, 1.0; trails: 0.0, 1.0;
             glow: 0.0, 1.0; twinkle: 0.0, 1.0; core_size: 1.0, 8.0;
             saturation: 0.0, 1.0; depth_fade: 0.0, 1.0;
-            yaw: -180.0, 180.0; elevation: -85.0, 85.0; roll: -180.0, 180.0; zoom: 0.35, 3.0;
+            yaw: -180.0, 180.0; elevation: -180.0, 180.0; roll: -180.0, 180.0; zoom: 0.35, 3.0;
             perspective: 0.0, 1.0; orbit_speed: -15.0, 15.0;
         }
         let modulation = self.modulation.get_or_insert_with(|| {
@@ -241,6 +251,10 @@ impl Flux {
         self.clear();
     }
     fn reset_camera(&mut self) {
+        self.settings.auto_orbit = false;
+        self.settings.pan_x = 0.0;
+        self.settings.pan_y = 0.0;
+        self.settings.roll = 0.0;
         let d = FluxSettings::default();
         self.settings.yaw = d.yaw;
         self.settings.elevation = d.elevation;
@@ -461,9 +475,11 @@ impl Flux {
                 "Rate of continuous movement through the selected palette."
             );
             s.palette.controls(ui);
-            properties_combo("flux-color-mode", 176.0, 4).selected_text(s.color_mode.label()).show_ui(ui, |ui| {
+            super::property_row(ui, "Color by", |ui| {
+                properties_combo("flux-color-mode", ui.available_width(), 4).selected_text(s.color_mode.label()).show_ui(ui, |ui| {
                 for mode in [ColorMode::Current, ColorMode::Velocity, ColorMode::Frequency, ColorMode::Depth] { ui.selectable_value(&mut s.color_mode, mode, mode.label()); }
             }).response.help_text("Map color to current membership, speed, audio bands, or distance from the camera.");
+            });
             p!(
                 ui,
                 saturation,
@@ -478,9 +494,23 @@ impl Flux {
                 "Depth fade",
                 "Dim distant particles to emphasize the cloud's volume."
             );
-            ui.checkbox(&mut s.labels, "Show navigation hints");
         });
         settings_panel(ui, "Camera", |ui| {
+            super::settings_group(ui, "Framing", |ui| {
+                for (key, name, value) in [
+                    ("pan_x", "Pan X", &mut s.pan_x),
+                    ("pan_y", "Pan Y", &mut s.pan_y),
+                ] {
+                    ui.add(
+                        Parameter::new(value, -2.0..=2.0, 0.0)
+                            .bounds(-4.0..=4.0)
+                            .key(key)
+                            .text(name),
+                    );
+                }
+                ui.checkbox(&mut s.show_grid, "XYZ reference grid");
+            });
+
             p!(
                 ui,
                 yaw,
@@ -500,7 +530,7 @@ impl Flux {
                 roll,
                 -180.0..=180.0,
                 "Roll °",
-                "Rotate the image plane; Shift-drag also adjusts roll."
+                "Rotate the image plane; dragging near the viewport edge also adjusts roll."
             );
             p!(
                 ui,
@@ -516,16 +546,18 @@ impl Flux {
                 "Perspective",
                 "Zero is orthographic; higher values emphasize near/far size differences."
             );
-            ui.checkbox(&mut s.auto_orbit, "Auto orbit").help_text(
+            if super::visual_inspector(ui).is_none() {
+                ui.checkbox(&mut s.auto_orbit, "Auto orbit").help_text(
                 "Rotate the view slowly. Manual dragging stops auto orbit at the current angle.",
             );
-            p!(
-                ui,
-                orbit_speed,
-                -15.0..=15.0,
-                "Orbit °/s",
-                "Automatic rotation speed and direction."
-            );
+                p!(
+                    ui,
+                    orbit_speed,
+                    -15.0..=15.0,
+                    "Orbit °/s",
+                    "Automatic rotation speed and direction."
+                );
+            }
         });
     }
 
@@ -763,40 +795,48 @@ impl Flux {
             ui.id().with("flux-camera"),
             egui::Sense::click_and_drag(),
         );
-        if response.dragged() {
-            let (delta, shift) = ui.input(|i| (i.pointer.delta(), i.modifiers.shift));
-            self.settings.yaw = wrap(self.settings.yaw + self.orbit as f32);
-            self.orbit = 0.0;
-            if shift {
-                self.settings.roll = wrap(self.settings.roll + delta.x * 0.4);
-            } else {
-                self.settings.yaw = wrap(self.settings.yaw + delta.x * 0.35);
-                self.settings.elevation =
-                    (self.settings.elevation + delta.y * 0.3).clamp(-85.0, 85.0);
+        if response.dragged() && !super::camera::over_navigator(ui) {
+            let delta = ui.input(|i| i.pointer.delta());
+            if response.dragged_by(egui::PointerButton::Secondary)
+                || response.dragged_by(egui::PointerButton::Middle)
+                || ui.input(|i| i.modifiers.shift)
+            {
+                self.settings.pan_x += delta.x / rect.width();
+                self.settings.pan_y += delta.y / rect.height();
+            } else if let Some(p) = response.interact_pointer_pos() {
+                let mut yaw = self.settings.yaw.to_radians();
+                let mut elevation = self.settings.elevation.to_radians();
+                let mut roll = self.settings.roll.to_radians();
+                super::trackball::drag(
+                    &mut yaw,
+                    &mut elevation,
+                    &mut roll,
+                    p - delta,
+                    p,
+                    rect.center(),
+                    rect.width().min(rect.height()) * 0.4,
+                );
+                self.settings.yaw = yaw.to_degrees();
+                self.settings.elevation = elevation.to_degrees();
+                self.settings.roll = roll.to_degrees();
             }
             self.settings.auto_orbit = false;
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !super::camera::over_navigator(ui) {
             self.reset_camera();
         }
-        if response.hovered() {
+        if response.hovered() && !super::camera::over_navigator(ui) {
             self.settings.zoom = (self.settings.zoom
                 * (ui.input(|i| i.smooth_scroll_delta.y) * 0.002).exp())
             .clamp(0.35, 3.0);
         }
         let mut camera = Camera::new(rect, &self.settings, self.orbit as f32);
         camera.depth = self.performance.value(&self.settings, Macro::Depth);
+        if self.settings.show_grid {
+            super::camera::grid(ui, rect, |p| camera.project(p).0);
+        }
         let mesh = self.mesh(&camera, theme);
         ui.painter_at(rect).add(egui::Shape::mesh(mesh));
-        if self.settings.labels && rect.width() > 380.0 && rect.height() > 160.0 {
-            ui.painter_at(rect).text(
-                rect.left_bottom() + Vec2::new(10.0, -8.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Drag: orbit · Shift-drag: roll · Scroll: zoom · Double-click: reset",
-                egui::FontId::monospace(9.0),
-                theme.muted,
-            );
-        }
     }
     fn mesh(&self, camera: &Camera, theme: &AppTheme) -> egui::Mesh {
         let s = &self.settings;
@@ -922,9 +962,6 @@ fn sphere(u: f32, v: f32) -> [f32; 3] {
 fn length(p: [f32; 3]) -> f32 {
     (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt()
 }
-fn wrap(degrees: f32) -> f32 {
-    (degrees + 180.0).rem_euclid(360.0) - 180.0
-}
 struct Camera {
     yaw: f32,
     elevation: f32,
@@ -945,7 +982,7 @@ impl Camera {
             radius: s.radius,
             depth: s.depth,
             perspective: s.perspective,
-            center: rect.center(),
+            center: rect.center() + Vec2::new(s.pan_x, s.pan_y) * rect.size(),
         }
     }
     fn project(&self, p: [f32; 3]) -> (Pos2, f32, f32) {
@@ -1003,6 +1040,33 @@ fn streak(mesh: &mut egui::Mesh, a: Pos2, b: Pos2, width: f32, color: Color32) {
     mesh.add_triangle(base, base + 1, base + 2);
     mesh.add_triangle(base + 1, base + 3, base + 2);
 }
+
+impl super::camera::Controlled for Flux {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan_x,
+            pan_y: &mut s.pan_y,
+            degrees: true,
+            y_up: false,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 3.0,
+            speed_limit: 15.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
+        }
+    }
+}
+
+module_palette!(Flux, settings.palette);
 
 #[cfg(test)]
 mod tests {

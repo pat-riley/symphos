@@ -349,7 +349,8 @@ fn valid_pane(pane: &PaneState) -> bool {
     if pane.instance_id.is_empty() || pane.instance_id.len() > 120 {
         return false;
     }
-    pane.milkdrop_presets.len() <= crate::milkdrop::preset::MAX_PRESETS
+    pane.audio_input.valid()
+        && pane.milkdrop_presets.len() <= crate::milkdrop::preset::MAX_PRESETS
         && pane.milkdrop_presets.iter().all(|p| p.validate().is_ok())
         && pane.settings.len() == ModuleKind::ALL.len()
         && ModuleKind::ALL.into_iter().all(|kind| {
@@ -365,6 +366,11 @@ fn valid_pane(pane: &PaneState) -> bool {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::background::Background::is_default"
+    )]
+    pub background: crate::background::Background,
     #[serde(default)]
     pub macros: Option<crate::macros::scene::SceneMacros>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -420,6 +426,7 @@ impl Session {
         let ids = self.layout.as_ref().map_or_else(Vec::new, Tile::ids);
         self.scenes.as_ref().is_none_or(crate::scenes::Book::valid)
             && self.macros.as_ref().is_none_or(|m| m.valid(&self.panes))
+            && self.background.valid()
             && self.signals.valid()
             && self.appearance.valid()
             && [30, 60, 90, 120].contains(&self.render_fps)
@@ -495,6 +502,11 @@ impl Session {
 pub enum PresetContent {
     Layout(Tile),
     View {
+        #[serde(
+            default,
+            skip_serializing_if = "crate::background::Background::is_default"
+        )]
+        background: crate::background::Background,
         layout: Tile,
         panes: Vec<PaneState>,
         #[serde(default)]
@@ -524,8 +536,14 @@ impl PresetContent {
                 tree.valid(ids.len())
                     && ids.iter().enumerate().all(|(i, id)| i == *id)
                     && match self {
-                        Self::View { panes, macros, .. } => {
-                            panes.len() == ids.len()
+                        Self::View {
+                            background,
+                            panes,
+                            macros,
+                            ..
+                        } => {
+                            background.valid()
+                                && panes.len() == ids.len()
                                 && panes.iter().all(valid_pane)
                                 && macros.as_ref().is_none_or(|m| m.valid(panes))
                         }
@@ -537,6 +555,8 @@ impl PresetContent {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Preset {
+    #[serde(default)]
+    pub audio_inputs: Vec<crate::signals::audio::InputBus>,
     #[serde(default)]
     pub signals: Vec<crate::signals::Definition>,
     pub id: String,
@@ -552,10 +572,12 @@ impl Preset {
 pub fn factory_presets() -> Vec<Preset> {
     use Axis::{Horizontal as H, Vertical as V};
     let view = |id: &str, name: &str, layout: Tile, kinds: &[ModuleKind]| Preset {
+        audio_inputs: Vec::new(),
         signals: Vec::new(),
         id: format!("factory:{id}"),
         name: name.into(),
         content: PresetContent::View {
+            background: Default::default(),
             macros: None,
             layout,
             panes: kinds
@@ -666,6 +688,7 @@ pub fn factory_presets() -> Vec<Preset> {
         ("default-layout", "Waterfall layout", Tile::default_view()),
     ] {
         presets.push(Preset {
+            audio_inputs: Vec::new(),
             signals: Vec::new(),
             id: format!("factory:{id}"),
             name: name.into(),
@@ -736,12 +759,14 @@ impl Storage {
                                 && valid_name(&p.name)
                                 && p.content.valid()
                                 && crate::signals::Bank {
+                                    audio_inputs: p.audio_inputs.clone(),
                                     slots: Vec::new(),
                                     channels: p.signals.clone(),
                                     next_id: p
                                         .signals
                                         .iter()
                                         .map(|d| d.id)
+                                        .chain(p.audio_inputs.iter().map(|b| b.id))
                                         .max()
                                         .unwrap_or(0)
                                         .saturating_add(1),
@@ -856,11 +881,13 @@ impl Session {
                 .as_ref()
                 .is_some_and(|current| current.canonical() == *tree),
             PresetContent::View {
+                background,
                 layout,
                 panes,
                 macros,
             } => self.layout.as_ref().is_some_and(|current| {
-                current.canonical() == *layout
+                self.background == *background
+                    && current.canonical() == *layout
                     && (macros.is_none() || self.macros.as_ref() == macros.as_deref())
                     && current.ids().iter().zip(panes).all(|(id, saved)| {
                         let current = &self.panes[*id];
@@ -1263,6 +1290,7 @@ mod tests {
 
     fn session() -> Session {
         Session {
+            background: Default::default(),
             macros: None,
             project_path: None,
             scenes: None,
@@ -1400,9 +1428,21 @@ mod tests {
         let mut state = restored;
         state.appearance.theme = crate::theme::ThemeChoice::Midnight;
         state.appearance.ui_scale = Some(1.3);
+        state.appearance.default_palette = crate::colors::Palette::Ocean;
         let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert_eq!(restored.appearance, state.appearance);
         let mut value = serde_json::to_value(state).unwrap();
+        value["appearance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("default_palette");
+        let old = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            old.appearance.default_palette,
+            crate::colors::Palette::ClassicLed
+        );
+        assert_eq!(old.appearance.theme, crate::theme::ThemeChoice::Midnight);
+        assert_eq!(old.appearance.ui_scale, Some(1.3));
         value["appearance"]["theme"] = "future_skin".into();
         assert_eq!(
             Session::decode(&serde_json::to_vec(&value).unwrap())
@@ -1505,6 +1545,76 @@ mod tests {
     }
 
     #[test]
+    fn linked_scene_fingerprints_survive_recovery_without_bypassing_parameter_bounds() {
+        let dir =
+            std::env::temp_dir().join(format!("symphos-linked-recovery-{}", std::process::id()));
+        let mut state = session();
+        let mut book = crate::scenes::Book::new(crate::project::SceneState::capture(state.clone()));
+        book.current_mut().unwrap().preset = Some(crate::scenes::PresetLink {
+            id: 1,
+            baseline: u64::MAX,
+            edited: false,
+        });
+        state.scenes = Some(book);
+        assert!(
+            state.validate(),
+            "preset fingerprints are metadata, not numeric parameters"
+        );
+        let mut legacy = serde_json::to_value(&state).unwrap();
+        assert_eq!(
+            legacy["scenes"]["scenes"][0]["preset"]["baseline"],
+            "ffffffffffffffff"
+        );
+        legacy["scenes"]["scenes"][0]["preset"]["baseline"] = u64::MAX.into();
+        let legacy = Session::decode(&serde_json::to_vec(&legacy).unwrap())
+            .expect("old numeric fingerprints remain supported");
+        assert_eq!(
+            legacy
+                .scenes
+                .unwrap()
+                .current()
+                .unwrap()
+                .preset
+                .as_ref()
+                .unwrap()
+                .baseline,
+            u64::MAX
+        );
+        let mut storage = Storage::new(dir.clone());
+        storage.checkpoint(&state);
+        assert!(storage.notice.is_none());
+        let reloaded = Session::load(&dir).expect("linked preset must survive a recovery reload");
+        assert_eq!(
+            reloaded
+                .scenes
+                .unwrap()
+                .current()
+                .unwrap()
+                .preset
+                .as_ref()
+                .unwrap()
+                .baseline,
+            u64::MAX
+        );
+        let saved = std::fs::read(dir.join("workspace.json")).unwrap();
+        // Invalid controls must still be rejected, retaining the good checkpoint.
+        let mut settings = serde_json::to_value(&state.panes[0].settings).unwrap();
+        settings[0]["Waterfall"]["detail"] = 300.into();
+        state.panes[0].settings = serde_json::from_value(settings).unwrap();
+        assert!(!state.validate());
+        storage.checkpoint(&state);
+        assert!(
+            storage
+                .notice
+                .as_ref()
+                .is_some_and(|notice| notice.contains("Invalid workspace"))
+        );
+        assert_eq!(std::fs::read(dir.join("workspace.json")).unwrap(), saved);
+        drop(storage);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn background_recovery_reports_write_errors_and_can_retry() {
         let dir =
             std::env::temp_dir().join(format!("symphos-recovery-failure-{}", std::process::id()));
@@ -1540,6 +1650,7 @@ mod tests {
         ));
         let mut storage = Storage::new(dir.clone());
         storage.presets.push(Preset {
+            audio_inputs: Vec::new(),
             signals: Vec::new(),
             id: "user:test".into(),
             name: "My layout".into(),

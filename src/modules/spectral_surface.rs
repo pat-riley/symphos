@@ -5,7 +5,7 @@ use super::{
     Palette,
     camera_gizmo::{self, Axis},
     frequency::{BANDS, History},
-    label, settings_group, settings_panel,
+    settings_group, settings_panel,
     waterfall::{mesh_dot, mesh_segment},
 };
 use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, theme::AppTheme};
@@ -98,6 +98,7 @@ impl Default for CylinderGeometry {
 }
 
 pub struct SpectralSurface {
+    camera_motion: super::camera_motion::Settings,
     shape: Shape,
     cylinder: CylinderGeometry,
     history: History,
@@ -159,6 +160,7 @@ struct MeshKey {
     sequence: Option<u64>,
 }
 module_settings!(SpectralSurface, SurfaceSettings, {
+    #[serde(default)] camera_motion: super::camera_motion::Settings => camera_motion,
     #[serde(default)] cylinder: CylinderGeometry => cylinder,
     frequency: super::frequency::FrequencySettings => history.data.settings,
     radius: f32 => radius, displacement: f32 => displacement,
@@ -186,6 +188,7 @@ module_settings!(SpectralSurface, SurfaceSettings, {
 impl Default for SpectralSurface {
     fn default() -> Self {
         Self {
+            camera_motion: Default::default(),
             shape: Shape::Sphere,
             cylinder: CylinderGeometry::default(),
             history: History::default(),
@@ -212,7 +215,7 @@ impl Default for SpectralSurface {
             style: Style::Wireframe,
             palette: Palette::Spectrum,
             color_by: ColorBy::Frequency,
-            brightness: 1.0,
+            brightness: 1.6,
             contrast: 1.0,
             opacity: 0.95,
             rear_opacity: 0.18,
@@ -234,17 +237,13 @@ impl Default for SpectralSurface {
             orbit_speed: 8.0,
             orbit_reverse: false,
             guides: true,
-            show_gizmo: true,
+            show_gizmo: false,
             last_draw: None,
             mesh_cache: None,
         }
     }
 }
-impl SurfaceSettings {
-    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        self.auto_orbit.then_some(&mut self.yaw)
-    }
-}
+impl SurfaceSettings {}
 
 impl SpectralSurface {
     fn cached_mesh(
@@ -400,7 +399,7 @@ impl SpectralSurface {
         }
         settings_panel(ui, "Geometry", |ui| {
             settings_group(ui, "Surface motion", |ui| {
-                egui::ComboBox::from_id_salt("sphere-motion")
+                crate::dropdown::ComboBox::from_id_salt("sphere-motion")
                     .selected_text(match self.motion {
                         Motion::WrappedSpectrum => "Wrapped spectrum",
                         Motion::PoleRipples => ripple_label,
@@ -612,14 +611,18 @@ impl SpectralSurface {
             self.history.data.settings.response_controls(ui)
         });
         settings_panel(ui, "Appearance", |ui| {
+            self.history.data.settings.label_controls(ui);
             settings_group(ui, "Render style", |ui| {
-                egui::ComboBox::from_id_salt("sphere-style")
-                    .selected_text(self.style.label())
-                    .show_ui(ui, |ui| {
-                        for style in Style::ALL {
-                            ui.selectable_value(&mut self.style, style, style.label());
-                        }
-                    });
+                super::property_row(ui, "Style", |ui| {
+                    crate::dropdown::ComboBox::from_id_salt("sphere-style")
+                        .selected_text(self.style.label())
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            for style in Style::ALL {
+                                ui.selectable_value(&mut self.style, style, style.label());
+                            }
+                        });
+                });
                 match self.style {
                     Style::Points => {
                         p!(
@@ -690,7 +693,7 @@ impl SpectralSurface {
             });
             settings_group(ui, "Color & light", |ui| {
                 self.palette.controls(ui);
-                egui::ComboBox::from_id_salt("sphere-color")
+                crate::dropdown::ComboBox::from_id_salt("sphere-color")
                     .selected_text(match self.color_by {
                         ColorBy::Level => "Color by level",
                         ColorBy::Frequency => "Color by frequency",
@@ -705,7 +708,7 @@ impl SpectralSurface {
                     ui,
                     brightness,
                     0.0..=2.0,
-                    1.0,
+                    1.6,
                     "Brightness",
                     "Overall light level. Audio also brightens each active frequency."
                 );
@@ -744,7 +747,6 @@ impl SpectralSurface {
                 self.history.data.settings.level_controls(ui);
             });
             settings_group(ui, "Viewport guides", |ui| {
-                ui.checkbox(&mut self.guides, "Labels & navigation hints");
                 ui.checkbox(&mut self.show_gizmo, "Navigation gizmo");
             });
         });
@@ -1463,61 +1465,6 @@ impl SpectralSurface {
             scene,
             egui::Shape::Mesh(self.cached_mesh(rect.shrink(24.0), now, theme)),
         );
-        if self.guides {
-            if rect.width() > 450.0 {
-                label(
-                    &painter,
-                    rect.left_top() + Vec2::new(12.0, 10.0),
-                    if self.is_cylinder() {
-                        if self.motion == Motion::PoleRipples {
-                            "AXIAL RIPPLES · TRAVELING AUDIO RINGS"
-                        } else {
-                            "AROUND = FREQUENCY · HEIGHT = HISTORY · RADIUS = LEVEL"
-                        }
-                    } else if self.motion == Motion::PoleRipples {
-                        "POLE RIPPLES · CIRCULAR AUDIO WAVES · RADIUS = DISPLACEMENT"
-                    } else {
-                        "LONGITUDE = FREQUENCY · LATITUDE = HISTORY · RADIUS = LEVEL"
-                    },
-                    theme.muted,
-                );
-                label(
-                    &painter,
-                    rect.left_bottom() + Vec2::new(12.0, -18.0),
-                    "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
-                    theme.muted,
-                );
-            }
-            if rect.width() > 700.0 {
-                let f = &self.history.data.settings;
-                label(
-                    &painter,
-                    rect.left_top() + Vec2::new(12.0, 28.0),
-                    format!(
-                        "{}–{} Hz · {:.1} s · {}",
-                        f.axis_label(0.0, frame.sample_rate),
-                        f.axis_label(1.0, frame.sample_rate),
-                        if self.motion == Motion::PoleRipples {
-                            self.ripple_travel_time()
-                        } else {
-                            self.seconds
-                        },
-                        if self.is_cylinder() {
-                            if self.reverse_flow {
-                                "BOTTOM TO TOP"
-                            } else {
-                                "TOP TO BOTTOM"
-                            }
-                        } else if self.reverse_flow {
-                            "SOUTH TO NORTH"
-                        } else {
-                            "NORTH TO SOUTH"
-                        }
-                    ),
-                    theme.muted,
-                );
-            }
-        }
     }
 }
 #[derive(Clone, Copy)]
@@ -1530,6 +1477,8 @@ struct Vertex {
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(TAU) - PI
 }
+
+module_palette!(SpectralSurface, palette);
 
 #[cfg(test)]
 mod tests {
@@ -2213,5 +2162,30 @@ mod preview {
             serde_json::to_vec(&value).unwrap(),
         )
         .unwrap();
+    }
+}
+
+impl super::camera::Controlled for SpectralSurface {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = self;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan.x,
+            pan_y: &mut s.pan.y,
+            degrees: false,
+            y_up: false,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 8.0,
+            speed_limit: 360.0,
+            speed_key: "orbit_speed",
+            reverse: Some(&mut s.orbit_reverse),
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
+        }
     }
 }

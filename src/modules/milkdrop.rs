@@ -750,7 +750,7 @@ impl Milkdrop {
                 .get(self.settings.preset)
                 .map_or("No preset", |p| p.name.as_str());
             let mut selection = self.settings.preset;
-            egui::ComboBox::from_id_salt("milkdrop-preset")
+            crate::dropdown::ComboBox::from_id_salt("milkdrop-preset")
                 .selected_text(selected)
                 .width(ui.available_width())
                 .show_ui(ui, |ui| {
@@ -911,7 +911,7 @@ impl Milkdrop {
         }
         settings_panel(ui, "Rendering", |ui| {
             self.settings.controls(ui, "Rendering");
-            egui::ComboBox::from_id_salt("milkdrop-quality").selected_text(["640 px","960 px","1280 px","1920 px"][self.settings.quality as usize]).show_ui(ui,|ui|{for (i,label) in ["640 px","960 px","1280 px","1920 px"].iter().enumerate(){ui.selectable_value(&mut self.settings.quality,i as u32,*label);}}).response.help_text("Maximum output width or height. Lower resolutions reduce OpenGL-to-wgpu transfer cost. Independent of display FPS.");
+            crate::dropdown::ComboBox::from_id_salt("milkdrop-quality").selected_text(["640 px","960 px","1280 px","1920 px"][self.settings.quality as usize]).show_ui(ui,|ui|{for (i,label) in ["640 px","960 px","1280 px","1920 px"].iter().enumerate(){ui.selectable_value(&mut self.settings.quality,i as u32,*label);}}).response.help_text("Maximum output width or height. Lower resolutions reduce OpenGL-to-wgpu transfer cost. Independent of display FPS.");
             ui.add(Parameter::new(&mut self.settings.mesh,16..=128,48).text("Warp mesh detail")).help_text("Resolution of the per-vertex equation grid. Higher values improve detailed distortion but require more CPU work.");
             ui.label(format!(
                 "Renderer {:.1} ms · projectM 4.2",

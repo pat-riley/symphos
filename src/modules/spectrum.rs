@@ -32,6 +32,7 @@ pub struct Spectrum {
     palette: Palette,
     contrast: f32,
     grid: bool,
+    grid_detail: super::plot_grid::Settings,
     labels: bool,
     appearance: Appearance,
 }
@@ -64,6 +65,7 @@ fill_opacity: f32 => fill_opacity,
 palette: Palette => palette,
 contrast: f32 => contrast,
 grid: bool => grid,
+#[serde(default)] grid_detail: super::plot_grid::Settings => grid_detail,
 labels: bool => labels,
 #[serde(default)] appearance: Appearance => appearance,
 });
@@ -89,6 +91,7 @@ impl Default for Spectrum {
             palette: Palette::Theme,
             contrast: 1.0,
             grid: true,
+            grid_detail: Default::default(),
             labels: true,
             appearance: Appearance::default(),
         }
@@ -187,49 +190,6 @@ impl Spectrum {
         });
         settings_panel(ui, "Signal Response", |ui| {
             self.data.settings.response_controls(ui);
-            super::settings_group(ui, "Reference", |ui| {
-                let capture = if self.reference.is_some() {
-                    "Replace live reference"
-                } else {
-                    "Capture live reference"
-                };
-                if ui
-                    .add_enabled(!frame.bins.is_empty(), egui::Button::new(capture))
-                    .help_text("Capture the current spectrum as a fixed comparison while live analysis continues.")
-                    .clicked()
-                {
-                    self.capture_reference(frame);
-                }
-                if ui
-                    .add_enabled(
-                        self.reference.is_some(),
-                        egui::Button::new("Clear reference"),
-                    )
-                    .help_text("Remove only the captured comparison trace.")
-                    .clicked()
-                {
-                    self.reference = None;
-                }
-            });
-            super::settings_group(ui, "Peak markers", |ui| {
-                if ui.checkbox(&mut self.peak_hold, "Peak hold")
-                .help_text("Track recent maxima above the live trace. Starts a fresh measurement when enabled.").changed() {
-                self.reset_peaks();
-            }
-                ui.add_enabled_ui(self.peak_hold, |ui| {
-                ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
-                    .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
-                ui.add_enabled_ui(!self.infinite_hold, |ui| {
-                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).key("hold_seconds").bounds(0.0..=60.0).text("Hold s"))
-                        .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
-                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).key("peak_falloff").bounds(0.0..=240.0).text("Fall dB/s"))
-                        .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
-                });
-                if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
-                    self.reset_peaks();
-                }
-            });
-            });
         });
         settings_panel(ui, "Appearance", |ui| {
             super::settings_group(ui, "Starting look", |ui| self.look_controls(ui));
@@ -271,16 +231,61 @@ impl Spectrum {
                 self.palette.contrast_controls(ui, &mut self.contrast);
                 self.data.settings.level_controls(ui);
             });
-            super::settings_group(ui, "Peaks & guides", |ui| {
-                if ui.checkbox(&mut self.peak_hold, "Peak markers").help_text("Floating markers retain recent maxima. Set hold time and release speed in Signal Response → Peak markers.").changed() { self.reset_peaks(); }
+            super::settings_group_with_default(ui, "Reference", false, |ui| {
+                let capture = if self.reference.is_some() {
+                    "Replace live reference"
+                } else {
+                    "Capture live reference"
+                };
+                if ui
+                    .add_enabled(!frame.bins.is_empty(), egui::Button::new(capture))
+                    .help_text("Capture the current spectrum as a fixed comparison while live analysis continues.")
+                    .clicked()
+                {
+                    self.capture_reference(frame);
+                }
+                if ui
+                    .add_enabled(
+                        self.reference.is_some(),
+                        egui::Button::new("Clear reference"),
+                    )
+                    .help_text("Remove only the captured comparison trace.")
+                    .clicked()
+                {
+                    self.reference = None;
+                }
+            });
+            super::settings_group_with_default(ui, "Peak markers", false, |ui| {
                 if self.peak_hold {
                     self.appearance
                         .peak_controls(ui, self.style == TraceStyle::Bars);
                 }
+                if ui.checkbox(&mut self.peak_hold, "Peak hold")
+                .help_text("Track recent maxima above the live trace. Starts a fresh measurement when enabled.").changed() {
+                self.reset_peaks();
+            }
+                ui.add_enabled_ui(self.peak_hold, |ui| {
+                ui.checkbox(&mut self.infinite_hold, "Hold indefinitely")
+                    .help_text("Keep each band's highest level until Reset peaks. Disables timed release.");
+                ui.add_enabled_ui(!self.infinite_hold, |ui| {
+                    ui.add(crate::parameter::Parameter::new(&mut self.hold_seconds, 0.0..=10.0, 1.0).key("hold_seconds").bounds(0.0..=60.0).text("Hold s"))
+                        .help_text("Time to retain each peak before it starts falling. Zero begins release immediately.");
+                    ui.add(crate::parameter::Parameter::new(&mut self.peak_falloff, 1.0..=96.0, 18.0).key("peak_falloff").bounds(0.0..=240.0).text("Fall dB/s"))
+                        .help_text("Peak-marker release speed, independent of the live spectrum's decay.");
+                });
+                if ui.small_button("Reset peaks").help_text("Clear only the peak markers, without resetting the trace or settings.").clicked() {
+                    self.reset_peaks();
+                }
+            });
+            });
+            self.data.settings.label_controls(ui);
+            super::settings_group(ui, "Guides", |ui| {
                 ui.checkbox(&mut self.grid, "Grid")
-                    .help_text("Show horizontal dB reference lines.");
+                    .help_text("Show frequency and dB reference lines.");
+                self.grid_detail
+                    .controls(ui, self.grid, "Frequency divisions", "Level divisions");
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
-                    "Show dB and frequency labels. Frequency Range can replace Hz with note names.",
+                    "Show dB and frequency labels. Musical labels can replace Hz with note names.",
                 );
                 if ui
                     .add_enabled(
@@ -352,7 +357,15 @@ impl Spectrum {
         }
         self.refresh_reference(frame.sample_rate);
         let painter = ui.painter_at(rect);
-        if self.appearance.black_background {
+        if self.appearance.black_background
+            && ui
+                .data(|d| {
+                    d.get_temp::<crate::background::Background>(egui::Id::new(
+                        crate::background::CONTEXT,
+                    ))
+                })
+                .is_none()
+        {
             painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
         }
         let plot = Rect::from_min_max(
@@ -363,19 +376,15 @@ impl Spectrum {
             return;
         }
         let settings = &self.data.settings;
-        for step in 0..=3 {
-            let t = step as f32 / 3.0;
-            let y = plot.bottom() - t * plot.height();
-            if self.grid {
-                painter.line_segment(
-                    [Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)],
-                    Stroke::new(0.5, mix(theme.background, theme.muted, 0.35)),
-                );
-            }
-            if self.labels {
-                label(
+        if self.grid {
+            self.grid_detail.paint(&painter, plot, theme);
+        }
+        if self.labels && self.grid_detail.y_labels {
+            for t in self.grid_detail.label_ticks(false, plot.height()) {
+                super::plot_grid::axis_label(
                     &painter,
-                    Pos2::new(rect.left() + 3.0, y - 5.0),
+                    Pos2::new(plot.left() - 6.0, plot.bottom() - t * plot.height()),
+                    egui::Align2::RIGHT_CENTER,
                     format!(
                         "{:.0}",
                         settings.floor + t * (settings.ceiling - settings.floor)
@@ -502,12 +511,19 @@ impl Spectrum {
                 Stroke::new(1.5, theme.foreground.gamma_multiply(0.65)),
             ));
         }
-        if self.labels {
-            for step in 0..=4 {
-                let t = step as f32 / 4.0;
-                label(
+        if self.labels && self.grid_detail.x_labels {
+            for t in self.grid_detail.label_ticks(true, plot.width()) {
+                let align = if t == 0.0 {
+                    egui::Align2::LEFT_TOP
+                } else if t == 1.0 {
+                    egui::Align2::RIGHT_TOP
+                } else {
+                    egui::Align2::CENTER_TOP
+                };
+                super::plot_grid::axis_label(
                     &painter,
-                    Pos2::new(plot.left() + t * (plot.width() - 25.0), plot.bottom() + 7.0),
+                    Pos2::new(plot.left() + t * plot.width(), plot.bottom() + 7.0),
+                    align,
                     settings.axis_label(t, frame.sample_rate),
                     theme.muted,
                 );
@@ -565,6 +581,8 @@ impl Spectrum {
         }
     }
 }
+
+module_palette!(Spectrum, palette);
 
 #[cfg(test)]
 mod tests {

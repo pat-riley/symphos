@@ -110,6 +110,7 @@ pub struct SpectrumBand {
 
 #[derive(Clone, Debug)]
 pub struct AnalysisFrame {
+    pub analysis_settings: Arc<AnalysisSettings>,
     pub signals: Option<Arc<crate::signals::Snapshot>>,
     pub features: Option<Arc<crate::modulation::AudioFeatures>>,
     pub capture_epoch: u64,
@@ -142,6 +143,7 @@ pub struct AnalysisFrame {
 impl Default for AnalysisFrame {
     fn default() -> Self {
         Self {
+            analysis_settings: Arc::new(AnalysisSettings::default()),
             signals: None,
             features: None,
             capture_epoch: 0,
@@ -266,7 +268,7 @@ impl Drop for AnalysisRuntime {
     }
 }
 
-struct Analyzer {
+pub(crate) struct Analyzer {
     size: usize,
     fft: Arc<dyn RealToComplex<f32>>,
     input: Vec<f32>,
@@ -282,7 +284,7 @@ struct Analyzer {
 }
 
 impl Analyzer {
-    fn new(size: usize, window: WindowFunction) -> Self {
+    pub(crate) fn new(size: usize, window: WindowFunction) -> Self {
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(size);
         let input = fft.make_input_vec();
@@ -312,7 +314,7 @@ impl Analyzer {
     }
 
     #[allow(clippy::too_many_arguments)] // The capture metadata is kept explicit at this hot boundary.
-    fn analyze(
+    pub(crate) fn analyze(
         &mut self,
         ring: &[StereoSample],
         write_cursor: usize,
@@ -329,7 +331,8 @@ impl Analyzer {
         let mut mix_squares = 0.0_f64;
         let mut zero_crossings = 0_u32;
         let mut previous = 0.0_f32;
-        let waveform_count = (sample_rate as usize / 2).min(ring.len());
+        // Named inputs must retain a complete FFT window even at low sample rates.
+        let waveform_count = (sample_rate as usize / 2).max(self.size).min(ring.len());
         let mut waveform_left = Vec::with_capacity(waveform_count);
         let mut waveform_right = Vec::with_capacity(waveform_count);
         for i in 0..waveform_count {
@@ -466,6 +469,7 @@ impl Analyzer {
             &bins, mix_rms, rms,
         )));
         AnalysisFrame {
+            analysis_settings: Arc::new(settings.clone()),
             signals: None,
             features,
             capture_epoch: 0,

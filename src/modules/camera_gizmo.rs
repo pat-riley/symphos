@@ -11,6 +11,23 @@ pub enum Axis {
 }
 
 impl Axis {
+    pub(super) fn angles_y_up(self, positive: bool) -> (f32, f32) {
+        match self {
+            Self::X => (if positive { FRAC_PI_2 } else { -FRAC_PI_2 }, 0.0),
+            Self::Y => (0.0, if positive { -FRAC_PI_2 } else { FRAC_PI_2 }),
+            Self::Z => (if positive { PI } else { 0.0 }, 0.0),
+        }
+    }
+    pub(super) fn snap_y_up(self, positive: bool, yaw: f32, elevation: f32) -> (f32, f32) {
+        let mut direction = [0.0; 3];
+        direction[match self {
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
+        }] = if positive { 1.0 } else { -1.0 };
+        let (_, depth) = project_direction(yaw, elevation, direction);
+        self.angles_y_up(if depth < -0.9999 { !positive } else { positive })
+    }
     fn label(self) -> &'static str {
         match self {
             Self::X => "X",
@@ -153,12 +170,19 @@ struct Endpoint {
     depth: f32,
 }
 
-fn endpoints(rect: Rect, yaw: f32, elevation: f32) -> [Endpoint; 6] {
+fn endpoints_space(rect: Rect, yaw: f32, elevation: f32, y_up: bool) -> [Endpoint; 6] {
     let arm = rect.width().min(rect.height()) * 0.31;
     let mut points = std::array::from_fn(|i| {
         let axis = [Axis::X, Axis::Y, Axis::Z][i / 2];
         let positive = i % 2 == 1;
-        let (position, depth) = project_direction(yaw, elevation, axis.direction(positive));
+        let direction = if y_up {
+            let mut v = [0.0; 3];
+            v[i / 2] = if positive { 1.0 } else { -1.0 };
+            v
+        } else {
+            axis.direction(positive)
+        };
+        let (position, depth) = project_direction(yaw, elevation, direction);
         Endpoint {
             axis,
             positive,
@@ -166,7 +190,15 @@ fn endpoints(rect: Rect, yaw: f32, elevation: f32) -> [Endpoint; 6] {
             depth,
         }
     });
-    points.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+    // GPU Y-up views use distance + depth; their nearer side has negative
+    // camera depth. CPU Z-up views use positive depth for their nearer side.
+    points.sort_by(|a, b| {
+        if y_up {
+            b.depth.total_cmp(&a.depth)
+        } else {
+            a.depth.total_cmp(&b.depth)
+        }
+    });
     points
 }
 
@@ -183,12 +215,23 @@ pub fn draw_with_roll(
     roll: f32,
     compact: bool,
 ) -> GizmoAction {
+    draw_in_space(ui, rect, yaw, elevation, roll, compact, false)
+}
+pub(super) fn draw_in_space(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    yaw: f32,
+    elevation: f32,
+    roll: f32,
+    compact: bool,
+    y_up: bool,
+) -> GizmoAction {
     let response = ui.interact(
         rect,
         ui.id().with("orientation-gizmo"),
         Sense::click_and_drag(),
     );
-    let mut points = endpoints(rect, yaw, elevation);
+    let mut points = endpoints_space(rect, yaw, elevation, y_up);
     let (sin, cos) = roll.sin_cos();
     for point in &mut points {
         let p = point.pos - rect.center();
@@ -268,7 +311,11 @@ pub fn draw_with_roll(
                     "{}{} · {}\nClick to align; click again to flip. Drag to orbit.",
                     if point.positive { "+" } else { "−" },
                     point.axis.label(),
-                    point.axis.description()
+                    if y_up {
+                        "World axis"
+                    } else {
+                        point.axis.description()
+                    }
                 )
             });
     } else {
@@ -282,6 +329,25 @@ pub fn draw_with_roll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_y_up_navigator_snaps_to_the_near_side_and_repeated_clicks_flip() {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(80.0));
+        for (index, axis) in [Axis::X, Axis::Y, Axis::Z].into_iter().enumerate() {
+            for positive in [false, true] {
+                let mut direction = [0.0; 3];
+                direction[index] = if positive { 1.0 } else { -1.0 };
+                let (yaw, elevation) = axis.snap_y_up(positive, -0.3, 0.45);
+                let (point, depth) = project_direction(yaw, elevation, direction);
+                assert!(point.length() < 1.0e-5 && depth < -0.9999);
+                let points = endpoints_space(rect, yaw, elevation, true);
+                assert_eq!(points.last().unwrap().axis, axis);
+                assert_eq!(points.last().unwrap().positive, positive);
+                let flipped = axis.snap_y_up(positive, yaw, elevation);
+                assert!(project_direction(flipped.0, flipped.1, direction).1 > 0.9999);
+            }
+        }
+    }
 
     #[test]
     fn rolled_gizmo_axis_hit_targets_match_the_rotated_arms() {

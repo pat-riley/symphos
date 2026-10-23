@@ -173,8 +173,8 @@ fn invalid_values_are_bounded_before_rendering_and_auto_rotation_is_not_an_edit(
     assert!(wave.settings.height.is_finite());
     assert_eq!(wave.settings.layers[0].size, 0.1);
     assert!(wave.settings.frequency.max_hz > wave.settings.frequency.min_hz);
-    let mut snapshot = ModuleSettings::ParticleWaves(Box::new(wave.settings_snapshot()));
-    assert!(snapshot.automatic_yaw().is_some());
+    let snapshot = ModuleSettings::ParticleWaves(Box::new(wave.settings_snapshot()));
+    assert!(matches!(snapshot, ModuleSettings::ParticleWaves(ref settings) if settings.auto_orbit));
     wave.clear();
     assert_eq!(wave.settings.layer_count, 8);
     assert!(wave.field.iter().all(|v| *v == 0.0));
@@ -262,4 +262,99 @@ fn seventeen_component_projects_gain_bloom_without_changing_saved_settings() {
         .retain(|v| v.get("SpectralBloom").is_none());
     let restored: PaneState = serde_json::from_value(json).unwrap();
     assert_eq!(original, restored);
+}
+
+#[test]
+fn shared_and_layer_palettes_roundtrip_without_resetting_particle_history() {
+    use crate::colors::{Gradient, Palette};
+    for mut wave in [ParticleWaves::default(), ParticleWaves::spectral_bloom()] {
+        let original = wave.settings_snapshot();
+        let mut json = serde_json::to_value(&original).unwrap();
+        assert!(json.get("palette").is_none());
+        for layer in json["layers"].as_array().unwrap() {
+            assert!(layer.get("palette").is_none());
+        }
+        json["color_a"] = serde_json::json!([12, 34, 56]);
+        let legacy: Settings = serde_json::from_value(json).unwrap();
+        wave.apply_settings(&legacy);
+        let theme = AppTheme::default();
+        let gpu = wave.settings.gpu_layers(&theme);
+        assert_eq!(gpu[0].palette[0], 0.0, "legacy blend remains active");
+        assert_eq!(gpu[0].a[..3], [12.0 / 255.0, 34.0 / 255.0, 56.0 / 255.0]);
+        wave.advance(&tone(1, 220.0), Instant::now(), true);
+        let field = wave.field.clone();
+        let before = (wave.time, wave.envelope, wave.last);
+        let mut colors = [[255, 0, 0]; 8];
+        colors[1] = [0, 255, 0];
+        colors[6] = [0, 0, 255];
+        let palette = Palette::Custom(Gradient {
+            colors,
+            count: 8,
+            cyclic: true,
+        });
+        wave.set_palette(palette);
+        wave.settings.layers[1].custom = true;
+        wave.settings.layers[1].palette = Some(Palette::Ocean);
+        wave.settings.layers[2].custom = true; // Older layer override keeps its colors.
+        let gpu = wave.settings.gpu_layers(&theme);
+        assert_eq!(gpu[0].palette, [8.0, 1.0, 0.0, 0.0]);
+        assert_eq!(gpu[0].gradient[6], [0.0, 0.0, 1.0, 1.0]);
+        let ocean = Palette::Ocean.gradient(&theme);
+        assert_eq!(gpu[1].palette[0], ocean.count as f32);
+        assert_eq!(gpu[1].gradient[0][0], ocean.colors[0][0] as f32 / 255.0);
+        assert_eq!(gpu[2].palette[0], 0.0);
+        assert_eq!(gpu[3].palette, gpu[0].palette);
+        let saved = wave.settings_snapshot();
+        let restored: Settings =
+            serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert_eq!(restored, saved);
+        assert_eq!(before, (wave.time, wave.envelope, wave.last));
+        assert!(Arc::ptr_eq(&field, &wave.field));
+        wave.settings.layers[1].custom = false;
+        assert_eq!(
+            wave.settings.gpu_layers(&theme)[1].gradient,
+            gpu[0].gradient
+        );
+        assert_eq!(wave.settings.layers[1].palette, Some(Palette::Ocean));
+    }
+}
+#[test]
+fn both_inspectors_use_the_shared_gradient_and_swatch_editor() {
+    for kind in [ModuleKind::ParticleWaves, ModuleKind::SpectralBloom] {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.set_everything_is_visible(true));
+        let mut pane = ModulePane::new(kind);
+        pane.select_inspector_section(crate::modules::SettingsSection::Appearance);
+        let before = pane.copy_settings();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(520.0, 16000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| pane.inspector_controls(ui, &AnalysisFrame::default()),
+        );
+        output.textures_delta.clear();
+        let labels: Vec<_> = output
+            .shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        for label in ["Palette", "Edit gradient & swatches", "Color driver"] {
+            assert!(
+                labels.iter().any(|t| t == label),
+                "{kind:?} missing {label}"
+            );
+        }
+        assert!(!labels.iter().any(|t| matches!(
+            t.as_str(),
+            "First color" | "Middle color" | "Highlight color"
+        )));
+        assert_eq!(before, pane.copy_settings());
+    }
 }

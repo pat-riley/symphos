@@ -42,10 +42,10 @@ impl Gallery {
                     }
                     ui.separator();ui.heading("Information hierarchy");
                     ui.label("Component identity > Section > Group > Parameter > Help.");
-                    ui.weak("Presets, copy/paste and destructive resets belong in Component actions. Values stay aligned; sections use the inspector rail; help explains behavior and units.");
+                    ui.weak("Presets, copy/paste and destructive resets belong in Component actions. Values stay aligned. Visualizers share Geometry, Appearance and Camera tabs under a pinned identity and audio source. Flat views omit Camera. Signals, insert editors and Macros use the same skin and pinned header, with untabbed collapsible property groups. Help explains behavior and units.");
                     ui.separator();ui.heading("Typography & spacing");
                     ui.label(RichText::new("Section title").strong());ui.label("Parameter label");ui.monospace("0.125 · numeric value");ui.weak("Secondary description / hint");
-                    ui.label("Use theme text styles; 8 px content spacing, 4 px compact spacing, 24–28 px controls, 7 px workspace pane corners.");
+                    ui.label("Inspectors: 12 pt labels, 22 pt property rows, 10 pt side insets, 6 pt row gaps, aligned values and compact panel-colored dropdowns. Workspace controls: 24–28 pt; pane corners: 7 pt.");
                 },
                 1=>{
                     ui.heading("Numeric controls");
@@ -60,7 +60,7 @@ impl Gallery {
                 },
                 2=>{
                     ui.heading("Shared outline icons");
-                    ui.horizontal_wrapped(|ui|{for (icon,label) in [(Icon::Plus,"Add"),(Icon::Inspector,"Inspector"),(Icon::Save,"Save"),(Icon::Play,"Play"),(Icon::Pause,"Pause"),(Icon::Camera,"Camera"),(Icon::Palette,"Appearance"),(Icon::AudioMappings,"Signals"),(Icon::GridView,"Grid"),(Icon::ListView,"List"),(Icon::Close,"Close")] {let _=icons::sized_button(ui,icon,false,28.0,label);}});
+                    ui.horizontal_wrapped(|ui|{for (icon,label) in [(Icon::Plus,"Add"),(Icon::Inspector,"Inspector"),(Icon::Save,"Save"),(Icon::Play,"Play"),(Icon::Pause,"Pause"),(Icon::Camera,"Camera"),(Icon::Clock,"Motion"),(Icon::Settings,"Settings"),(Icon::Palette,"Appearance"),(Icon::Knob,"Macros"),(Icon::Levels,"Signals"),(Icon::GridView,"Grid"),(Icon::ListView,"List"),(Icon::Close,"Close")] {let _=icons::sized_button(ui,icon,false,28.0,label);}});
                     ui.weak("Use the shared icon painter. Avoid mixing filled toolbar buttons and outline sidebar toggles for equivalent actions.");
                 },
                 3=>{

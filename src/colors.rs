@@ -487,7 +487,7 @@ impl Palette {
         }
         .to_string();
         crate::modules::property_row(ui, "Palette", |ui| {
-            egui::ComboBox::from_id_salt("component-palette")
+            crate::dropdown::ComboBox::from_id_salt("component-palette")
                 .width(ui.available_width())
                 .truncate()
                 .height(460.0)

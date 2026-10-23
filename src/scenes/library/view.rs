@@ -274,7 +274,15 @@ impl Library {
                             ui.spacing_mut().item_spacing.x = 16.0;
                             for (index, scene) in row {
                                 let key = item_key(self.preset_tab, scene.id);
-                                let active = key == Selection::Scene(book.active_scene);
+                                let active = key == Selection::Scene(book.active_scene)
+                                    || (self.preset_tab
+                                        && book.current().is_some_and(|current| {
+                                            current.name == scene.name
+                                                && current
+                                                    .preset
+                                                    .as_ref()
+                                                    .is_some_and(|p| p.id == scene.id)
+                                        }));
                                 let response = draw_item(
                                     ui,
                                     Item {
@@ -320,6 +328,7 @@ impl Library {
                                     )
                                 });
                                 if query.is_empty() && available.edit {
+                                    let response = crate::workspace_ui::drag_cursor(response);
                                     if response.drag_started() {
                                         response.dnd_set_drag_payload(key);
                                     }

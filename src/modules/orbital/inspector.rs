@@ -137,7 +137,14 @@ pub(super) fn controls(ui: &mut egui::Ui, orbital: &mut Orbital) {
                 if g.extra == Extra::OrbPalette && orbital.settings.orb_color_mode != 1 {
                     continue;
                 }
-                settings_group_with_default(ui, g.title, g.open, |ui| {
+                let label = if super::super::visual_inspector(ui).is_some()
+                    && matches!(title, "Particles" | "Orbs")
+                {
+                    format!("{title} · {}", g.title)
+                } else {
+                    g.title.to_owned()
+                };
+                settings_group_with_default(ui, &label, g.open, |ui| {
                     if g.extra == Extra::Population {
                         population(ui, orbital);
                     } else {

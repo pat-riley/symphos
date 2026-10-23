@@ -2,8 +2,9 @@
 
 Add **Particle Waves** from the **+** component browser or **Create** menu.
 Incoming FFT measurements form luminous 3D layers; no audio is generated.
-The initial view uses four blue/lime/white ribbons with gentle drift and depth
-of field. The global frame-rate preference applies, including 120 FPS.
+The initial view uses four ribbons with gentle drift and depth of field. Newly
+added panes use the default visualizer palette from Settings; existing presets
+retain their saved colors. The global frame-rate preference applies, including 120 FPS.
 
 ## Shape and layers
 
@@ -47,8 +48,10 @@ simulation. It does not replace the underlying measured spectrum.
 plus density, radius, variation, opacity, softness, and disc/square/diamond/ring
 sprites. Quality stays explicit; the renderer does not silently reduce it.
 
-**Appearance** contains a three-color palette with particle, frequency, level,
-or layer color drivers. Gradient blend ranges from distinct colored grains
+**Appearance → Palette** offers the shared factory/saved gradient browser and
+**Edit gradient & swatches** editor with 2–8 stops and cyclic gradients. Each
+layer override has the same picker. Particle, frequency, level, or layer color
+drivers determine where colors are sampled. Gradient blend ranges from distinct colored grains
 to smooth color transitions. Glow and brightness affect rendering only.
 Depth of field has focus distance, defocus strength and a maximum bokeh radius.
 Focus distance is measured from the camera; matching Camera distance focuses
@@ -89,3 +92,7 @@ modes measured 0.526 ms median and 2.439 ms p95 for submission plus GPU wait.
 This excludes host UI, audio analysis, encoding and presentation, and is not
 a guarantee of 120 FPS for every scene. Large bokeh discs, high particle counts,
 multiple components and high-resolution recording increase rendering cost.
+
+Palette changes preserve particle motion and spectrum history. Existing presets
+without a shared palette retain their original three-color blend until you pick
+or edit a gradient. Newly added panes follow Settings' default visualizer palette.

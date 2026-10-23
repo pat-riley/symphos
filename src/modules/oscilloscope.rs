@@ -114,7 +114,9 @@ pub struct Oscilloscope {
     afterglow_opacity: f32,
     centerline: bool,
     grid: bool,
+    grid_detail: super::plot_grid::Settings,
     labels: bool,
+    status_labels: bool,
 }
 
 module_settings!(Oscilloscope, OscilloscopeSettings, {
@@ -135,7 +137,9 @@ afterglow_traces: u32 => afterglow_traces,
 afterglow_opacity: f32 => afterglow_opacity,
 centerline: bool => centerline,
 grid: bool => grid,
+#[serde(default)] grid_detail: super::plot_grid::Settings => grid_detail,
 labels: bool => labels,
+#[serde(default)] status_labels: bool => status_labels,
 });
 
 impl Default for Oscilloscope {
@@ -157,7 +161,9 @@ impl Default for Oscilloscope {
             afterglow_opacity: 0.16,
             centerline: true,
             grid: true,
+            grid_detail: Default::default(),
             labels: true,
+            status_labels: false,
         }
     }
 }
@@ -356,10 +362,13 @@ impl Oscilloscope {
                 ui.checkbox(&mut self.centerline, "Centerline")
                     .help_text("Show the zero-amplitude reference.");
                 ui.checkbox(&mut self.grid, "Grid")
-                    .help_text("Show time divisions and half-scale amplitude guides.");
-                ui.checkbox(&mut self.labels, "Status & axis labels")
+                    .help_text("Show time and amplitude reference lines.");
+                self.grid_detail
+                    .controls(ui, self.grid, "Time divisions", "Amplitude divisions");
+                ui.checkbox(&mut self.labels, "Axis labels").help_text("Time in milliseconds and normalized display amplitude. Auto scale changes display gain, not the incoming audio.");
+                ui.checkbox(&mut self.status_labels, "Signal status")
                     .help_text(
-                        "Show channel, time span, synchronization, pitch, and amplitude labels.",
+                        "Optionally show channel, display gain mode, pitch and synchronization status above the plot.",
                     );
             });
         });
@@ -374,11 +383,43 @@ impl Oscilloscope {
         live: bool,
     ) {
         let painter = ui.painter_at(rect);
-        let plot = rect.shrink2(Vec2::new(10.0, if self.labels { 22.0 } else { 10.0 }));
+        let plot = Rect::from_min_max(
+            rect.min
+                + Vec2::new(
+                    if self.labels && self.grid_detail.y_labels {
+                        44.0
+                    } else {
+                        10.0
+                    },
+                    if self.status_labels { 22.0 } else { 10.0 },
+                ),
+            rect.max
+                - Vec2::new(
+                    10.0,
+                    if self.labels && self.grid_detail.x_labels {
+                        24.0
+                    } else {
+                        10.0
+                    },
+                ),
+        );
         if !plot.is_positive() {
             return;
         }
-        paint_guides(&painter, plot, self.centerline, self.grid, theme);
+        if self.grid {
+            self.grid_detail.paint(&painter, plot, theme);
+        }
+        if self.centerline {
+            painter.line_segment(
+                [plot.left_center(), plot.right_center()],
+                Stroke::new(
+                    self.grid_detail.line_width.clamp(0.3, 2.0),
+                    theme
+                        .muted
+                        .gamma_multiply(self.grid_detail.opacity.clamp(0.0, 1.0)),
+                ),
+            );
+        }
 
         let signal = selected_signal(frame, self.channel);
         let selection = self.select_window(&signal, frame.sample_rate);
@@ -414,6 +455,40 @@ impl Oscilloscope {
             );
         }
         if self.labels {
+            let duration_ms = selection.range.len().saturating_sub(1) as f32
+                / frame.sample_rate.max(1) as f32
+                * 1000.0;
+            if self.grid_detail.x_labels {
+                for t in self.grid_detail.label_ticks(true, plot.width()) {
+                    let align = if t == 0.0 {
+                        egui::Align2::LEFT_TOP
+                    } else if t == 1.0 {
+                        egui::Align2::RIGHT_TOP
+                    } else {
+                        egui::Align2::CENTER_TOP
+                    };
+                    super::plot_grid::axis_label(
+                        &painter,
+                        Pos2::new(plot.left() + t * plot.width(), plot.bottom() + 6.0),
+                        align,
+                        format!("{:.2} ms", t * duration_ms),
+                        theme.muted,
+                    );
+                }
+            }
+            if self.grid_detail.y_labels {
+                for t in self.grid_detail.label_ticks(false, plot.height()) {
+                    super::plot_grid::axis_label(
+                        &painter,
+                        Pos2::new(plot.left() - 5.0, plot.bottom() - t * plot.height()),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("{:+.2}", 2.0 * t - 1.0),
+                        theme.muted,
+                    );
+                }
+            }
+        }
+        if self.status_labels {
             paint_labels(
                 &painter,
                 rect,
@@ -483,57 +558,73 @@ impl Oscilloscope {
     }
 
     fn select_window(&self, signal: &[f32], sample_rate: u32) -> ScopeSelection {
-        let rate = sample_rate.max(1) as f32;
-        let pitch = (self.sync_mode == SyncMode::Pitch)
-            .then(|| estimate_period(signal, sample_rate))
-            .flatten();
-        let count = if let Some(estimate) = pitch {
+        if self.sync_mode == SyncMode::Pitch {
             let cycles = if self.cycle_mode == CycleMode::Single {
-                1.0
+                1
             } else {
-                self.cycles.clamp(2, 16) as f32
+                self.cycles.clamp(2, 16) as usize
             };
-            (estimate.period_samples * cycles).round() as usize + 1
-        } else {
-            (self.timebase_ms * rate / 1_000.0).round() as usize
+            return pitch_window(signal, sample_rate, cycles, self.timebase_ms);
         }
-        .clamp(2, signal.len().max(2))
-        .min(signal.len());
-        if count < 2 {
-            return ScopeSelection {
-                range: 0..signal.len(),
-                pitch,
-                triggered: false,
-            };
-        }
-        let latest_start = signal.len() - count;
-        let trigger = match self.sync_mode {
-            SyncMode::Pitch => Some((0.0, true)),
-            SyncMode::Trigger => Some((self.trigger_level, self.rising)),
-            SyncMode::Free => None,
-        };
-        let start = trigger
-            .and_then(|(level, rising)| find_crossing_before(signal, latest_start, level, rising))
-            .unwrap_or(latest_start);
-        ScopeSelection {
-            range: start..start + count,
+        let count = (self.timebase_ms * sample_rate.max(1) as f32 / 1_000.0).round() as usize;
+        let trigger =
+            (self.sync_mode == SyncMode::Trigger).then_some((self.trigger_level, self.rising));
+        aligned_window(signal, count, None, trigger)
+    }
+}
+
+/// Shared by the flat oscilloscope and the cycle-locked orbital trace.
+pub(super) fn pitch_window(
+    signal: &[f32],
+    sample_rate: u32,
+    cycles: usize,
+    fallback_ms: f32,
+) -> ScopeSelection {
+    let pitch = estimate_period(signal, sample_rate);
+    let count = if let Some(estimate) = pitch {
+        (estimate.period_samples * cycles.clamp(1, 16) as f32).round() as usize + 1
+    } else {
+        (fallback_ms * sample_rate.max(1) as f32 / 1_000.0).round() as usize
+    };
+    aligned_window(signal, count, pitch, Some((0.0, true)))
+}
+
+fn aligned_window(
+    signal: &[f32],
+    count: usize,
+    pitch: Option<PitchEstimate>,
+    trigger: Option<(f32, bool)>,
+) -> ScopeSelection {
+    let count = count.clamp(2, signal.len().max(2)).min(signal.len());
+    if count < 2 {
+        return ScopeSelection {
+            range: 0..signal.len(),
             pitch,
-            triggered: trigger.is_some() && start != latest_start,
-        }
+            triggered: false,
+        };
+    }
+    let latest_start = signal.len() - count;
+    let start = trigger
+        .and_then(|(level, rising)| find_crossing_before(signal, latest_start, level, rising))
+        .unwrap_or(latest_start);
+    ScopeSelection {
+        range: start..start + count,
+        pitch,
+        triggered: trigger.is_some() && start != latest_start,
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct PitchEstimate {
+pub(super) struct PitchEstimate {
     period_samples: f32,
-    frequency_hz: f32,
+    pub(super) frequency_hz: f32,
     confidence: f32,
 }
 
 #[derive(Clone, Debug)]
-struct ScopeSelection {
-    range: Range<usize>,
-    pitch: Option<PitchEstimate>,
+pub(super) struct ScopeSelection {
+    pub(super) range: Range<usize>,
+    pub(super) pitch: Option<PitchEstimate>,
     triggered: bool,
 }
 
@@ -584,7 +675,7 @@ fn estimate_period(samples: &[f32], sample_rate: u32) -> Option<PitchEstimate> {
         .iter_mut()
         .enumerate()
         .take(max_lag + 1)
-        .skip(min_lag)
+        .skip(min_lag - 1)
     {
         let (mut cross, mut left_energy, mut right_energy) = (0.0_f64, 0.0_f64, 0.0_f64);
         for index in lag..reduced.len() {
@@ -607,30 +698,41 @@ fn estimate_period(samples: &[f32], sample_rate: u32) -> Option<PitchEstimate> {
     if best < 0.55 {
         return None;
     }
+    let refined_peak = |lag: usize| {
+        let peak = correlations[lag];
+        if lag < min_lag || lag >= max_lag {
+            return (0.0, peak);
+        }
+        let before = correlations[lag - 1];
+        let after = correlations[lag + 1];
+        let curvature = before - 2.0 * peak + after;
+        let offset = if curvature.is_finite() && curvature.abs() > 1.0e-6 {
+            (0.5 * (before - after) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        (offset, peak - 0.25 * (before - after) * offset)
+    };
     let threshold = (best * 0.9).max(0.55);
-    let lag = (min_lag + 1..max_lag)
+    let lag = (min_lag..max_lag)
         .find(|&lag| {
-            correlations[lag] >= threshold
+            // Compare interpolated peaks too: near the upper frequency limit,
+            // a period between integer lags otherwise loses to its octave.
+            correlations[lag] >= 0.55
                 && correlations[lag] >= correlations[lag - 1]
                 && correlations[lag] >= correlations[lag + 1]
+                && refined_peak(lag).1 >= threshold
         })
         .unwrap_or(best_lag);
-    let (before, peak, after) = (
-        correlations[lag - 1],
-        correlations[lag],
-        correlations[lag + 1],
-    );
-    let curvature = before - 2.0 * peak + after;
-    let offset = if curvature.abs() > 1.0e-6 {
-        (0.5 * (before - after) / curvature).clamp(-0.5, 0.5)
-    } else {
-        0.0
-    };
+    let (offset, confidence) = refined_peak(lag);
     let period_samples = (lag as f32 + offset) * step as f32;
+    if !period_samples.is_finite() || period_samples <= 0.0 || !confidence.is_finite() {
+        return None;
+    }
     Some(PitchEstimate {
         period_samples,
         frequency_hz: sample_rate as f32 / period_samples,
-        confidence: peak.clamp(0.0, 1.0),
+        confidence: confidence.clamp(0.0, 1.0),
     })
 }
 
@@ -748,7 +850,7 @@ fn paint_trace(
         .map(|&(index, sample)| {
             let x = plot.left()
                 + (index - range.start) as f32 / (range.len() - 1) as f32 * plot.width();
-            let y = plot.center().y - (sample * gain).clamp(-1.0, 1.0) * plot.height() * 0.46;
+            let y = plot.center().y - (sample * gain).clamp(-1.0, 1.0) * plot.height() * 0.5;
             let color = match layer {
                 PlotLayer::Static => {
                     if palette == Palette::Theme {
@@ -822,47 +924,17 @@ fn reduce_trace(
     result
 }
 
-fn paint_guides(
-    painter: &egui::Painter,
-    plot: Rect,
-    centerline: bool,
-    grid: bool,
-    theme: &AppTheme,
-) {
-    let guide = Stroke::new(0.7, mix(theme.background, theme.muted, 0.45));
-    if centerline {
-        painter.line_segment([plot.left_center(), plot.right_center()], guide);
-    }
-    if grid {
-        for position in [0.25, 0.5, 0.75] {
-            let x = plot.left() + position * plot.width();
-            painter.line_segment(
-                [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
-                guide,
-            );
-        }
-        for amplitude in [-0.5, 0.5] {
-            let y = plot.center().y - amplitude * plot.height() * 0.46;
-            painter.line_segment(
-                [Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)],
-                guide,
-            );
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn paint_labels(
     painter: &egui::Painter,
     rect: Rect,
-    sample_rate: u32,
+    _sample_rate: u32,
     channel: ScopeChannel,
     sync_mode: SyncMode,
     selection: &ScopeSelection,
     auto_scale: bool,
     theme: &AppTheme,
 ) {
-    let duration_ms = selection.range.len() as f32 / sample_rate.max(1) as f32 * 1_000.0;
     painter.text(
         rect.left_top() + Vec2::new(10.0, 4.0),
         egui::Align2::LEFT_TOP,
@@ -896,14 +968,9 @@ fn paint_labels(
         FontId::monospace(10.0),
         theme.muted,
     );
-    painter.text(
-        rect.left_bottom() + Vec2::new(10.0, -5.0),
-        egui::Align2::LEFT_BOTTOM,
-        format!("{duration_ms:.2} ms across"),
-        FontId::monospace(10.0),
-        theme.muted,
-    );
 }
+
+module_palette!(Oscilloscope, palette);
 
 #[cfg(test)]
 mod tests {
@@ -919,12 +986,30 @@ mod tests {
 
     #[test]
     fn pitch_follow_estimates_known_tones_and_rejects_silence() {
-        for frequency in [55.0, 110.0, 440.0, 1_200.0] {
+        for frequency in [30.0, 55.0, 110.0, 440.0, 1_200.0, 2_000.0] {
             let estimate = estimate_period(&sine(frequency, 48_000, 0.5), 48_000).unwrap();
             assert!((estimate.frequency_hz - frequency).abs() / frequency < 0.025);
             assert!(estimate.confidence > 0.8);
         }
         assert!(estimate_period(&vec![0.0; 24_000], 48_000).is_none());
+    }
+
+    #[test]
+    fn invalid_and_sparse_inputs_never_publish_a_nan_pitch() {
+        let mut sparse = vec![0.0; 24_000];
+        sparse[23_900] = 1.0;
+        for samples in [
+            sparse,
+            vec![f32::NAN; 24_000],
+            vec![f32::INFINITY; 512],
+            vec![],
+        ] {
+            if let Some(pitch) = estimate_period(&samples, 48_000) {
+                assert!(pitch.frequency_hz.is_finite() && pitch.frequency_hz > 0.0);
+                assert!(pitch.period_samples.is_finite() && pitch.period_samples > 0.0);
+                assert!((0.0..=1.0).contains(&pitch.confidence));
+            }
+        }
     }
 
     #[test]

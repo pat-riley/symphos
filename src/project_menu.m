@@ -137,6 +137,17 @@ char *symphos_project_choose(int save, const char *initial) {
 }
 void symphos_project_path_free(char *path) { free(path); }
 
+char *symphos_image_choose(void) {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = @"Choose Waterfall Image";
+    panel.allowedContentTypes = @[UTTypePNG, UTTypeJPEG, UTTypeBMP];
+    panel.canChooseDirectories = NO;
+    panel.canChooseFiles = YES;
+    panel.allowsMultipleSelection = NO;
+    if ([panel runModal] != NSModalResponseOK || !panel.URL) return NULL;
+    return strdup(panel.URL.path.UTF8String);
+}
+
 // MilkDrop asset dialogs are separate from Symphos project file types.
 char *symphos_milk_choose(int save, const char *initial, int folder) {
     NSSavePanel *panel = save ? [NSSavePanel savePanel] : [NSOpenPanel openPanel];

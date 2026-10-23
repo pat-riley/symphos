@@ -68,6 +68,9 @@ scenes for quick recall of signals and visuals together.
   messages, and a preview of the selected module/current capture configuration.
   Review before sharing; no automatic uploads.
 - Audio source selection in Settings → Audio, defaulting to system-output speakers
+- Shared visualizer inspectors with pinned audio routing and Geometry, Appearance,
+  and optional Camera tabs; 3D views share axis navigators, view presets, orbit,
+  sweep, wobble and auto-pan controls.
 - Resizable panes with interchangeable waterfall, sphere, cylinder, spectrum, waveform,
   spectrogram, stereometer, oscilloscope, Veroni, Strata, and Flux components
 - [Flux particle cloud](docs/workspace-layouts.md#flux-particle-cloud) with
@@ -169,9 +172,14 @@ align, and click it again to flip to the opposite side. Explicit Front, Back,
 Left, Right, Top, and Bottom buttons always snap to the named orthographic view.
 **Snap isometric…** offers four corner views from above and four from below,
 with equal foreshortening along all three axes. View presets preserve pan and zoom.
-**Auto-orbit** rotates around the level axis at 1–30 degrees/second (default 10),
-with an optional reverse direction. Manual camera adjustments, presets, and reset
-stop auto-orbit. Its speed is independent of history duration and analysis rate.
+**Camera → Auto-orbit** offers rotation around frequency X, time Y, level Z, or
+a custom diagonal axis. Choose continuous motion or an eased back-and-forth
+sweep, adjust speed/direction and sweep range, then optionally add **Wobble**
+with separate horizontal/vertical amounts and a cycle rate. Set rotation speed
+to zero for wobble alone. **Restart motion** returns to the saved starting view.
+Manual camera adjustments stop animation at the visible angle; presets and
+reset stop it too. Motion is time-based, independent of history and display rate,
+and does not mark saved presets as edited while running.
 X represents frequency, Y time, and Z level; angle fields use degrees.
 The gizmos use colored lines and plain axis labels without endpoint circles;
 axis clicking and dragging still work.
@@ -190,6 +198,17 @@ The inspector runs flush from the navigation bar to the bottom and right edges o
 the app, with a gap only beside the plots. Its header X closes it; any pane’s eye
 button reopens it. Clicking a visualization updates selection without opening a
 hidden inspector. Opening it resizes the visualization area.
+Under **Appearance → Color & level**, choose **Color source → Image** to drape
+the supplied starter image across the Waterfall. **Replace / upload image…** accepts PNG,
+JPEG or BMP files; images are resized to at most 1024 pixels per edge and saved
+inside the scene/preset. **Frequency × time** lays the image across the terrain,
+while **Frequency × level** makes peaks reveal different image heights. Use
+the horizontal/vertical flip controls to orient it. Surface mode shows the full
+texture; lines, dots, stems and bars take their colors from the same image.
+**Remove image** clears either a custom image or the starter and leaves an empty
+**Upload image…** slot. Until another image is chosen, gradient colors are used.
+The empty slot is saved with the scene; **Restore starter image** is explicit.
+
 Under **Geometry → Time & detail**, **History s** sets the waterfall's displayed time window.
 Under **Geometry**, **Length X** stretches the frequency axis and **Length Y**
 stretches the time axis independently. Both default to 1× with a 0.25×–10× range.
@@ -622,6 +641,14 @@ compiler; Linux additionally requires EGL development libraries.
 The bundled projectM library has its own LGPL license. See
 [third-party notices](THIRD_PARTY_NOTICES.md), including source/relinking requirements.
 
+### Signal input routing (experimental)
+
+The Signals mixer combines **System audio**, LFO, MIDI and detector channels.
+Right-click to add a System audio channel with a live spectrum preview; use its
+inspector for shared gain/filtering and sketch connections. Control channels
+retain their modulation curves. Sketch audio-response controls live in Signals. See
+[signal input routing](docs/signal-input-routing.md) for a testing walkthrough.
+
 ### Particle Waves
 
 Add **Particle Waves** for layered spectrum-driven ribbons, rings, spirals and
@@ -638,3 +665,8 @@ The Cymatics component adds incoming-audio Chladni sand, shaded wave surfaces, n
 **Spectral Bloom** turns measured spectrum columns into cascading luminous strands
 and particle clouds, with configurable image feedback, layer palettes and a full
 3D camera. See [Spectral Bloom](docs/spectral-bloom.md) for controls and behavior.
+
+Signal channels are **Audio**, **LFO** and **MIDI**, with ordered, type-aware
+inserts for detection and shaping. Audio channels retain a separate waveform /
+spectrum feed while detector inserts produce curves for macro modulation. See
+[signal inserts](docs/signal-inserts.md) for the main-audio plus bass-brightness workflow.

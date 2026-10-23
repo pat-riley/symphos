@@ -203,11 +203,13 @@ impl Appearance {
             .help_text("Visual brightness only. Values above one brighten toward white; measured levels and bar heights stay the same.");
         ui.add(crate::parameter::Parameter::new(&mut self.glow,0.0..=1.0,0.0).key("appearance.glow").text("Glow"))
             .help_text("A restrained halo around bars and traces. Pixel gaps remain visible; glow does not affect analysis or peak measurements.");
-        property_row(ui, "Black background", |ui| {
-            ui.checkbox(&mut self.black_background, "").help_text(
-                "Use a black spectrum canvas independently of the application GUI theme.",
-            );
-        });
+        if !crate::modules::flat_inspector(ui) {
+            property_row(ui, "Black background", |ui| {
+                ui.checkbox(&mut self.black_background, "").help_text(
+                    "Use a black spectrum canvas independently of the application GUI theme.",
+                );
+            });
+        }
     }
     pub(super) fn peak_controls(&mut self, ui: &mut egui::Ui, bars: bool) {
         if bars {

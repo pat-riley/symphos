@@ -274,7 +274,11 @@ impl SymphosApp {
             Add(kind) => self.add_component(kind, self.selected_pane, Edge::Right),
             Signal(method) => {
                 let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(id) = panel.bank.add(method) {
+                if let Some(id) = panel.bank.add_source(match method {
+                    crate::signals::Method::Lfo => crate::signals::Input::Lfo,
+                    crate::signals::Method::Midi => crate::signals::Input::Midi,
+                    _ => crate::signals::Input::System,
+                }) {
                     panel.bank.sync_slots();
                     panel.selected = Some(id);
                     panel.show_signals = true;

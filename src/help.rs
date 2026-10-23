@@ -61,7 +61,7 @@ pub fn toggle(ui: &mut egui::Ui, open: &mut bool) -> Response {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Show / hide Info View")
     });
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand)
-        .help_text("Show / hide Info View\nHover over controls to read their purpose and gestures. Info View stays at the bottom left and follows the height of the open Macros or Signals dock. Shortcut: F1");
+        .help_text("Show / hide Info View\nHover over controls to read their purpose and gestures. Info View fills the bottom dock when open alone, or sits beside Macros or Signals while either dock is open. Shortcut: F1");
     if response.clicked() {
         *open = !*open;
     }

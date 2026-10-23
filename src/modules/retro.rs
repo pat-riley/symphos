@@ -139,8 +139,10 @@ impl Appearance {
             .help_text(
                 "Reverse the color gradient without reversing the signal or scrolling direction.",
             );
-        ui.checkbox(&mut self.black_background, "Black canvas")
-            .help_text("Use a black component canvas independently of the app theme.");
+        if !crate::modules::flat_inspector(ui) {
+            ui.checkbox(&mut self.black_background, "Black canvas")
+                .help_text("Use a black component canvas independently of the app theme.");
+        }
     }
     pub fn coordinate(&self, t: f32) -> f32 {
         if self.reverse {

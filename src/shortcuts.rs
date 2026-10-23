@@ -200,6 +200,9 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
                 }
             });
             ui.separator();
+            ui.strong("Macros & signals");
+            ui.label("Select a channel, then use Left/Up or Right/Down to navigate.\nDouble-click a title to rename · Delete/Backspace: remove selection\nArrow keys keep their usual behavior in focused fields and open menus.");
+            ui.separator();
             ui.strong("Parameter editing");
             ui.label("Click number: exact entry · Enter: apply · Escape: cancel\nDrag field: adjust · Shift-drag: fine adjustment\nDouble-click beside number: reset · Left/right arrows: adjust focused field");
             ui.label("Right-click: reset or learn an absolute MIDI controller\nDrag an inspector label onto a macro to assign it");

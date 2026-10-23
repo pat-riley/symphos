@@ -1,20 +1,44 @@
 # Compact inspector and component colors
 
-Open a component's inspector with its eye button, **I**, or the navbar inspector
-button. The fixed icon rail selects one configuration tab at a time: audio
-mappings, geometry, motion, particles, appearance, camera, and component-specific
-analysis tabs. Hover icons for their names. The active tab title identifies the current controls.
+Open a component's inspector by right-clicking its pane and choosing **Inspect**, **I**, or the navbar inspector
+button. The pinned inspector header sits above the shared **Geometry**, **Appearance**,
+and optional **Camera** tabs. Color and lighting controls live in Appearance;
+audio processing stays in Signals. Dropdowns use the surrounding panel theme,
+compact text and flush selection rows.
 
 The inspector uses 22-point property rows, 12-point labels, aligned numeric
-fields, subtle alternating row shading, compact disclosure groups, and full-width
-rules. The header and tab rail remain fixed while properties scroll. Tab
+fields, flat themed surfaces, compact disclosure groups, and full-width
+rules. The header and tabs remain fixed while properties scroll. Tab
 selection is saved with the pane; scroll and disclosure positions are independent
 for each pane, module, and tab during the session. The performance bar's Inspect
 action selects the relevant tab.
 
+Signals, inserts, and Macros use this same inspector skin and pinned identity
+header, without tabs. Their properties scroll through full-width collapsible
+groups; values and source pickers share the same column alignment and field sizes.
+
+## Scene background
+
+The first group in **Appearance** sets the background for every sketch in the
+current scene. Choose Black (the default), Solid color, Linear gradient, or
+Radial gradient. Gradients expose two color swatches; linear gradients also
+have an angle (0° left to right, 90° top to bottom). This setting is independent
+of the application theme and travels with scenes, full-view presets, project
+files, recovery and recordings. Component-only presets leave it unchanged.
+Milkdrop presets paint their own opaque full-frame canvas and keep that behavior.
+
 ## Palette browser
 
-Choose the palette icon (**Appearance**), then open **Palette**. There are twenty
+**Settings → Theme & Colors → Default visualizer colors** sets the starting
+palette for newly added visualizers, independently of the GUI theme. It starts
+at **Classic LED** and supports factory and saved/custom gradients. Adding a pane
+or dragging a component into an existing pane uses this preference. Existing
+scenes, component presets, and inspector overrides retain their stored colors.
+The preference is local to this installation and is not a scene-wide color link.
+It covers all sixteen visualizers with the shared Palette control; MilkDrop
+presets and sketches with dedicated particle/material colors keep those systems.
+
+Choose **Appearance**, then open **Palette**. There are twenty
 factory gradient previews: Spectrum, Ocean, Ember, Heatmap, Viridis, Magma,
 Inferno, Plasma, Aurora, Ice, Electric lime, Pearl, Classic LED, Pixel fire,
 Phosphor green, Amber CRT, Neon nights, Candy sunset, Ultraviolet, and Monochrome.
@@ -29,6 +53,16 @@ Strata maps them to membrane activity; Flux moves through their colors. Scientif
 components retain their interpretation controls: waveform Color map maps signal
 level, while Static selects lane colors. Stereometer and oscilloscope palettes
 apply in Static mode; RGB and multiband modes keep their frequency colors.
+Cymatics uses the same picker for sand grains, wave surfaces, nodal patterns,
+and interference. Color driver selects grain variation/energy or vibration/signed
+wave; spread, offset and contrast control the sampled range. Plate color remains
+independent. Older two-color presets keep their exact endpoints until a palette
+is chosen. Palette edits change rendering without scattering or restarting grains.
+Particle Waves and Spectral Bloom share the same picker, including independent
+palettes in each layer's appearance override. Their Color driver and Gradient
+blend controls still select and blend colors. Older presets keep their authored
+three-color distribution until a palette is selected. Color edits preserve
+particle offsets and spectrum history.
 The compact Viridis/Magma/Inferno/Plasma gradients use five color anchors.
 
 ## Edit and save

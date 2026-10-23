@@ -177,7 +177,7 @@ fn optimized_mesh_preserves_reference_geometry_and_colors() {
     r.settings.audio_expand = 0.7;
     r.settings.audio_ripple = 0.6;
     r.energy = 0.4;
-    r.bands = std::array::from_fn(|i| i as f32 / 24.0);
+    r.bands = std::array::from_fn(|i| i as f32 / BANDS as f32);
     r.flow_phase = 0.13;
     r.spin_phase = 0.7;
     r.ripple_phase = 0.3;
@@ -209,25 +209,237 @@ fn optimized_mesh_preserves_reference_geometry_and_colors() {
         triangles.sort();
         triangles
     }
-    for style in [
-        Style::Membranes,
-        Style::Wireframe,
-        Style::Contours,
-        Style::Points,
+    for layout in [
+        SpectrumLayout::Layers,
+        SpectrumLayout::PoleToPole,
+        SpectrumLayout::AroundPetals,
     ] {
-        r.settings.style = style;
-        let expected = r.reference_mesh(rect, &AppTheme::default());
-        let actual = r.build_mesh(rect, &AppTheme::default());
-        assert_eq!(actual.indices.len(), expected.indices.len());
-        // Numerical changes stay subpixel; comparing quantized geometry catches
-        // topology loss while allowing insignificant sin_cos rounding.
-        let a = signature(&actual);
-        let b = signature(&expected);
-        let matching = a.iter().zip(&b).filter(|(a, b)| a == b).count();
+        r.settings.spectrum_layout = layout;
+        for style in [
+            Style::Membranes,
+            Style::Wireframe,
+            Style::Contours,
+            Style::Points,
+        ] {
+            r.settings.style = style;
+            let expected = r.reference_mesh(rect, &AppTheme::default());
+            let actual = r.build_mesh(rect, &AppTheme::default());
+            assert_eq!(actual.indices.len(), expected.indices.len());
+            // Numerical changes stay subpixel; comparing quantized geometry catches
+            // topology loss while allowing insignificant sin_cos rounding.
+            let a = signature(&actual);
+            let b = signature(&expected);
+            let matching = a.iter().zip(&b).filter(|(a, b)| a == b).count();
+            assert!(
+                matching as f32 / a.len() as f32 > 0.98,
+                "{style:?}: {matching}/{}",
+                a.len()
+            );
+        }
+    }
+}
+
+fn tone_frame(hz: f32, sequence: u64) -> AnalysisFrame {
+    let rate = 48_000;
+    let size = 8192;
+    let index = (hz * size as f32 / rate as f32).round() as usize;
+    AnalysisFrame {
+        sample_rate: rate,
+        fft_size: size,
+        sequence,
+        mix_rms: 0.15,
+        bins: (0..=size / 2)
+            .map(|i| crate::analysis::FrequencyBin {
+                frequency_hz: i as f32 * rate as f32 / size as f32,
+                magnitude: if i == index { 0.25 } else { 0.0 },
+                dbfs: if i == index { -12.0412 } else { -120.0 },
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+fn direct_flower() -> Resonance {
+    let mut r = Resonance::default();
+    r.settings.flow = 0.0;
+    r.settings.spin = 0.0;
+    r.settings.ripple_speed = 0.0;
+    r.settings.ripple_amount = 0.0;
+    r.settings.audio_expand = 0.0;
+    r.settings.audio_ripple = 0.0;
+    r.settings.audio_light = 0.0;
+    r.settings.attack_accent = 0.0;
+    r.settings.response_ms = 0.0;
+    r.settings.frequency.smoothing = 0.0;
+    r
+}
+#[test]
+fn tones_in_different_frequency_ranges_move_different_layers() {
+    let mut strongest = Vec::new();
+    for hz in [375.0, 6000.0] {
+        let mut r = direct_flower();
+        let before: Vec<_> = (0..r.settings.layers)
+            .map(|layer| r.point(layer, 0.0, 0.5))
+            .collect();
+        let frame = tone_frame(hz, 1);
+        let unchanged = frame.bins.clone();
+        r.update(&frame, Instant::now(), true);
+        let levels: Vec<_> = (0..r.settings.layers)
+            .map(|layer| r.spectrum_level(layer, 0.0, 0.5))
+            .collect();
+        let peak = levels
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
+        strongest.push(peak);
+        assert!(levels[peak] > 0.5);
+        assert!(r.point(peak, 0.0, 0.5)[0] > before[peak][0] * 1.15);
+        for layer in 0..r.settings.layers {
+            if levels[layer] == 0.0 {
+                assert_eq!(r.point(layer, 0.0, 0.5), before[layer]);
+            }
+        }
+        assert!(std::sync::Arc::ptr_eq(&frame.bins, &unchanged));
+    }
+    assert!(strongest[1] > strongest[0] + 2);
+}
+#[test]
+fn new_response_keeps_the_silent_flower_and_all_mapping_seams_closed() {
+    let mut r = Resonance::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0));
+    let normal = r.build_mesh(rect, &AppTheme::default());
+    r.settings.spectrum_depth = 0.0;
+    r.settings.attack_accent = 0.0;
+    r.settings.spectrum_light = 0.0;
+    let legacy = r.build_mesh(rect, &AppTheme::default());
+    assert_eq!(normal, legacy);
+    for layout in [
+        SpectrumLayout::Layers,
+        SpectrumLayout::PoleToPole,
+        SpectrumLayout::AroundPetals,
+    ] {
+        let mut r = direct_flower();
+        r.settings.spectrum_layout = layout;
+        r.update(&tone_frame(375.0, 1), Instant::now(), true);
+        for layer in 0..r.settings.layers {
+            for v in [0.0, 0.3, 0.6, 1.0] {
+                let a = r.point(layer, 0.0, v);
+                let b = r.point(layer, 1.0, v);
+                assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5));
+            }
+        }
         assert!(
-            matching as f32 / a.len() as f32 > 0.98,
-            "{style:?}: {matching}/{}",
-            a.len()
+            r.build_mesh(rect, &AppTheme::default())
+                .vertices
+                .iter()
+                .all(|v| v.pos.is_finite())
         );
     }
+}
+#[test]
+fn attack_accents_are_time_based_hold_when_paused_and_release_on_sustained_audio() {
+    let start = Instant::now();
+    let frame = tone_frame(375.0, 2);
+    let mut outputs = Vec::new();
+    for fps in [30, 60, 120] {
+        let mut r = Resonance::default();
+        r.update(&AnalysisFrame::default(), start, true);
+        for i in 1..=fps / 5 {
+            r.update(
+                &frame,
+                start + Duration::from_secs_f64(i as f64 / fps as f64),
+                true,
+            );
+        }
+        outputs.push((r.energy, r.transient));
+        assert!(r.transient > 0.1);
+        let held = (r.energy, r.transient, r.bands, r.flow_phase);
+        r.update(&frame, start + Duration::from_millis(200), true);
+        assert_eq!(held, (r.energy, r.transient, r.bands, r.flow_phase));
+        for i in 1..=2 * fps {
+            r.update(
+                &frame,
+                start + Duration::from_millis(200) + Duration::from_secs_f64(i as f64 / fps as f64),
+                true,
+            );
+        }
+        assert!(r.transient < 0.001);
+        for i in 1..=2 * fps {
+            r.update(
+                &frame,
+                start
+                    + Duration::from_millis(2200)
+                    + Duration::from_secs_f64(i as f64 / fps as f64),
+                false,
+            );
+        }
+        assert!(r.bands.iter().all(|v| *v < 0.001));
+        assert!(r.energy < 0.001);
+        r.clear();
+        assert_eq!(r.transient, 0.0);
+    }
+    for &(energy, transient) in &outputs[1..] {
+        assert!((energy - outputs[0].0).abs() < 1e-5);
+        assert!((transient - outputs[0].1).abs() < 1e-5);
+    }
+}
+#[test]
+fn legacy_resonance_presets_keep_their_geometry_and_gain_spectrum_controls() {
+    let settings = ResonanceSettings {
+        radius: 0.81,
+        petals: 5,
+        twist: 17.0,
+        ..Default::default()
+    };
+    let mut value = serde_json::to_value(&settings).unwrap();
+    for key in [
+        "spectrum_layout",
+        "spectrum_depth",
+        "spectrum_visibility",
+        "attack_accent",
+        "spectrum_light",
+    ] {
+        value.as_object_mut().unwrap().remove(key);
+    }
+    let restored: ResonanceSettings = serde_json::from_value(value).unwrap();
+    assert_eq!(restored, settings);
+    assert_eq!(
+        crate::modules::ModuleKind::Resonance.label(),
+        "Lotus Flower"
+    );
+}
+
+#[test]
+fn attack_accent_survives_display_gain_changes_without_pulsing_on_noise() {
+    let start = Instant::now();
+    let mut pulses = Vec::new();
+    for rms in [0.05, 0.5] {
+        let mut r = Resonance::default();
+        r.settings.frequency.gain = 36.0;
+        r.update(&AnalysisFrame::default(), start, true);
+        for i in 1..=12 {
+            r.update(
+                &AnalysisFrame {
+                    mix_rms: rms,
+                    ..Default::default()
+                },
+                start + Duration::from_secs_f64(i as f64 / 60.0),
+                true,
+            );
+        }
+        pulses.push(r.transient);
+    }
+    assert!((pulses[0] - pulses[1]).abs() < 1e-5);
+    assert!(pulses[0] > 0.1);
+    let mut quiet = Resonance::default();
+    quiet.update(
+        &AnalysisFrame {
+            mix_rms: 0.0001,
+            ..Default::default()
+        },
+        start,
+        true,
+    );
+    assert_eq!(quiet.transient, 0.0);
 }

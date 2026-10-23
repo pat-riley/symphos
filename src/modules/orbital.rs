@@ -18,6 +18,7 @@ macro_rules! parameters {
         #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
         #[serde(default)]
         pub(crate) struct OrbitalSettings {
+            pub camera_motion: super::camera_motion::Settings,
             $(pub $field:f32,)*
             pub quality:u32,
             pub attractors:u32,
@@ -43,7 +44,7 @@ macro_rules! parameters {
             pub auto_orbit:bool,
         }
         impl Default for OrbitalSettings {
-            fn default()->Self { Self {$($field:$default,)*quality:1,attractors:3,particle_shape:0,color_palette:0,color_mode:0,color_start:[20,220,255],color_end:[255,40,150],orb_style:0,orb_color_mode:0,orb_palette:2,orb_color_start:[20,220,255],orb_color_end:[255,40,150],orb_colors:[[40,200,255],[255,70,140],[255,190,40],[120,255,90],[150,90,255]],orb_field_enabled:false,orb_solid:true,show_paths:false,show_grid:true,show_axes:true,show_gizmo:true,grid_plane:0,projection:0,auto_orbit:false} }
+            fn default()->Self { Self {camera_motion:super::camera_motion::Settings::y_up_default(),$($field:$default,)*quality:1,attractors:3,particle_shape:0,color_palette:0,color_mode:0,color_start:[20,220,255],color_end:[255,40,150],orb_style:0,orb_color_mode:0,orb_palette:2,orb_color_start:[20,220,255],orb_color_end:[255,40,150],orb_colors:[[40,200,255],[255,70,140],[255,190,40],[120,255,90],[150,90,255]],orb_field_enabled:false,orb_solid:true,show_paths:false,show_grid:true,show_axes:true,show_gizmo:false,grid_plane:0,projection:0,auto_orbit:false} }
         }
         impl OrbitalSettings {
             fn sanitize(&mut self) {
@@ -58,7 +59,7 @@ macro_rules! parameters {
                 self.grid_plane=self.grid_plane.min(3); self.projection=self.projection.min(1);
             }
             fn controls(&mut self,ui:&mut egui::Ui,section:&str) {
-                $(if section==$section {
+                $(if section==$section && !(stringify!($field)=="camera_orbit_speed" && super::visual_inspector(ui).is_some()) {
                     ui.add(Parameter::new(&mut self.$field,$min..=$max,$default).key(stringify!($field)).text($label)).help_text_with(|| help::parameter(stringify!($field),$label,$help,$section,[$min as f32,$max as f32,$default as f32]));
                 })*
             }
@@ -266,7 +267,7 @@ impl Orbital {
                     .is_some_and(|p| gizmo_rect.contains(p))
             });
         let response=ui.interact(rect,ui.id().with("orbital-camera"),Sense::click_and_drag()).help_text("Orbital · GPU flocking\nDrag to rotate, Shift/right-drag to pan, scroll to zoom, double-click to reset the camera. Expose inspector controls as scene macros to drive them from Signals.");
-        if response.dragged() && !over_gizmo {
+        if response.dragged() && !over_gizmo && !super::camera::over_navigator(ui) {
             s.auto_orbit = false;
             let delta = ui.input(|i| i.pointer.delta());
             if response.dragged_by(egui::PointerButton::Secondary)
@@ -287,11 +288,11 @@ impl Orbital {
                 );
             }
         }
-        if response.hovered() && !over_gizmo {
+        if response.hovered() && !over_gizmo && !super::camera::over_navigator(ui) {
             s.zoom =
                 (s.zoom * (ui.input(|i| i.smooth_scroll_delta.y) * 0.002).exp()).clamp(0.25, 3.0);
         }
-        if response.double_clicked() && !over_gizmo {
+        if response.double_clicked() && !over_gizmo && !super::camera::over_navigator(ui) {
             camera::reset(s);
         }
         s.sanitize();
@@ -484,11 +485,7 @@ fn wrap_angle(v: f32) -> f32 {
     (v + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
-impl OrbitalSettings {
-    pub(super) fn automatic_yaw(&mut self) -> Option<&mut f32> {
-        self.auto_orbit.then_some(&mut self.yaw)
-    }
-}
+impl OrbitalSettings {}
 
 impl OrbitalSettings {
     fn apply_look(&mut self, solar: bool) {
@@ -589,5 +586,30 @@ impl BurstEnvelope {
             self.last = Some(id);
         }
         self.value
+    }
+}
+
+impl super::camera::Controlled for Orbital {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan_x,
+            pan_y: &mut s.pan_y,
+            degrees: false,
+            y_up: true,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.camera_orbit_speed,
+            speed_radians: false,
+            default_speed: 10.0,
+            speed_limit: 60.0,
+            speed_key: "camera_orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
+        }
     }
 }

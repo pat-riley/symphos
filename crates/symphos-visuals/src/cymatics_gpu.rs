@@ -18,8 +18,8 @@ pub struct CymaticsFrame {
     pub axis_y: [f32; 4],
     pub axis_z: [f32; 4],
     pub camera: [f32; 4], // distance, focal, orthographic, mean vibration energy
-    pub color_a: [f32; 4],
-    pub color_b: [f32; 4],
+    pub gradient: [[f32; 4]; 8], // sRGB stops, matching the shared palette editor
+    pub palette: [f32; 4], // count, cyclic, reserved
     pub plate_color: [f32; 4],
     pub color: [f32; 4],  // driver, spread, offset, contrast
     pub output: [f32; 4], // width,height,srgb,grain count
@@ -463,6 +463,110 @@ mod tests {
         readback.slice(..).get_mapped_range().unwrap().to_vec()
     }
     #[test]
+    fn cymatics_gradient_uniform_layout_matches_wgsl() {
+        assert_eq!(std::mem::size_of::<CymaticsFrame>(), 26 * 16);
+        assert_eq!(std::mem::offset_of!(CymaticsFrame, gradient), 14 * 16);
+        assert_eq!(std::mem::offset_of!(CymaticsFrame, palette), 22 * 16);
+        assert_eq!(std::mem::offset_of!(CymaticsFrame, output), 25 * 16);
+    }
+    #[test]
+    #[ignore = "requires a real compute GPU"]
+    fn cymatics_multistop_and_cyclic_palettes_render_in_every_mode_without_scattering() {
+        pollster::block_on(async {
+            let instance = w::Instance::default();
+            let adapter = instance.request_adapter(&Default::default()).await.unwrap();
+            let (d, q) = adapter.request_device(&Default::default()).await.unwrap();
+            let errors = d.push_error_scope(w::ErrorFilter::Validation);
+            let l = CymaticsLibrary::new(&d, w::TextureFormat::Rgba8Unorm);
+            let mut gpu = CymaticsGpu::new(&d, &l, 4096, [192, 128]);
+            let mut frame = CymaticsFrame::zero();
+            frame.geometry = [0.0, 1.0, 0.0, 0.0];
+            frame.grains = [3.0, 0.0, 1.0, 0.0];
+            frame.surface = [1.0, 1.0, 0.075, 0.0];
+            frame.light = [1.0, 0.0, 0.0, 0.5];
+            frame.direction = [0.0, 1.0, 0.0, 0.0];
+            frame.view = [1.5, 1.0, 0.0, 0.0];
+            frame.axis_x = [1.0, 0.0, 0.0, 0.0];
+            frame.axis_y = [0.0, 0.0, -1.0, 0.0];
+            frame.axis_z = [0.0, 1.0, 0.0, 0.0];
+            frame.camera = [4.0, 2.4, 1.0, 0.5];
+            let red = [1.0, 0.0, 0.0, 1.0];
+            let green = [0.0, 1.0, 0.0, 1.0];
+            let blue = [0.0, 0.0, 1.0, 1.0];
+            let field = vec![[0.0; 4]; GRID * GRID];
+            let mut initial = None;
+            for mode in 0..4 {
+                frame.geometry[2] = mode as f32;
+                frame.surface[0] = if mode == 0 { 0.0 } else { 1.0 };
+                // Matching endpoint colors make a two-endpoint shortcut fail:
+                // the middle stop must actually reach grains and surfaces.
+                for (count, cyclic, t, expected) in [
+                    (2, false, 0.5, [0.5, 0.5, 0.0, 1.0]),
+                    (3, false, 0.25, [0.5, 0.5, 0.0, 1.0]),
+                    (3, false, 0.5, green),
+                    (3, true, 0.5, [0.5, 0.5, 0.0, 1.0]),
+                    (3, true, 1.0 / 3.0, green),
+                    (3, true, 1.0, red),
+                    (8, false, 6.0 / 7.0, blue),
+                    (8, true, 6.0 / 8.0, blue),
+                    (8, true, 1.0, red),
+                ] {
+                    frame.gradient = [red; 8];
+                    frame.gradient[1] = green;
+                    frame.gradient[6] = blue;
+                    frame.palette = [count as f32, u8::from(cyclic) as f32, 0.0, 0.0];
+                    frame.color = [0.0, 0.0, t, 1.0];
+                    let pixels = d.create_buffer(&w::BufferDescriptor {
+                        label: None,
+                        size: 192 * 128 * 4,
+                        usage: w::BufferUsages::COPY_DST | w::BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    });
+                    let mut e = d.create_command_encoder(&Default::default());
+                    gpu.prepare(&d, &mut e, &l, frame, &field, [192, 128]);
+                    e.copy_texture_to_buffer(
+                        w::TexelCopyTextureInfo {
+                            texture: &gpu.texture,
+                            mip_level: 0,
+                            origin: w::Origin3d::ZERO,
+                            aspect: w::TextureAspect::All,
+                        },
+                        w::TexelCopyBufferInfo {
+                            buffer: &pixels,
+                            layout: w::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(192 * 4),
+                                rows_per_image: Some(128),
+                            },
+                        },
+                        w::Extent3d {
+                            width: 192,
+                            height: 128,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    q.submit([e.finish()]);
+                    let data = read(&d, &q, &pixels, 192 * 128 * 4);
+                    let brightest = data.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).unwrap();
+                    assert!(brightest[3] > 250, "mode {mode} renders opaque pixels");
+                    for c in 0..3 {
+                        assert!(
+                            (brightest[c] as f32 - expected[c] * 255.0).abs() < 3.0,
+                            "mode {mode}, stops {count}, cyclic {cyclic}, t {t}: {brightest:?}, expected {expected:?}"
+                        );
+                    }
+                    let particles = read(&d, &q, &gpu.particles, 4096 * 16);
+                    if let Some(initial) = &initial {
+                        assert_eq!(&particles, initial, "color changes preserve paused grains");
+                    } else {
+                        initial = Some(particles);
+                    }
+                }
+            }
+            assert!(errors.pop().await.is_none());
+        });
+    }
+    #[test]
     #[ignore = "requires a real compute GPU"]
     fn cymatics_gpu_settles_renders_all_modes_and_handles_resize() {
         pollster::block_on(async {
@@ -486,8 +590,12 @@ mod tests {
             frame.axis_y = [0.0, 0.0, -1.0, 0.0];
             frame.axis_z = [0.0, 1.0, 0.0, 0.0];
             frame.camera = [4.0, 2.4, 1.0, 0.5];
-            frame.color_a = [0.9, 0.8, 0.6, 1.0];
-            frame.color_b = [1.0, 1.0, 0.95, 1.0];
+            // Exercise the full eight-stop lookup in the render timing below.
+            frame.gradient = std::array::from_fn(|i| {
+                let t = i as f32 / 7.0;
+                [0.9 + 0.1 * t, 0.8 + 0.2 * t, 0.6 + 0.35 * t, 1.0]
+            });
+            frame.palette = [8.0, 0.0, 0.0, 0.0];
             frame.plate_color = [0.02, 0.03, 0.04, 1.0];
             frame.color = [0.0, 0.7, 0.0, 1.0];
             let field: Vec<_> = crate::cymatics::grid()

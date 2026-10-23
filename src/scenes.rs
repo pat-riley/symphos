@@ -2,7 +2,9 @@
 use crate::help::HoverHelp;
 use crate::project::SceneState;
 use serde::{Deserialize, Serialize};
+mod fingerprint;
 pub mod library;
+mod names;
 
 pub const MAX_SCENES: usize = 64;
 pub const MAX_DOCUMENT_BYTES: usize = 64_000_000;
@@ -11,9 +13,31 @@ pub struct Scene {
     pub id: u64,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<PresetLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<library::Preview>,
     #[serde(flatten)]
     pub state: SceneState,
+}
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct PresetLink {
+    pub id: u64,
+    #[serde(with = "fingerprint")]
+    pub baseline: u64,
+    pub edited: bool,
+}
+impl Scene {
+    pub fn display_name(&self) -> String {
+        format!(
+            "{}{}",
+            self.name,
+            if self.preset.as_ref().is_some_and(|p| p.edited) {
+                " (edited)"
+            } else {
+                ""
+            }
+        )
+    }
 }
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Book {
@@ -27,6 +51,7 @@ impl Book {
             scenes: vec![Scene {
                 id: 1,
                 name: "Scene 1".into(),
+                preset: None,
                 preview: None,
                 state,
             }],
@@ -36,6 +61,9 @@ impl Book {
     }
     pub fn current(&self) -> Option<&Scene> {
         self.scenes.iter().find(|s| s.id == self.active_scene)
+    }
+    pub fn current_mut(&mut self) -> Option<&mut Scene> {
+        self.scenes.iter_mut().find(|s| s.id == self.active_scene)
     }
     pub fn store(&mut self, state: SceneState) {
         if let Some(scene) = self.scenes.iter_mut().find(|s| s.id == self.active_scene) {
@@ -66,6 +94,7 @@ impl Book {
             Scene {
                 id,
                 name: name.trim().into(),
+                preset: None,
                 preview: None,
                 state,
             },
@@ -78,6 +107,7 @@ impl Book {
             && let Some(scene) = self.scenes.iter_mut().find(|s| s.id == id)
         {
             scene.name = name.trim().into();
+            scene.preset = None;
         }
     }
     pub fn move_by(&mut self, id: u64, delta: isize) {
@@ -120,6 +150,7 @@ impl Book {
                     && s.id < self.next_scene_id
                     && ids.insert(s.id)
                     && valid_name(&s.name)
+                    && s.preset.as_ref().is_none_or(|p| p.id > 0)
                     && s.state.validate()
                     && s.preview.as_ref().is_none_or(library::Preview::valid)
             })
@@ -144,8 +175,20 @@ pub enum Action {
 pub struct Browser {
     rename: Option<(u64, String)>,
     delete: Option<u64>,
+    last_change_check: Option<std::time::Instant>,
 }
 impl Browser {
+    pub fn check_edits_due(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if self
+            .last_change_check
+            .is_some_and(|last| now.duration_since(last).as_millis() < 100)
+        {
+            return false;
+        }
+        self.last_change_check = Some(now);
+        true
+    }
     pub fn rename_current(&mut self, book: &Book) {
         if let Some(scene) = book.current() {
             self.rename = Some((scene.id, scene.name.clone()));
@@ -160,7 +203,12 @@ impl Browser {
         self.rename.is_some() || self.delete.is_some()
     }
 
-    pub fn toolbar(&mut self, ui: &mut egui::Ui, book: &Book) -> Option<Action> {
+    pub fn toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        book: &Book,
+        theme: &crate::theme::AppTheme,
+    ) -> Option<Action> {
         use crate::workspace_ui::NAV_CONTROL_HEIGHT as H;
         let mut action = None;
         let width = ui.available_width().min(590.0);
@@ -170,24 +218,51 @@ impl Browser {
                 .id_salt("scene-selector")
                 .max_rect(rect),
         );
+        // One quiet surface, with adjacent segments instead of separate buttons.
+        let base = theme.navigation;
+        let text = base.lerp_to_gamma(theme.foreground, 0.80);
+        let divider = egui::Stroke::new(1.0, base.lerp_to_gamma(theme.foreground, 0.16));
+        row.painter().rect_filled(rect, 2.0, base);
+        row.spacing_mut().item_spacing.x = 0.0;
+        row.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+        let visuals = row.visuals_mut();
+        visuals.override_text_color = Some(text);
+        visuals.panel_fill = base;
+        visuals.window_fill = base;
+        visuals.window_stroke = divider;
+        visuals.selection.bg_fill = base.lerp_to_gamma(theme.foreground, 0.10);
+        visuals.selection.stroke = egui::Stroke::new(1.0, text);
+        for (widget, amount) in [
+            (&mut visuals.widgets.inactive, 0.0),
+            (&mut visuals.widgets.hovered, 0.055),
+            (&mut visuals.widgets.active, 0.09),
+            (&mut visuals.widgets.open, 0.055),
+        ] {
+            widget.bg_fill = base.lerp_to_gamma(theme.foreground, amount);
+            widget.weak_bg_fill = widget.bg_fill;
+            widget.bg_stroke = egui::Stroke::NONE;
+            widget.fg_stroke.color = text;
+            widget.corner_radius = egui::CornerRadius::ZERO;
+            widget.expansion = 0.0;
+        }
+        let picker_width = (width - H * 3.0 - 64.0).max(1.0);
         row.horizontal_centered(|ui| {
             if ui.add_enabled(book.scenes.len()>1, egui::Button::new("‹").min_size(egui::Vec2::splat(H))).help_text("Previous scene · recalls Signals and Visualize together").clicked() { action=Some(Action::Switch(book.cycle(-1))); }
             let current = book.current();
             let number = book.scenes.iter().position(|s| s.id == book.active_scene).unwrap_or(0)+1;
-            let label = format!("{number:02} · {}", current.map_or("Scene 1", |s| s.name.as_str()));
-            let picker_width = (width - H*3.0 - 64.0 - ui.spacing().item_spacing.x*4.0).max(50.0);
+            let label = format!("{number:02} · {}", current.map_or_else(|| "Scene 1".into(), Scene::display_name));
             let button = ui.add_sized([picker_width,H],egui::Button::new(label).truncate()).help_text("Scenes include signals, mappings, components and macros. Switching keeps your edits; File → Save Project saves every scene.");
             let arrow = button.rect.right_center() - egui::vec2(11.0, 0.0);
             ui.painter().add(egui::Shape::convex_polygon(
                 vec![arrow + egui::vec2(-3.5, -2.0), arrow + egui::vec2(3.5, -2.0), arrow + egui::vec2(0.0, 2.5)],
-                ui.visuals().text_color(), egui::Stroke::NONE,
+                text, egui::Stroke::NONE,
             ));
             egui::Popup::menu(&button).show(|ui| {
                 ui.set_min_width(300.0);
                 ui.strong("Project scenes");
                 egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                     for (i,scene) in book.scenes.iter().enumerate() {
-                        if ui.selectable_label(scene.id==book.active_scene,format!("{:02}   {}",i+1,scene.name)).clicked() { action=Some(Action::Switch(scene.id));ui.close(); }
+                        if ui.selectable_label(scene.id==book.active_scene,format!("{:02}   {}",i+1,scene.display_name())).clicked() { action=Some(Action::Switch(scene.id));ui.close(); }
                     }
                 });
                 ui.separator();
@@ -210,6 +285,12 @@ impl Browser {
             if ui.add_sized([64.0,H],egui::Button::new("Library")).help_text("Manage project scenes and reusable scene presets.").clicked(){action=Some(Action::Library);}
             if crate::icons::sized_button(ui, crate::icons::Icon::Save, false, H, "Save the current scene as a named preset, including signals and macros.").clicked(){action=Some(Action::SavePreset);}
         });
+        for offset in [H, H + picker_width, H * 2.0 + picker_width, width - H] {
+            row.painter()
+                .vline(rect.left() + offset, rect.y_range(), divider);
+        }
+        row.painter()
+            .rect_stroke(rect, 2.0, divider, egui::StrokeKind::Inside);
         action
     }
     pub fn dialogs(&mut self, ctx: &egui::Context, book: &Book) -> Option<Action> {
@@ -283,6 +364,7 @@ mod tests {
     };
     fn state() -> SceneState {
         SceneState {
+            background: Default::default(),
             macros: None,
             signals: Default::default(),
             panes: vec![ModulePane::new(ModuleKind::Flux).snapshot()],

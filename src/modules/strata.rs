@@ -7,6 +7,8 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::{f32::consts::TAU, time::Instant};
 
 const MAX_LAYERS: usize = 12;
+module_palette!(Strata, settings.palette);
+
 #[cfg(test)]
 const LOW_HZ: f32 = 20.0;
 #[cfg(test)]
@@ -59,6 +61,12 @@ use crate::colors::Palette;
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct StrataSettings {
+    camera_motion: super::camera_motion::Settings,
+    show_gizmo: bool,
+    show_grid: bool,
+    pan_x: f32,
+    pan_y: f32,
+    roll: f32,
     #[serde(default)]
     pub(crate) modulation: Option<ModulationSettings>,
     performance_open: bool,
@@ -108,6 +116,12 @@ pub(crate) struct StrataSettings {
 impl Default for StrataSettings {
     fn default() -> Self {
         Self {
+            camera_motion: Default::default(),
+            show_gizmo: false,
+            show_grid: false,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            roll: 0.0,
             modulation: Some(ModulationSettings::for_visualizer(Visualizer::Strata)),
             performance_open: true,
             brightness: 1.0,
@@ -177,7 +191,7 @@ impl StrataSettings {
             lift: -1.0, 1.0; spread: 0.1, 1.0; grain_size: 0.025, 0.18;
             point_size: 0.4, 3.0; trails: 0.0, 1.0;
             line_width: 0.25, 2.0; mesh_opacity: 0.0, 1.0; particle_opacity: 0.0, 1.0; glow: 0.0, 1.0;
-            yaw: -180.0, 180.0; elevation: -70.0, 70.0; zoom: 0.4, 2.5; orbit_speed: -12.0, 12.0;
+            yaw: -180.0, 180.0; elevation: -180.0, 180.0; zoom: 0.4, 2.5; orbit_speed: -12.0, 12.0;
         }
         let modulation = self.modulation.get_or_insert_with(|| {
             let mut m = ModulationSettings::migrate(
@@ -385,6 +399,10 @@ impl Strata {
         self.clear();
     }
     fn reset_camera(&mut self) {
+        self.settings.auto_orbit = false;
+        self.settings.pan_x = 0.0;
+        self.settings.pan_y = 0.0;
+        self.settings.roll = 0.0;
         let defaults = StrataSettings::default();
         self.settings.yaw = defaults.yaw;
         self.settings.elevation = defaults.elevation;
@@ -584,9 +602,28 @@ impl Strata {
             );
             ui.checkbox(&mut s.show_layers, "Show membranes");
             ui.checkbox(&mut s.show_frame, "Show volume frame");
-            ui.checkbox(&mut s.labels, "Show navigation hints");
         });
         settings_panel(ui, "Camera", |ui| {
+            super::settings_group(ui, "Framing", |ui| {
+                for (key, name, value) in [
+                    ("pan_x", "Pan X", &mut s.pan_x),
+                    ("pan_y", "Pan Y", &mut s.pan_y),
+                ] {
+                    ui.add(
+                        Parameter::new(value, -2.0..=2.0, 0.0)
+                            .bounds(-4.0..=4.0)
+                            .key(key)
+                            .text(name),
+                    );
+                }
+                ui.checkbox(&mut s.show_grid, "XYZ reference grid");
+            });
+
+            ui.add(
+                Parameter::new(&mut s.roll, -180.0..=180.0, 0.0)
+                    .key("roll")
+                    .text("Roll °"),
+            );
             p!(
                 ui,
                 yaw,
@@ -608,16 +645,18 @@ impl Strata {
                 "Zoom",
                 "Magnification; scrolling over the scene also adjusts zoom."
             );
-            ui.checkbox(&mut s.auto_orbit, "Auto orbit").help_text(
-                "Slowly orbit the sculpture. Dragging stops auto orbit at the current angle.",
-            );
-            p!(
-                ui,
-                orbit_speed,
-                -12.0..=12.0,
-                "Orbit °/s",
-                "Automatic camera rotation speed and direction; independent of the wave clock."
-            );
+            if super::visual_inspector(ui).is_none() {
+                ui.checkbox(&mut s.auto_orbit, "Auto orbit").help_text(
+                    "Slowly orbit the sculpture. Dragging stops auto orbit at the current angle.",
+                );
+                p!(
+                    ui,
+                    orbit_speed,
+                    -12.0..=12.0,
+                    "Orbit °/s",
+                    "Automatic camera rotation speed and direction; independent of the wave clock."
+                );
+            }
         });
     }
     fn advance(&mut self, now: Instant, frame: &AnalysisFrame, live: bool) {
@@ -758,22 +797,45 @@ impl Strata {
             ui.id().with("strata-orbit"),
             egui::Sense::click_and_drag(),
         );
-        if response.dragged() {
+        if response.dragged() && !super::camera::over_navigator(ui) {
             let delta = ui.input(|i| i.pointer.delta());
-            self.settings.yaw =
-                wrap_degrees(self.settings.yaw + self.orbit as f32 + delta.x * 0.35);
-            self.orbit = 0.0;
-            self.settings.elevation = (self.settings.elevation + delta.y * 0.25).clamp(-70.0, 70.0);
+            if response.dragged_by(egui::PointerButton::Secondary)
+                || response.dragged_by(egui::PointerButton::Middle)
+                || ui.input(|i| i.modifiers.shift)
+            {
+                self.settings.pan_x += delta.x / rect.width();
+                self.settings.pan_y += delta.y / rect.height();
+            } else if let Some(p) = response.interact_pointer_pos() {
+                let mut yaw = self.settings.yaw.to_radians();
+                let mut elevation = self.settings.elevation.to_radians();
+                let mut roll = self.settings.roll.to_radians();
+                super::trackball::drag(
+                    &mut yaw,
+                    &mut elevation,
+                    &mut roll,
+                    p - delta,
+                    p,
+                    rect.center(),
+                    rect.width().min(rect.height()) * 0.4,
+                );
+                self.settings.yaw = yaw.to_degrees();
+                self.settings.elevation = elevation.to_degrees();
+                self.settings.roll = roll.to_degrees();
+            }
             self.settings.auto_orbit = false;
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !super::camera::over_navigator(ui) {
             self.reset_camera();
         }
-        if response.hovered() {
+        if response.hovered() && !super::camera::over_navigator(ui) {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             self.settings.zoom = (self.settings.zoom * (scroll * 0.002).exp()).clamp(0.4, 2.5);
         }
+        self.render_settings = Some(self.effective_settings());
         let camera = Camera::fit(rect.shrink(24.0), self.render_settings(), self.orbit as f32);
+        if self.settings.show_grid {
+            super::camera::grid(ui, rect, |p| camera.project(p).0);
+        }
         let items = self.scene(&camera, theme);
         let mut mesh = egui::Mesh::default();
         for item in items {
@@ -804,15 +866,6 @@ impl Strata {
             }
         }
         ui.painter_at(rect).add(egui::Shape::mesh(mesh));
-        if self.settings.labels && rect.width() > 290.0 && rect.height() > 180.0 {
-            ui.painter_at(rect).text(
-                rect.left_bottom() + Vec2::new(10.0, -8.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Drag: orbit · Scroll: zoom · Double-click: reset view",
-                egui::FontId::monospace(9.0),
-                theme.muted,
-            );
-        }
     }
     fn scene(&self, camera: &Camera, theme: &AppTheme) -> Vec<DrawItem> {
         let s = self.render_settings();
@@ -962,9 +1015,6 @@ fn random(index: u32, salt: u32) -> f32 {
     x = ((x >> ((x >> 28) + 4)) ^ x).wrapping_mul(277_803_737);
     (((x >> 22) ^ x) >> 8) as f32 / 16_777_216.0
 }
-fn wrap_degrees(degrees: f32) -> f32 {
-    (degrees + 180.0).rem_euclid(360.0) - 180.0
-}
 fn corners(x: f32, y: f32, z: f32) -> [[f32; 3]; 8] {
     std::array::from_fn(|i| {
         [
@@ -975,6 +1025,7 @@ fn corners(x: f32, y: f32, z: f32) -> [[f32; 3]; 8] {
     })
 }
 struct Camera {
+    roll: f32,
     yaw: f32,
     elevation: f32,
     scale: f32,
@@ -996,15 +1047,23 @@ impl Camera {
             .min(rect.height().max(1.0) / projected.height())
             * settings.zoom;
         Self {
+            roll: settings.roll.to_radians(),
             yaw,
             elevation,
             scale,
-            center: rect.center(),
+            center: rect.center() + Vec2::new(settings.pan_x, settings.pan_y) * rect.size(),
         }
     }
     fn project(&self, p: [f32; 3]) -> (Pos2, f32) {
         let (point, depth) = project_direction(self.yaw, self.elevation, p);
-        (self.center + point * self.scale, depth)
+        (
+            self.center
+                + Vec2::new(
+                    point.x * self.roll.cos() - point.y * self.roll.sin(),
+                    point.x * self.roll.sin() + point.y * self.roll.cos(),
+                ) * self.scale,
+            depth,
+        )
     }
 }
 enum Primitive {
@@ -1080,6 +1139,31 @@ fn mesh_dot(mesh: &mut egui::Mesh, center: Pos2, radius: f32, color: Color32) {
     }
     for i in 0..8 {
         mesh.add_triangle(base, base + 1 + i, base + 1 + (i + 1) % 8);
+    }
+}
+
+impl super::camera::Controlled for Strata {
+    fn camera(&mut self) -> super::camera::Camera<'_> {
+        let s = &mut self.settings;
+        super::camera::Camera {
+            yaw: &mut s.yaw,
+            elevation: &mut s.elevation,
+            roll: &mut s.roll,
+            zoom: &mut s.zoom,
+            pan_x: &mut s.pan_x,
+            pan_y: &mut s.pan_y,
+            degrees: true,
+            y_up: false,
+            enabled: &mut s.auto_orbit,
+            speed: &mut s.orbit_speed,
+            speed_radians: false,
+            default_speed: 2.0,
+            speed_limit: 12.0,
+            speed_key: "orbit_speed",
+            reverse: None,
+            motion: &mut s.camera_motion,
+            gizmo: &mut s.show_gizmo,
+        }
     }
 }
 

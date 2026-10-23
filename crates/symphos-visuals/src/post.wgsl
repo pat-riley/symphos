@@ -66,5 +66,14 @@ fn blur(uv:vec2f, direction:vec2f)->vec4f {
     color+=textureSampleLevel(glow,filtering,warped,0.0).rgb*f.light.y+atmosphere;
     color=vec3f(1)-exp(-color*f.light.z);
     if f.output.z < 0.5 { color=pow(color,vec3f(1.0/2.2)); }
-    return vec4f(color,1);
+    // Emission remains identical over black; empty pixels expose the scene canvas.
+    var alpha=max(color.r,max(color.g,color.b));
+    if f.orb_optics.x>0.0 && f.orb_style.w>0.0 {
+        let ndc=(i.uv-0.5)*vec2f(2.0,-2.0);
+        let far_depth=1000.0;
+        let scale=select((f.camera.x+far_depth)/max(f.camera.y,0.001),f.camera.x/2.0,f.camera.z>0.5)/max(f.view.y*min(f.view.x,1.0),0.001);
+        let point=vec3f((ndc-f.view.zw)*vec2f(f.view.x,1.0)*scale,far_depth);
+        alpha=max(alpha,1.0-optical_visibility(point,99u));
+    }
+    return vec4f(color,clamp(alpha,0.0,1.0));
 }

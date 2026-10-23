@@ -34,12 +34,14 @@ pub(super) fn basic_controls(ui: &mut egui::Ui, s: &mut OrbitalSettings) {
         &["Perspective", "Orthographic"],
         "Perspective makes nearby objects larger and distant objects smaller. Orthographic keeps size constant with depth, making it easier to compare XYZ positions and trace paths.",
     );
-    egui::Grid::new("orbital-views").num_columns(3).show(ui,|ui| {
+    if super::super::visual_inspector(ui).is_none() {
+        egui::Grid::new("orbital-views").num_columns(3).show(ui,|ui| {
             for (i,(name,axis,positive)) in [("Front",2,false),("Back",2,true),("Top",1,true),("Bottom",1,false),("Left",0,false),("Right",0,true)].into_iter().enumerate() {
                 if ui.button(name).help_text(format!("Look straight along a world axis from the {name} side. Keeps zoom and framing, removes roll and stops automatic orbit. Use Orthographic for a flat technical view.")).clicked() {snap(s,axis,positive);}
                 if i%3==2 {ui.end_row();}
             }
         });
+    }
     ui.horizontal(|ui| {
             if ui.button("Center view").help_text("Move the world origin back to the center of the viewport. Rotation, lens and zoom stay unchanged.").clicked() {s.pan_x=0.0;s.pan_y=0.0;}
             if ui.button("Reset camera").help_text("Restore the original camera angle, distance, lens, zoom and centered framing. Leaves particle behavior and appearance unchanged.").clicked() {reset(s);}
@@ -49,7 +51,9 @@ pub(super) fn basic_controls(ui: &mut egui::Ui, s: &mut OrbitalSettings) {
     });
 }
 pub(super) fn advanced_controls(ui: &mut egui::Ui, s: &mut OrbitalSettings) {
-    ui.checkbox(&mut s.auto_orbit,"Auto-orbit").help_text("Rotate the camera around Y at Camera orbit speed. Dragging or choosing a view stops it; particle motion stays independent.");
+    if super::super::visual_inspector(ui).is_none() {
+        ui.checkbox(&mut s.auto_orbit,"Auto-orbit").help_text("Rotate the camera around Y at Camera orbit speed. Dragging or choosing a view stops it; particle motion stays independent.");
+    }
 }
 pub(super) fn guide_controls(ui: &mut egui::Ui, s: &mut OrbitalSettings) {
     ui.checkbox(&mut s.show_grid,"Show reference grid").help_text("Draw a world-space ruler through the origin. Grid lines are one world unit apart. It follows the same camera as the particles and is only a guide, not a collision surface. Guides are overlaid and do not hide behind particles.");

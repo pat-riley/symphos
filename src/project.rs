@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneState {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::background::Background::is_default"
+    )]
+    pub background: crate::background::Background,
     #[serde(default)]
     pub macros: Option<crate::macros::scene::SceneMacros>,
     pub signals: Bank,
@@ -18,8 +23,40 @@ pub struct SceneState {
     pub analysis: AnalysisSettings,
 }
 impl SceneState {
+    /// Stable creative-state identity; GUI navigation and automatic motion are
+    /// presentation, not edits. Stream the encoding rather than allocate JSON.
+    pub fn creative_fingerprint(&self) -> Option<u64> {
+        let mut state = self.clone();
+        state.selected_pane = 0;
+        if let Some(macros) = &mut state.macros {
+            macros.open = false;
+        }
+        for pane in &mut state.panes {
+            pane.sections.fill(0);
+            if let Some(macros) = &mut pane.macros {
+                macros.open = false;
+            }
+        }
+        struct Fingerprint(u64);
+        impl std::io::Write for Fingerprint {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                for byte in bytes {
+                    self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut hash = Fingerprint(0xcbf29ce484222325);
+        serde_json::to_writer(&mut hash, &state).ok()?;
+        Some(hash.0)
+    }
+
     pub fn capture(session: Session) -> Self {
         Self {
+            background: session.background,
             macros: Some(session.macros.unwrap_or_else(|| {
                 crate::macros::scene::SceneMacros::from_legacy(
                     &session.panes,
@@ -35,6 +72,7 @@ impl SceneState {
     }
     pub fn validate(&self) -> bool {
         let session = Session {
+            background: self.background,
             render_fps: 60,
             macros: self.macros.clone(),
             project_path: None,
@@ -174,6 +212,9 @@ pub fn dependencies(content: &PresetContent, bank: &Bank) -> Vec<Definition> {
             }
         }
         for pane in panes {
+            if let crate::signals::audio::Connection::Input(id) = pane.audio_input {
+                ids.insert(id);
+            }
             if let Some(macros) = &pane.macros {
                 for slot in macros.banks.iter().flatten() {
                     if let Some(id) = slot.signal {
@@ -194,8 +235,17 @@ pub fn dependencies(content: &PresetContent, bank: &Bank) -> Vec<Definition> {
 /// in another project from being silently substituted.
 pub fn bind_preset_sources(content: &mut PresetContent, definitions: &[Definition], bank: &Bank) {
     fn same_source(a: &Definition, b: &Definition) -> bool {
-        let mut a = a.clone();
-        let mut b = b.clone();
+        let canonical = |d: &Definition| {
+            let mut bank = Bank {
+                channels: vec![d.clone()],
+                next_id: d.id.saturating_add(1),
+                ..Default::default()
+            };
+            bank.migrate_inserts();
+            bank.channels.remove(0)
+        };
+        let mut a = canonical(a);
+        let mut b = canonical(b);
         a.color = Some(a.color_rgb());
         b.color = Some(b.color_rgb());
         a.id = 0;
@@ -249,9 +299,86 @@ pub fn bind_preset_sources(content: &mut PresetContent, definitions: &[Definitio
     });
 }
 
+/// Reuse inputs only when their saved processing matches. Missing inputs stay
+/// disconnected; loading a visual preset never creates capture or control sources.
+pub fn bind_preset_inputs(
+    content: &mut PresetContent,
+    definitions: &mut Vec<Definition>,
+    saved: &[crate::signals::audio::InputBus],
+    bank: &Bank,
+) {
+    use crate::signals::audio::Connection;
+    let mut expected_bank = Bank {
+        channels: definitions.clone(),
+        audio_inputs: saved.to_vec(),
+        next_id: saved
+            .iter()
+            .map(|b| b.id)
+            .chain(definitions.iter().map(|d| d.id))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1),
+        ..Default::default()
+    };
+    expected_bank.migrate_inserts();
+    let mut actual_bank = bank.clone();
+    actual_bank.migrate_inserts();
+    let audio_prefix = |bank: &Bank, id| {
+        bank.channels
+            .iter()
+            .find(|d| d.id == id)
+            .and_then(|d| d.inserts.as_ref())
+            .map(|c| {
+                c.stages
+                    .iter()
+                    .take_while(|s| s.effect.output() == crate::signals::inserts::Data::Audio)
+                    .map(|s| (s.enabled, s.effect.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let resolve = |connection| match connection {
+        Connection::Input(id) => expected_bank
+            .audio_inputs
+            .iter()
+            .find(|b| b.id == id)
+            .and_then(|input| {
+                let mut expected = input.clone();
+                expected.id = 0;
+                expected.color = None;
+                actual_bank
+                    .audio_inputs
+                    .iter()
+                    .find(|candidate| {
+                        let prefix_matches = audio_prefix(&expected_bank, id)
+                            == audio_prefix(&actual_bank, candidate.id);
+                        let mut candidate = (*candidate).clone();
+                        candidate.id = 0;
+                        candidate.color = None;
+                        candidate == expected && prefix_matches
+                    })
+                    .map(|b| Connection::Input(b.id))
+            }),
+        other => Some(other),
+    };
+    if let PresetContent::View { panes, .. } = content {
+        for pane in panes {
+            pane.audio_input = resolve(pane.audio_input).unwrap_or(Connection::Off);
+        }
+    }
+    definitions.retain_mut(|d| {
+        if let Some(connection) = resolve(d.audio_input) {
+            d.audio_input = connection;
+            true
+        } else {
+            false
+        }
+    });
+}
+
 // Compare creative preset content by dependency value, not freshly imported IDs.
 pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
-    if preset.signals.is_empty() {
+    if preset.signals.is_empty() && preset.audio_inputs.is_empty() {
         return session.matches(&preset.content);
     }
     let current = match &preset.content {
@@ -278,6 +405,7 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
                 .map(|id| session.panes[*id].clone())
                 .collect();
             PresetContent::View {
+                background: session.background,
                 macros: session
                     .macros
                     .as_ref()
@@ -287,10 +415,30 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
             }
         }
     };
-    fn resolve(value: &mut serde_json::Value, definitions: &[Definition]) {
+    fn resolve(
+        value: &mut serde_json::Value,
+        definitions: &[Definition],
+        inputs: &[crate::signals::audio::InputBus],
+    ) {
         match value {
             serde_json::Value::Object(map) => {
                 map.remove("instance_id");
+                if let Some(id) = map
+                    .get("audio_input")
+                    .and_then(|v| v.get("Input"))
+                    .and_then(|v| v.as_u64())
+                {
+                    let input = inputs
+                        .iter()
+                        .find(|b| b.id == id)
+                        .map(|b| {
+                            let mut value = serde_json::to_value(b).unwrap_or_default();
+                            value.as_object_mut().unwrap().remove("id");
+                            value
+                        })
+                        .unwrap_or(serde_json::Value::String("missing".into()));
+                    map.insert("audio_input".into(), input);
+                }
                 if let Some(id) = map.get("signal").and_then(|v| v.as_u64()) {
                     let resolved = definitions
                         .iter()
@@ -300,6 +448,7 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
                             definition.color = Some(d.color_rgb());
                             let mut value = serde_json::to_value(definition).unwrap_or_default();
                             value.as_object_mut().unwrap().remove("id");
+                            resolve(&mut value, definitions, inputs);
                             value
                         })
                         .unwrap_or(serde_json::Value::String("missing".into()));
@@ -307,13 +456,13 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
                 }
                 for (name, v) in map.iter_mut() {
                     if name != "signal" {
-                        resolve(v, definitions);
+                        resolve(v, definitions, inputs);
                     }
                 }
             }
             serde_json::Value::Array(a) => {
                 for v in a {
-                    resolve(v, definitions);
+                    resolve(v, definitions, inputs);
                 }
             }
             _ => {}
@@ -321,8 +470,12 @@ pub fn matches(session: &Session, preset: &crate::workspace::Preset) -> bool {
     }
     let mut a = serde_json::to_value(current).unwrap_or_default();
     let mut b = serde_json::to_value(&preset.content).unwrap_or_default();
-    resolve(&mut a, &session.signals.channels);
-    resolve(&mut b, &preset.signals);
+    resolve(
+        &mut a,
+        &session.signals.channels,
+        &session.signals.audio_inputs,
+    );
+    resolve(&mut b, &preset.signals, &preset.audio_inputs);
     a == b
 }
 
@@ -333,6 +486,138 @@ mod tests {
         modulation::Target,
         modules::{ModuleKind, ModulePane},
     };
+    #[test]
+    fn visual_presets_match_audio_insert_processing_without_creating_channels() {
+        use crate::signals::audio::Connection;
+        use crate::signals::{
+            Input,
+            inserts::{Detection, Detector, Effect},
+        };
+        let mut bank = Bank::default();
+        let id = bank.add_source(Input::System).unwrap();
+        let chain = bank.channels[0].inserts.as_mut().unwrap();
+        chain
+            .add(
+                Input::System,
+                0,
+                Effect::Filter {
+                    low: 30.0,
+                    high: 180.0,
+                },
+            )
+            .unwrap();
+        chain
+            .add(
+                Input::System,
+                1,
+                Effect::Detect(Detection::new(Detector::Bass)),
+            )
+            .unwrap();
+        let mut pane = crate::modules::ModulePane::new(crate::modules::ModuleKind::Waterfall);
+        pane.audio_input = Connection::Input(id);
+        let original = PresetContent::View {
+            background: Default::default(),
+            layout: Tile::Pane(0),
+            panes: vec![pane.snapshot()],
+            macros: None,
+        };
+        let saved = dependencies(&original, &bank);
+        assert_eq!(saved.len(), 1);
+        let mut target = bank.clone();
+        target.channels[0].inserts.as_mut().unwrap().stages[0].effect = Effect::Filter {
+            low: 30.0,
+            high: 500.0,
+        };
+        let mut content = original.clone();
+        bind_preset_inputs(
+            &mut content,
+            &mut saved.clone(),
+            &bank.audio_inputs,
+            &target,
+        );
+        let PresetContent::View { panes, .. } = content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Off);
+        let mut content = original;
+        bind_preset_inputs(&mut content, &mut saved.clone(), &bank.audio_inputs, &bank);
+        let PresetContent::View { panes, .. } = content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Input(id));
+        assert_eq!(target.channels.len(), 1);
+        assert_eq!(target.audio_inputs.len(), 1);
+    }
+    #[test]
+    fn typed_inputs_roundtrip_and_view_presets_reuse_only_matching_inputs() {
+        use crate::signals::audio::Connection;
+        let mut scene = example();
+        let id = scene.signals.add_audio_input().unwrap();
+        scene.signals.audio_inputs[0].high_pass = true;
+        scene.panes[0].audio_input = Connection::Input(id);
+        let saved = serde_json::to_vec(&scene).unwrap();
+        let restored: SceneState = serde_json::from_slice(&saved).unwrap();
+        assert!(scene == restored);
+        let mut content = PresetContent::View {
+            background: scene.background,
+            panes: scene.panes.clone(),
+            layout: Tile::Pane(0),
+            macros: None,
+        };
+        let buses = scene.signals.audio_inputs.clone();
+        let mut target = Bank::default();
+        target.add(crate::signals::Method::Lfo).unwrap();
+        let new_id = target.add_audio_input().unwrap();
+        let mut matching = buses[0].clone();
+        matching.id = new_id;
+        target.audio_inputs[0] = matching;
+        let mut definitions = scene.signals.channels.clone();
+        bind_preset_inputs(&mut content, &mut definitions, &buses, &target);
+        let PresetContent::View { panes, .. } = &content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Input(new_id));
+        assert_eq!(target.channels.len(), 1);
+        assert_eq!(target.audio_inputs.len(), 1);
+        target.audio_inputs[0].gain_db = 12.0;
+        bind_preset_inputs(&mut content, &mut definitions, &buses, &target);
+        let PresetContent::View { panes, .. } = &content else {
+            panic!()
+        };
+        assert_eq!(panes[0].audio_input, Connection::Off);
+    }
+    #[test]
+    fn scene_background_roundtrips_and_legacy_scenes_default_to_black() {
+        let mut scene = example();
+        let fingerprint = scene.creative_fingerprint();
+        let original = serde_json::to_value(&scene).unwrap();
+        assert!(original.get("background").is_none());
+        assert!(
+            serde_json::from_value::<SceneState>(original)
+                .unwrap()
+                .background
+                .is_default()
+        );
+        scene.background = crate::background::Background {
+            mode: crate::background::Mode::Radial,
+            start: [20, 40, 80],
+            end: [200, 100, 70],
+            angle: 30.0,
+        };
+        assert!(scene.validate());
+        let restored: SceneState =
+            serde_json::from_slice(&serde_json::to_vec(&scene).unwrap()).unwrap();
+        assert_eq!(restored.background, scene.background);
+        assert_eq!(
+            restored.creative_fingerprint(),
+            scene.creative_fingerprint()
+        );
+        let mut invalid = scene.clone();
+        invalid.background.angle = 361.0;
+        assert!(!invalid.validate());
+        assert_ne!(scene.creative_fingerprint(), fingerprint);
+    }
+
     fn example() -> SceneState {
         let mut pane = ModulePane::new(ModuleKind::Flux);
         let mut signals = Bank::default();
@@ -344,6 +629,7 @@ mod tests {
         }
         pane.paste_settings(&settings);
         SceneState {
+            background: Default::default(),
             macros: None,
             signals,
             panes: vec![pane.snapshot()],
@@ -466,6 +752,7 @@ mod tests {
         let mut content = PresetContent::Component(Box::new(settings));
         let deps = dependencies(&content, &project.signals);
         let preset = crate::workspace::Preset {
+            audio_inputs: Vec::new(),
             id: "user:test".into(),
             name: "Test".into(),
             content: content.clone(),
@@ -478,6 +765,7 @@ mod tests {
             pane.paste_settings(&s);
         }
         let mut session = Session {
+            background: Default::default(),
             render_fps: 60,
             macros: None,
             project_path: None,

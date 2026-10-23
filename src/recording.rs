@@ -201,7 +201,9 @@ impl Recorder {
         if !s.armed {
             return false;
         }
-        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+        if !crate::background::pane_painted(ui) {
+            pane.background.paint(ui, rect);
+        }
         ui.painter().image(
             s.output.id,
             dest,
@@ -363,7 +365,7 @@ impl Recorder {
                     ];
                     egui::Grid::new("recording-options").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
                         ui.label("Output size");
-                        egui::ComboBox::from_id_salt("recording-size").width(220.0)
+                        crate::dropdown::ComboBox::from_id_salt("recording-size").width(220.0)
                             .selected_text(presets[self.preset].0).show_ui(ui, |ui| {
                                 for (index, (label, size)) in presets.iter().enumerate() {
                                     if ui.selectable_value(&mut self.preset, index, *label).clicked() {
@@ -381,7 +383,7 @@ impl Recorder {
                             ui.end_row();
                         }
                         ui.label("Frame rate");
-                        egui::ComboBox::from_id_salt("recording-rate").width(220.0)
+                        crate::dropdown::ComboBox::from_id_salt("recording-rate").width(220.0)
                             .selected_text(format!("{} FPS", self.fps)).show_ui(ui, |ui| {
                                 for fps in [30, 60, 120] {
                                     ui.selectable_value(&mut self.fps, fps, format!("{fps} FPS"));
