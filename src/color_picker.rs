@@ -78,7 +78,7 @@ pub fn color_edit_button_srgba(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8)
 fn color_control(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8) -> Response {
     let mut response = ui.add(
         egui::Button::new("")
-            .min_size(egui::vec2(28.0, 26.0))
+            .min_size(egui::vec2(28.0, 22.0))
             .fill(Color32::from_rgb(color[0], color[1], color[2])),
     );
     response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));
@@ -140,7 +140,7 @@ fn color_control(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8) -> Response {
     let frame = egui::Frame::window(ui.style())
         .fill(base)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .inner_margin(10.0);
+        .inner_margin(12.0);
     let escape =
         open && !Popup::is_any_open(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
     let mut close_requested = false;
@@ -148,13 +148,17 @@ fn color_control(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8) -> Response {
         .id(window_id)
         .open(&mut open)
         .movable(true)
-        .resizable(false)
+        .auto_sized()
         .collapsible(false)
         .title_bar(false)
         .default_pos(response.rect.right_top() + egui::vec2(8.0, 0.0))
         .frame(frame)
         .show(ui.ctx(), |ui| {
             ui.set_style(style);
+            // Establish the content width before the header uses right alignment.
+            // Otherwise Window's default width leaves a larger right-hand gutter.
+            ui.set_width(editor::width(ui.ctx()));
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             let header = ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Color").strong().size(12.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -257,11 +261,13 @@ fn color_control(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8) -> Response {
         text = canonical;
     }
     let edit = ui.add_sized(
-        [ui.available_width().clamp(50.0, 118.0), 26.0],
+        [ui.available_width().max(50.0), 22.0],
         egui::TextEdit::singleline(&mut text)
             .id(edit_id)
             .char_limit(9)
             .font(egui::FontId::monospace(11.0))
+            .vertical_align(egui::Align::Center)
+            .margin(egui::vec2(6.0, 0.0))
             .hint_text("#RRGGBB"),
     );
     if edit.changed()

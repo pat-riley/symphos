@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Align inspector color-code text with standard property rows, place the shared
+  scene-background note before its controls, and give the Color panel even
+  padding, aligned slider endpoints, and consistent gaps between controls.
+
 - Reduce development build debug artifacts and disable the incremental object
   cache. Reclaim debug build artifacts before supervised builds exceed a 12 GiB
   cache budget, preserving development workspaces, presets, and the working app.

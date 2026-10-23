@@ -84,9 +84,9 @@ impl Editor {
     }
 
     pub fn controls(&mut self, ui: &mut Ui) -> Response {
-        let width = (ui.ctx().content_rect().width() - 32.0).clamp(220.0, 300.0);
+        let width = width(ui.ctx());
         ui.set_width(width);
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
         ui.spacing_mut().interact_size.y = 26.0;
         self.saturation_value(ui, width);
         let sample = ui
@@ -105,13 +105,13 @@ impl Editor {
                 sample.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Sample screen color")
                 });
-                self.hue_slider(ui, width - 32.0);
+                self.hue_slider(ui, width - 34.0);
                 sample
             })
             .inner;
         ui.horizontal(|ui| {
-            ui.add_space(32.0);
-            self.opacity_slider(ui, width - 32.0);
+            ui.allocate_space(egui::vec2(26.0, 26.0));
+            self.opacity_slider(ui, width - 34.0);
         });
         self.values(ui);
         sample
@@ -119,11 +119,11 @@ impl Editor {
 
     fn saturation_value(&mut self, ui: &mut Ui, width: f32) {
         let height = (ui.ctx().content_rect().height() - 190.0)
-            .clamp(140.0, 270.0)
+            .clamp(140.0, 260.0)
             .min(width);
         let (bounds, response) =
             ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
-        let rect = bounds.shrink(8.0);
+        let rect = bounds;
         let response = response.on_hover_cursor(egui::CursorIcon::Crosshair);
         if let Some(pos) = response.interact_pointer_pos() {
             self.set_hsv([
@@ -187,7 +187,7 @@ impl Editor {
     fn hue_slider(&mut self, ui: &mut Ui, width: f32) {
         let (bounds, response) =
             ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click_and_drag());
-        let rect = bounds.shrink2(egui::vec2(8.0, 4.0));
+        let rect = bounds.shrink2(egui::vec2(0.0, 4.0));
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         if let Some(pos) = response.interact_pointer_pos() {
             self.set_hsv([
@@ -232,7 +232,7 @@ impl Editor {
     fn opacity_slider(&mut self, ui: &mut Ui, width: f32) {
         let (bounds, response) =
             ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click_and_drag());
-        let rect = bounds.shrink2(egui::vec2(8.0, 4.0));
+        let rect = bounds.shrink2(egui::vec2(0.0, 4.0));
         if let Some(pos) = response.interact_pointer_pos() {
             self.alpha =
                 (((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -322,8 +322,9 @@ impl Editor {
                     .char_limit(96)
                     .font(egui::FontId::monospace(11.0))
                     .vertical_align(egui::Align::Center)
-                    .desired_width((ui.available_width() - 60.0).max(50.0));
-                let response = ui.add_sized([(ui.available_width() - 60.0).max(50.0), 26.0], edit);
+                    .margin(egui::vec2(6.0, 0.0))
+                    .desired_width((ui.available_width() - 62.0).max(50.0));
+                let response = ui.add_sized([(ui.available_width() - 62.0).max(50.0), 26.0], edit);
                 if response.changed() {
                     if let Some((color, alpha)) = self.format.parse_color(&self.text) {
                         self.set_rgb(color);
@@ -393,7 +394,8 @@ impl Editor {
             Format::Hsl => ["H", "S", "L"],
             _ => ["H", "S", "B"],
         };
-        let width = ((ui.available_width() - 72.0) / 3.0).max(35.0);
+        let width =
+            ((ui.available_width() - 54.0 - 3.0 * ui.spacing().item_spacing.x) / 3.0).max(35.0);
         let mut changed = false;
         for (i, value) in values.iter_mut().enumerate() {
             ui.vertical(|ui| {
@@ -434,6 +436,10 @@ impl Editor {
             }
         }
     }
+}
+
+pub(super) fn width(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().width() - 48.0).clamp(220.0, 300.0)
 }
 
 #[cfg(test)]
