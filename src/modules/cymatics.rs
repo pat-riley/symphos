@@ -75,6 +75,9 @@ fn choice(ui: &mut egui::Ui, name: &str, value: &mut u32, options: &[&str], help
     });
 }
 impl Cymatics {
+    pub(super) fn set_palette(&mut self, palette: crate::colors::Palette) {
+        self.settings.palette = Some(palette);
+    }
     pub fn settings_snapshot(&self) -> CymaticsSettings {
         self.settings.clone()
     }
@@ -238,11 +241,12 @@ impl Cymatics {
             });
 
             settings_group(ui, "Palette", |ui| {
-                property_row(ui, "Starting palette", |ui| {
-                    properties_combo("cymatics-palette",ui.available_width(),5).selected_text("Choose…").show_ui(ui,|ui|{
-                for (name,a,b) in [("Natural sand",[238,219,171],[255,252,239]),("Salt",[180,190,200],[255,255,255]),("Thermal",[35,35,160],[255,190,30]),("Ocean",[0,70,170],[40,255,210]),("Neon",[80,20,255],[255,30,150])]{if ui.selectable_label(false,name).clicked(){s.color_a=a;s.color_b=b;ui.close();}}
-            }).response.help_text("Set gradient endpoints without changing physical settings, camera or macro bindings.");
-                });
+                let mut palette = s.resolved_palette();
+                let previous = palette;
+                palette.controls(ui);
+                if palette != previous {
+                    s.palette = Some(palette);
+                }
                 choice(
                     ui,
                     "Color driver",
@@ -250,16 +254,10 @@ impl Cymatics {
                     &["Grain variation / energy", "Vibration / signed wave"],
                     "For sand, choose stable per-grain variation or local vibration. For surfaces, choose vibration energy or signed displacement.",
                 );
-                for (name, color) in [
-                    ("First color", &mut s.color_a),
-                    ("Second color", &mut s.color_b),
-                    ("Plate color", &mut s.plate_color),
-                ] {
-                    property_row(ui, name, |ui| {
-                        ui.color_edit_button_srgb(color)
-                            .help_text("Edit the saved color. Changes rendering only.");
-                    });
-                }
+                property_row(ui, "Plate color", |ui| {
+                    ui.color_edit_button_srgb(&mut s.plate_color)
+                        .help_text("Base plate and nodal background color. Grains and shaded surfaces use the palette above.");
+                });
             });
             settings_group(ui, "Surface, grain and light", |ui| {
                 s.numeric_controls(ui, "Appearance")
@@ -375,6 +373,7 @@ impl Cymatics {
         };
         let az = s.light_angle.to_radians();
         let el = s.light_height.to_radians();
+        let (gradient, palette) = s.gpu_palette(theme);
         let frame = CymaticsFrame {
             clock: [
                 dt,
@@ -420,8 +419,8 @@ impl Cymatics {
                 if s.orthographic { 1.0 } else { 0.0 },
                 self.field.iter().map(|v| v[0]).sum::<f32>() / (GRID * GRID) as f32,
             ],
-            color_a: color(s.color_a),
-            color_b: color(s.color_b),
+            gradient,
+            palette,
             plate_color: color(s.plate_color),
             color: [
                 s.color_mode as f32,
@@ -583,6 +582,96 @@ mod tests {
         });
         let upgraded: PaneState = serde_json::from_value(json).unwrap();
         assert_eq!(old, upgraded);
+    }
+    #[test]
+    fn legacy_colors_and_multistop_palettes_survive_presets_without_resetting_grains() {
+        use crate::colors::{Gradient, Palette};
+        let theme = AppTheme::default();
+        let legacy: CymaticsSettings = serde_json::from_value(serde_json::json!({
+            "color_a": [12, 34, 56], "color_b": [210, 180, 90]
+        }))
+        .unwrap();
+        assert!(legacy.palette.is_none());
+        let gradient = legacy.resolved_palette().gradient(&theme);
+        assert_eq!(gradient.count, 2);
+        assert_eq!(gradient.colors[..2], [legacy.color_a, legacy.color_b]);
+        assert!(!gradient.cyclic);
+        // Merely opening/saving an older scene preserves its settings fingerprint.
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("palette")
+                .is_none()
+        );
+        let mut cymatics = Cymatics::default();
+        cymatics.apply_settings(&legacy);
+        cymatics.reset = false;
+        cymatics.time = 2.5;
+        let field = cymatics.field.clone();
+        let mut colors = [[0; 3]; 8];
+        colors[..3].copy_from_slice(&[[255, 0, 0], [0, 255, 0], [255, 0, 0]]);
+        let palette = Palette::Custom(Gradient {
+            colors,
+            count: 3,
+            cyclic: true,
+        });
+        cymatics.set_palette(palette);
+        let saved = cymatics.settings_snapshot();
+        let restored: CymaticsSettings =
+            serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert_eq!(restored, saved);
+        assert_eq!(restored.resolved_palette(), palette);
+        let (stops, info) = restored.gpu_palette(&theme);
+        assert_eq!(info, [3.0, 1.0, 0.0, 0.0]);
+        assert_eq!(stops[1], [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(restored.plate_color, legacy.plate_color);
+        assert!(!cymatics.reset);
+        assert_eq!(cymatics.time, 2.5);
+        assert!(Arc::ptr_eq(&field, &cymatics.field));
+    }
+    #[test]
+    fn appearance_uses_shared_palette_editor_without_altering_legacy_colors_on_open() {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.set_everything_is_visible(true));
+        let mut pane = ModulePane::new(ModuleKind::Cymatics);
+        pane.select_inspector_section(crate::modules::SettingsSection::Appearance);
+        let before = pane.copy_settings();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(520.0, 16000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| pane.inspector_controls(ui, &AnalysisFrame::default()),
+        );
+        output.textures_delta.clear();
+        let labels: Vec<_> = output
+            .shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        for label in [
+            "Palette",
+            "Edit gradient & swatches",
+            "Plate color",
+            "Color driver",
+        ] {
+            assert!(
+                labels.iter().any(|t| t == label),
+                "missing {label}: {labels:?}"
+            );
+        }
+        assert!(
+            !labels
+                .iter()
+                .any(|t| t == "First color" || t == "Second color")
+        );
+        assert_eq!(pane.copy_settings(), before);
     }
     #[test]
     fn hostile_settings_cannot_escape_gpu_bounds() {

@@ -754,6 +754,7 @@ impl ModulePane {
             ModuleKind::Veroni => self.veroni.set_palette(palette),
             ModuleKind::Strata => self.strata.set_palette(palette),
             ModuleKind::Flux => self.flux.set_palette(palette),
+            ModuleKind::Cymatics => self.cymatics.set_palette(palette),
             // Preset shaders and sketches with material/particle color systems
             // keep their own color controls and authored defaults.
             _ => {}

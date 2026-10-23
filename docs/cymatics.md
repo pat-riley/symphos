@@ -17,7 +17,8 @@ Use **+ → Cymatics** or **Create → Component → Cymatics**. The inspector o
 - **Signal Response:** input gain, frequency range, noise gate, resonance damping,
   attack/release, automatic visual sensitivity, live input/drive/vibration readings,
   and the range of modeled resonances.
-- **Appearance:** five starting palettes, editable endpoint and plate colors,
+- **Appearance:** the shared factory/saved palette browser, editable 2–8-stop
+  gradients and swatches, cyclic colors, independent base plate color,
   color drivers, contrast, opacity, glow, surface height, illustrative phase rate,
   nodal contours, and directional lighting/material controls.
 - **Flow & Motion:** optional artistic sand turbulence and interference emitter
@@ -31,6 +32,15 @@ Signals. Settings, colors and mappings persist through the existing scene,
 project and component-preset systems. Particle positions, wave fields, GPU
 resources and clocks are runtime state and are not serialized. No source
 channels are created automatically.
+
+In **Appearance → Palette**, choose a factory or saved gradient, or expand
+**Edit gradient & swatches** to edit stops and save a palette. Sand samples by
+stable grain variation or local vibration; surfaces sample by vibration energy or
+signed wave displacement. Color spread, offset and contrast adjust that mapping.
+The base plate in Sand mode keeps its independent Plate color. Color changes do
+not recalculate plate modes or restart grains. Existing two-color presets retain
+their exact colors; newly added Cymatics panes use Settings' default visualizer
+palette, just like the other components.
 
 ## Physical model and its limits
 
@@ -113,11 +123,11 @@ clamped-square/circle fundamental frequencies within 2.5%, center support,
 finite modes, resonant/off-resonant drive, rejection at a node, quiet PCM through the production FFT and modal field, sensitivity preserving nodes and input-level differences, silence/gating,
 frame-rate-independent envelopes, serialization/macro addressing, legacy schema
 migration, WGSL validation, and real-GPU settling, boundaries, all four rendering
-modes, resizing, and preserving the initial grain scatter when multiple updates share a
+modes, multi-stop/cyclic palette pixel readback, resizing, and preserving the initial grain scatter when multiple updates share a
 GPU submission. Frame data uploads are encoded beside their own dispatches to
 prevent a later update from overwriting an earlier scatter command. The GPU
 test runs explicitly with:
 
 ```sh
-cargo test -p symphos-visuals cymatics_gpu_settles -- --ignored --nocapture
+cargo test -p symphos-visuals cymatics_ -- --ignored --nocapture
 ```

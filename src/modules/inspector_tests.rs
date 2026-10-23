@@ -27,7 +27,7 @@ fn initial_palette_applies_to_shared_palettes_and_saved_overrides_survive_restor
             );
         }
     }
-    assert_eq!(supported, 13);
+    assert_eq!(supported, 14);
 }
 
 #[test]

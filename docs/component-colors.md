@@ -35,7 +35,7 @@ at **Classic LED** and supports factory and saved/custom gradients. Adding a pan
 or dragging a component into an existing pane uses this preference. Existing
 scenes, component presets, and inspector overrides retain their stored colors.
 The preference is local to this installation and is not a scene-wide color link.
-It covers all thirteen visualizers with the shared Palette control; MilkDrop
+It covers all fourteen visualizers with the shared Palette control; MilkDrop
 presets and sketches with dedicated particle/material colors keep those systems.
 
 Choose **Appearance**, then open **Palette**. There are twenty
@@ -53,6 +53,11 @@ Strata maps them to membrane activity; Flux moves through their colors. Scientif
 components retain their interpretation controls: waveform Color map maps signal
 level, while Static selects lane colors. Stereometer and oscilloscope palettes
 apply in Static mode; RGB and multiband modes keep their frequency colors.
+Cymatics uses the same picker for sand grains, wave surfaces, nodal patterns,
+and interference. Color driver selects grain variation/energy or vibration/signed
+wave; spread, offset and contrast control the sampled range. Plate color remains
+independent. Older two-color presets keep their exact endpoints until a palette
+is chosen. Palette edits change rendering without scattering or restarting grains.
 The compact Viridis/Magma/Inferno/Plasma gradients use five color anchors.
 
 ## Edit and save
