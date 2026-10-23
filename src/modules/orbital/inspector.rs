@@ -317,7 +317,7 @@ fn extras(ui: &mut egui::Ui, s: &mut OrbitalSettings, extra: Extra) {
 }
 fn swatch(ui: &mut egui::Ui, title: &str, color: &mut [u8; 3], help: &str) {
     property_row(ui, title, |ui| {
-        ui.color_edit_button_srgb(color).help_text(help);
+        crate::color_picker::color_edit_button_srgb(ui, color).help_text(help);
     });
 }
 

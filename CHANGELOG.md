@@ -5,6 +5,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add a shared eyedropper to every color popup on macOS, including gradient
+  stops, scene backgrounds, macro colors, and individual visualizer colors.
+  Use the native screen sampler, convert sampled colors to sRGB, and preserve
+  colors on cancellation. Sampled changes participate in undo and preset edits.
+
 - Move 3D Waterfall note labels and tuning into Appearance → Viewport guides.
   Add frequency/time grid divisions, minor lines, opacity, line width, optional
   level guides, and independent frequency/time/level labels. Guide density adapts

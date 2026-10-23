@@ -255,7 +255,7 @@ impl Cymatics {
                     "For sand, choose stable per-grain variation or local vibration. For surfaces, choose vibration energy or signed displacement.",
                 );
                 property_row(ui, "Plate color", |ui| {
-                    ui.color_edit_button_srgb(&mut s.plate_color)
+                    crate::color_picker::color_edit_button_srgb(ui, &mut s.plate_color)
                         .help_text("Base plate and nodal background color. Grains and shaded surfaces use the palette above.");
                 });
             });

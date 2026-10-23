@@ -3,6 +3,7 @@ mod app;
 mod audio;
 mod background;
 mod capture_history;
+mod color_picker;
 mod colors;
 #[cfg(feature = "development")]
 mod development;

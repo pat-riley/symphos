@@ -90,7 +90,7 @@ impl SceneMacros {
                         slot.color = (!automatic).then_some([r, g, b]);
                     }
                     if let Some(color) = &mut slot.color {
-                        ui.color_edit_button_srgb(color);
+                        crate::color_picker::color_edit_button_srgb(ui, color);
                     }
                 });
                 if let Some(parameter) = &slot.parameter {

@@ -146,13 +146,13 @@ impl Background {
                         "Start color"
                     },
                     |ui| {
-                        ui.color_edit_button_srgb(&mut self.start);
+                        crate::color_picker::color_edit_button_srgb(ui, &mut self.start);
                     },
                 );
             }
             if matches!(self.mode, Mode::Linear | Mode::Radial) {
                 property_row(ui, "End color", |ui| {
-                    ui.color_edit_button_srgb(&mut self.end);
+                    crate::color_picker::color_edit_button_srgb(ui, &mut self.end);
                 });
             }
             if self.mode == Mode::Linear {

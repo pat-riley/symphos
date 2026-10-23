@@ -570,9 +570,11 @@ impl Palette {
                             {
                                 editor.selected = i;
                             }
-                            if ui
-                                .color_edit_button_srgb(&mut editor.gradient.colors[i])
-                                .changed()
+                            if crate::color_picker::color_edit_button_srgb(
+                                ui,
+                                &mut editor.gradient.colors[i],
+                            )
+                            .changed()
                             {
                                 editor.selected = i;
                             }

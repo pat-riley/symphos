@@ -2082,6 +2082,9 @@ impl eframe::App for SymphosApp {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.context = Some(ui.ctx().clone());
+        if crate::color_picker::begin_frame(ui.ctx()) {
+            self.begin_edit(true);
+        }
         if !crate::shortcuts::editing_text(ui.ctx()) && !self.workspace_menu_blocked(ui.ctx()) {
             if ui.input_mut(|i| {
                 i.consume_key(
