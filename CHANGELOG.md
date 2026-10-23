@@ -5,6 +5,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Left-align footer dock controls beside the performance readout, with Signals
+  before Macros, matching levels/knob icons, and equal vertically centered buttons.
+
 - Clean up channel and macro context menus with borderless rows, two deliberate
   group dividers, consistent menu padding, and roomier shared color swatches.
 

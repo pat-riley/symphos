@@ -20,14 +20,15 @@ fn capture_width(bounds: Rect) -> f32 {
     meter_width(bounds) + if bounds.width() < 540.0 { 0.0 } else { 82.0 }
 }
 
-/// Reserve a central footer segment without colliding with stats or capture meters.
+/// Left-align dock controls after the compact help/performance readout.
 pub(crate) fn dock_bounds(bounds: Rect) -> Rect {
-    let width = if bounds.width() < 650.0 { 56.0 } else { 150.0 };
-    let left = bounds.left() + 130.0;
-    let right = (bounds.right() - capture_width(bounds) - 8.0 - width).max(left);
-    let x = (bounds.center().x - width * 0.5).clamp(left, right);
+    let (offset, width) = if bounds.width() < 650.0 {
+        (128.0, 60.0)
+    } else {
+        (200.0, 196.0)
+    };
     Rect::from_min_size(
-        egui::pos2(x, bounds.center().y - 13.0),
+        egui::pos2(bounds.left() + offset, bounds.center().y - 13.0),
         egui::vec2(width, 26.0),
     )
 }
@@ -341,7 +342,7 @@ mod tests {
         for width in [320.0, 400.0, 540.0, 640.0, 650.0, 740.0, 900.0, 1416.0] {
             let bounds = Rect::from_min_size(Pos2::new(12.0, 600.0), Vec2::new(width, 50.0));
             let dock = dock_bounds(bounds);
-            assert!(dock.left() >= bounds.left() + 130.0);
+            assert!(dock.left() >= bounds.left() + 128.0);
             assert!(dock.right() + 8.0 <= bounds.right() - capture_width(bounds));
             assert_eq!(dock.center().y, bounds.center().y);
         }

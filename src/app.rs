@@ -1895,19 +1895,8 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 .id_salt("footer-dock-toggles")
                 .max_rect(dock_rect),
         );
-        dock.horizontal_centered(|ui| {
+        dock.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            if dock_toggle(
-                ui,
-                macros_open,
-                "Macros",
-                "Show / hide Macros · Ctrl + B",
-                dock_rect.width() * 0.5,
-            )
-            .clicked()
-            {
-                self.toggle_macros();
-            }
             if dock_toggle(
                 ui,
                 signals_open,
@@ -1918,6 +1907,17 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             .clicked()
             {
                 self.toggle_signals();
+            }
+            if dock_toggle(
+                ui,
+                macros_open,
+                "Macros",
+                "Show / hide Macros · Ctrl + B",
+                dock_rect.width() * 0.5,
+            )
+            .clicked()
+            {
+                self.toggle_macros();
             }
         });
         signals_open = self
@@ -3494,7 +3494,7 @@ mod workspace_interaction_tests {
     }
 
     #[test]
-    fn footer_docks_are_centered_and_fps_changes_only_the_local_display_target() {
+    fn footer_docks_are_left_aligned_signals_first_and_fps_only_changes_the_display_target() {
         let mut app = app();
         let ctx = egui::Context::default();
         let now = Instant::now();
@@ -3508,10 +3508,11 @@ mod workspace_interaction_tests {
         };
         let macros = nav("Macros");
         let signals = nav("Signals");
-        assert!(macros.right() <= signals.left());
+        assert!(signals.right() <= macros.left());
         assert!((macros.center().y - signals.center().y).abs() < 0.1);
         assert!(signals.center().y > 750.0);
-        assert!(macros.left() > 200.0 && signals.right() < 900.0);
+        assert_eq!(signals.size(), macros.size());
+        assert!(signals.left() < 300.0 && macros.right() < 500.0);
         let fps = ctx
             .data(|d| d.get_temp::<Rect>(egui::Id::new("test-footer-fps")))
             .unwrap();
@@ -4213,7 +4214,14 @@ mod workspace_interaction_tests {
         click(&mut app, appearance);
         assert!(app.pane_highlighted);
         // Empty footer space also deselects, without closing the inspector.
-        click(&mut app, Pos2::new(400.0, 775.0));
+        // The dock controls now occupy the old hard-coded x=400 position.
+        let macros = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new(("test-dock-toggle", "Macros"))))
+            .unwrap();
+        click(
+            &mut app,
+            Pos2::new(macros.right() + 12.0, macros.center().y),
+        );
         assert!(!app.pane_highlighted);
         assert!(app.sidebar_open);
         app.inspect_panel(0);
@@ -4839,44 +4847,65 @@ fn dock_toggle(
     description: &str,
     width: f32,
 ) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, workspace_ui::NAV_CONTROL_HEIGHT),
+        Sense::click(),
+    );
     let base = ui.visuals().panel_fill;
-    let fill = if open {
-        base.lerp_to_gamma(egui::Color32::WHITE, 0.065)
+    let fill = base.lerp_to_gamma(
+        egui::Color32::WHITE,
+        if response.is_pointer_button_down_on() {
+            0.11
+        } else if response.hovered() {
+            0.085
+        } else if open {
+            0.065
+        } else {
+            0.0
+        },
+    );
+    ui.painter().rect_filled(rect, 2.0, fill);
+    ui.painter().rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.15)),
+        egui::StrokeKind::Inside,
+    );
+    let color = ui
+        .visuals()
+        .text_color()
+        .gamma_multiply(if open { 1.0 } else { 0.8 });
+    let icon = if label == "Signals" {
+        icons::Icon::Levels
     } else {
-        base
+        icons::Icon::Knob
     };
-    let response = ui
-        .push_id(label, |ui| {
-            let compact = width < 50.0;
-            let response = ui
-                .add_sized(
-                    [width, workspace_ui::NAV_CONTROL_HEIGHT],
-                    egui::Button::new(
-                        egui::RichText::new(if compact { "" } else { label }).size(12.0),
-                    )
-                    .fill(fill)
-                    .stroke(Stroke::new(
-                        1.0,
-                        ui.visuals().text_color().gamma_multiply(0.15),
-                    ))
-                    .corner_radius(2.0),
-                )
-                .help_text(crate::shortcuts::platform_label(description));
-            if compact {
-                icons::paint(
-                    ui,
-                    response.rect.shrink(5.0),
-                    if label == "Macros" {
-                        icons::Icon::Knob
-                    } else {
-                        icons::Icon::Levels
-                    },
-                    ui.visuals().text_color(),
-                );
-            }
-            response
-        })
-        .inner;
+    let compact = width < 50.0;
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), FontId::proportional(12.0), color);
+    let content_width = if compact {
+        20.0
+    } else {
+        20.0 + 5.0 + galley.size().x
+    };
+    let left = rect.center().x - content_width * 0.5;
+    icons::paint(
+        ui,
+        Rect::from_center_size(Pos2::new(left + 10.0, rect.center().y), Vec2::splat(20.0)),
+        icon,
+        color,
+    );
+    if !compact {
+        ui.painter().galley(
+            Pos2::new(left + 25.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            color,
+        );
+    }
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .help_text(crate::shortcuts::platform_label(description));
     response
         .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
     #[cfg(test)]
