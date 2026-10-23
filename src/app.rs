@@ -746,7 +746,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 
     fn apply_appearance(&mut self, context: &egui::Context) {
         let theme = self.appearance.theme.resolve(&self.automatic_theme);
-        crate::window_chrome::apply(&theme);
+        crate::window_chrome::apply(
+            &theme,
+            self.panel_fullscreen
+                .filter(|_| !self.scene_library.open)
+                .map(|_| self.background),
+        );
         if self.theme != theme {
             self.theme = theme;
             apply_style(context, &self.theme);
@@ -4100,6 +4105,8 @@ mod workspace_interaction_tests {
     #[test]
     fn fullscreen_keeps_window_controls_and_escape_restores_the_editor() {
         let mut app = app();
+        app.background.mode = crate::background::Mode::Color;
+        app.background.start = [56, 60, 64];
         app.panes[0].kind = ModuleKind::Rings;
         let mut saved = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
         saved["Rings"]["show_gizmo"] = true.into();
@@ -4113,6 +4120,21 @@ mod workspace_interaction_tests {
         assert_eq!(
             ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test-pane-canvas", 0)))),
             Some(bounds)
+        );
+        assert!(
+            out.shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape, egui::Shape::Rect(r)
+            if r.rect == bounds && r.fill == egui::Color32::from_rgb(56, 60, 64)))
+        );
+        app.background.mode = crate::background::Mode::Linear;
+        let gradient = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(
+            gradient
+                .shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape, egui::Shape::Rect(r)
+            if r.rect == bounds && r.fill_texture_id() != egui::TextureId::default()))
         );
         assert!(!out.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t)
             if ["3D Rings", "Press Esc to exit fullscreen", "Components", "Signals", "Macros", "X", "Y", "Z"].contains(&t.galley.job.text.as_str()))));
@@ -5929,7 +5951,7 @@ mod layout_tests {
 
     #[test]
     fn performance_dock_reserves_plot_space_and_keeps_help_and_inspector_separate() {
-        for width in [1024.0, 1440.0, 1800.0] {
+        for width in [crate::workspace::MIN_WINDOW_SIZE[0], 1024.0, 1440.0, 1800.0] {
             for help in [false, true] {
                 for height in [236.0, 320.0, 390.0, 600.0] {
                     let content = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 658.0));
@@ -6030,7 +6052,11 @@ mod layout_tests {
 
     #[test]
     fn info_view_never_overlaps_dashboard_or_settings() {
-        for size in [Vec2::new(1024.0, 700.0), Vec2::new(1440.0, 940.0)] {
+        for size in [
+            Vec2::from(crate::workspace::MIN_WINDOW_SIZE),
+            Vec2::new(1024.0, 700.0),
+            Vec2::new(1440.0, 940.0),
+        ] {
             let content = Rect::from_min_max(
                 Pos2::new(12.0, 56.0),
                 (size - Vec2::new(12.0, 40.0)).to_pos2(),

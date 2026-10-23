@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Extend fullscreen scene backgrounds behind the native macOS traffic lights,
+  including gradients, and restore the editor's title-bar inset on exit. Lower
+  the minimum window width from 1024 to 768 and accept narrower saved workspaces.
+
 - Add a shared eyedropper to every color popup on macOS, including gradient
   stops, scene backgrounds, macro colors, and individual visualizer colors.
   Use the native screen sampler, convert sampled colors to sRGB, and preserve

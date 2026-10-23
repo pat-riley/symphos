@@ -11,6 +11,7 @@ use std::{
 mod recovery;
 
 pub const MAX_PANES: usize = 16;
+pub const MIN_WINDOW_SIZE: [f32; 2] = [768.0, 700.0];
 const GAP: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -457,7 +458,8 @@ impl Session {
             && FFT_SIZES.contains(&self.analysis.fft_size)
             && (1..=240).contains(&self.analysis.analysis_fps)
             && self.window_size.is_none_or(|size| {
-                (1024.0..=8192.0).contains(&size[0]) && (700.0..=8192.0).contains(&size[1])
+                (MIN_WINDOW_SIZE[0]..=8192.0).contains(&size[0])
+                    && (MIN_WINDOW_SIZE[1]..=8192.0).contains(&size[1])
             })
             && self.active_preset.len() <= 120
             && valid_settings(self)
@@ -1330,6 +1332,18 @@ mod tests {
             window_position: None,
             active_preset: default_preset(),
         }
+    }
+
+    #[test]
+    fn narrower_window_sizes_roundtrip_without_invalidating_recovery() {
+        let mut saved = session();
+        for width in [MIN_WINDOW_SIZE[0], 800.0, 1024.0, 1440.0] {
+            saved.window_size = Some([width, MIN_WINDOW_SIZE[1]]);
+            let decoded = Session::decode(&serde_json::to_vec(&saved).unwrap()).unwrap();
+            assert_eq!(decoded.window_size, saved.window_size);
+        }
+        saved.window_size = Some([MIN_WINDOW_SIZE[0] - 1.0, MIN_WINDOW_SIZE[1]]);
+        assert!(Session::decode(&serde_json::to_vec(&saved).unwrap()).is_none());
     }
 
     #[test]
