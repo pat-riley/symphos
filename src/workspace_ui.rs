@@ -70,6 +70,25 @@ pub fn rounded_content_corners(ui: &egui::Ui, rect: Rect, radius: f32, color: eg
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
+/// Reveal one strip before laying out nested insert editors and their scroll areas.
+pub(crate) fn scroll_offset_for_strip(ui: &egui::Ui, salt: &str, index: usize, width: f32) -> f32 {
+    let id = ui.make_persistent_id(egui::IdSalt::new(salt));
+    let current = egui::scroll_area::State::load(ui.ctx(), id)
+        .unwrap_or_default()
+        .offset
+        .x;
+    let left = index as f32 * width;
+    let right = left + width;
+    let viewport = ui.available_width().max(1.0);
+    if left < current || viewport < width {
+        left
+    } else if right > current + viewport {
+        (right - viewport).max(0.0)
+    } else {
+        current
+    }
+}
+
 pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: bool) {
     let body = ui.visuals().panel_fill;
     ui.painter().rect_filled(rect, 0.0, body);

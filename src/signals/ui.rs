@@ -31,6 +31,7 @@ pub struct Panel {
     pub midi_snapshot: Arc<crate::midi::Snapshot>,
     midi_learning: Option<(u64, u64)>,
     pub selected: Option<u64>,
+    reveal_selected: bool,
     pub(crate) selected_insert: Option<(u64, u64)>,
     pub show_signals: bool,
     pub inspect_requested: bool,
@@ -115,6 +116,7 @@ impl Default for Panel {
             midi_snapshot: Arc::new(crate::midi::Snapshot::default()),
             midi_learning: None,
             selected: None,
+            reveal_selected: false,
             selected_insert: None,
             show_signals: false,
             inspect_requested: false,
@@ -180,6 +182,7 @@ impl Panel {
         self.selected = bank.channels.first().map(|d| d.id);
         self.bank = bank;
         self.selected_insert = None;
+        self.reveal_selected = false;
         self.master_settings_requested = false;
         self.clipboard = None;
         self.snapshot = Arc::new(Snapshot::default());
@@ -266,187 +269,142 @@ impl Panel {
         let mut action = None;
         board.spacing_mut().item_spacing.x = 0.0;
         let slots = self.bank.slots.clone();
-        let mixer_output = egui::ScrollArea::horizontal()
-            .id_salt("signal-strips")
-            .auto_shrink([false, false])
-            .show(&mut board, |ui| {
-                let height = ui.available_height();
-                let viewport_right = ui.max_rect().right();
-                let mut insertion_line = None;
-                ui.horizontal_top(|ui| {
-                    for (slot, id) in slots.iter().copied().enumerate() {
-                        ui.push_id(("channel-slot", slot), |ui| {
-                            let mut over_inserts = false;
-                            let (strip, _) = ui.allocate_exact_size(
-                                egui::vec2(156.0, height),
-                                egui::Sense::hover(),
+        let reveal_selected = std::mem::take(&mut self.reveal_selected);
+        let mut scroll = egui::ScrollArea::horizontal().id_salt("signal-strips");
+        if reveal_selected && let Some(index) = slots.iter().position(|id| *id == self.selected) {
+            scroll = scroll.horizontal_scroll_offset(workspace_ui::scroll_offset_for_strip(
+                &board,
+                "signal-strips",
+                index,
+                156.0,
+            ));
+        }
+        let mixer_output = scroll.auto_shrink([false, false]).show(&mut board, |ui| {
+            let height = ui.available_height();
+            let viewport_right = ui.max_rect().right();
+            let mut insertion_line = None;
+            ui.horizontal_top(|ui| {
+                for (slot, id) in slots.iter().copied().enumerate() {
+                    ui.push_id(("channel-slot", slot), |ui| {
+                        let mut over_inserts = false;
+                        let (strip, _) =
+                            ui.allocate_exact_size(egui::vec2(156.0, height), egui::Sense::hover());
+                        if let Some(id) = id
+                            && self
+                                .bank
+                                .channels
+                                .iter()
+                                .any(|d| d.id == id && d.inserts.is_some())
+                        {
+                            let d = self.bank.channels.iter_mut().find(|d| d.id == id).unwrap();
+                            let bus = self.bank.audio_inputs.iter_mut().find(|b| b.id == id);
+                            let output = inserts::strip(
+                                ui,
+                                strip,
+                                slot,
+                                d,
+                                bus,
+                                &self.snapshot,
+                                self.selected == Some(id),
+                                self.selected_insert,
+                                self.history.get(&id),
+                                (&self.midi_snapshot, self.midi_history.get(&id)),
                             );
+                            over_inserts = output.over_inserts;
+                            if let Some(a) = output.action {
+                                action = Some(a);
+                            }
+                        } else {
                             if let Some(id) = id
-                                && self
-                                    .bank
-                                    .channels
-                                    .iter()
-                                    .any(|d| d.id == id && d.inserts.is_some())
+                                && let Some(d) = self.bank.channels.iter_mut().find(|d| d.id == id)
                             {
-                                let d = self.bank.channels.iter_mut().find(|d| d.id == id).unwrap();
-                                let bus = self.bank.audio_inputs.iter_mut().find(|b| b.id == id);
-                                let output = inserts::strip(
+                                let sample =
+                                    self.snapshot.values.get(&id).cloned().unwrap_or_default();
+                                let history = self.history.get(&id);
+                                if let Some(a) = channel_strip(
                                     ui,
                                     strip,
                                     slot,
                                     d,
-                                    bus,
-                                    &self.snapshot,
+                                    &sample,
                                     self.selected == Some(id),
-                                    self.selected_insert,
-                                    self.history.get(&id),
-                                    (&self.midi_snapshot, self.midi_history.get(&id)),
-                                );
-                                over_inserts = output.over_inserts;
-                                if let Some(a) = output.action {
+                                    history,
+                                    Some((
+                                        &self.midi_snapshot,
+                                        self.midi_history.get(&id),
+                                        self.snapshot.time,
+                                    )),
+                                ) {
                                     action = Some(a);
                                 }
-                            } else {
-                                if let Some(id) = id
-                                    && let Some(d) =
-                                        self.bank.channels.iter_mut().find(|d| d.id == id)
-                                {
-                                    let sample =
-                                        self.snapshot.values.get(&id).cloned().unwrap_or_default();
-                                    let history = self.history.get(&id);
-                                    if let Some(a) = channel_strip(
-                                        ui,
-                                        strip,
-                                        slot,
-                                        d,
-                                        &sample,
-                                        self.selected == Some(id),
-                                        history,
-                                        Some((
-                                            &self.midi_snapshot,
-                                            self.midi_history.get(&id),
-                                            self.snapshot.time,
-                                        )),
-                                    ) {
-                                        action = Some(a);
-                                    }
-                                } else if let Some(bus) = id.and_then(|id| {
-                                    self.bank.audio_inputs.iter_mut().find(|b| b.id == id)
-                                }) {
-                                    let feed =
-                                        self.snapshot.audio.get(&bus.id).map(|f| f.frame.as_ref());
-                                    if let Some(a) = audio_channel::strip(
-                                        ui,
-                                        strip,
-                                        slot,
-                                        bus,
-                                        feed,
-                                        self.selected == id,
-                                    ) {
-                                        action = Some(a);
-                                    }
-                                }
-                            }
-                            if let Some(id) = id {
-                                let title = Rect::from_min_max(
-                                    strip.min,
-                                    egui::pos2(strip.right() - 24.0, strip.top() + 28.0),
-                                );
-                                self.rename_field(ui, title, id);
-                            }
-                            if ui.rect_contains_pointer(strip)
-                                && ui.input(|i| i.pointer.primary_pressed())
-                            {
-                                self.selected = id;
-                                if !over_inserts {
-                                    self.selected_insert = None;
-                                }
-                                self.inspect_requested = true;
-                            }
-                            let menu_response = ui.interact(
-                                strip,
-                                ui.id().with("channel-menu"),
-                                egui::Sense::hover(),
-                            );
-                            let open_menu = ui.rect_contains_pointer(strip)
-                                && !over_inserts
-                                && ui.input(|i| i.pointer.secondary_clicked());
-                            if open_menu && let Some(id) = id {
-                                self.selected = Some(id);
-                                self.selected_insert = None;
-                                self.inspect_requested = true;
-                            }
-                            let definition =
-                                id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
-                            crate::dropdown::styled_popup(
-                                ui,
-                                egui::Popup::context_menu(&menu_response),
-                            )
-                            .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
-                            .show(|ui| {
-                                if definition.is_none()
-                                    && let Some(bus) = id.and_then(|id| {
-                                        self.bank.audio_inputs.iter().find(|b| b.id == id)
-                                    })
-                                {
-                                    if let Some(a) = audio_channel::menu(
-                                        ui,
-                                        bus,
-                                        slot,
-                                        self.bank.audio_inputs.len() < audio::MAX_INPUTS,
-                                    ) {
-                                        action = Some(a);
-                                    }
-                                } else if let Some(menu_action) = channel_menu(
+                            } else if let Some(bus) = id.and_then(|id| {
+                                self.bank.audio_inputs.iter_mut().find(|b| b.id == id)
+                            }) {
+                                let feed =
+                                    self.snapshot.audio.get(&bus.id).map(|f| f.frame.as_ref());
+                                if let Some(a) = audio_channel::strip(
                                     ui,
-                                    definition,
+                                    strip,
                                     slot,
-                                    self.can_paste(),
-                                    self.bank.channels.len() < MAX_SIGNALS,
-                                    self.deleted.is_some() || self.deleted_audio.is_some(),
+                                    bus,
+                                    feed,
+                                    self.selected == id,
                                 ) {
-                                    action = Some(menu_action);
+                                    action = Some(a);
                                 }
-                            });
-                            if ui.rect_contains_pointer(strip)
-                                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-                            {
-                                let (boundary, x) = if pos.x < strip.center().x {
-                                    (slot, strip.left())
-                                } else {
-                                    (slot + 1, strip.right())
-                                };
-                                insertion_line = Some((
-                                    boundary,
-                                    egui::pos2(x, strip.top()),
-                                    egui::pos2(x, strip.bottom()),
-                                ));
                             }
-                        });
-                    }
-                    // Fill only the remaining viewport; adding an offscreen blank
-                    // track's worth of space would force an unnecessary scrollbar.
-                    let free_width = (viewport_right - ui.next_widget_position().x - 1.0).max(0.0);
-                    let (space, response) = ui
-                        .allocate_exact_size(egui::vec2(free_width, height), egui::Sense::hover());
-                    if slots.is_empty() {
-                        ui.painter().text(
-                            space.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Right-click to add a channel",
-                            egui::FontId::proportional(13.0),
-                            ui.visuals().weak_text_color(),
-                        );
-                    }
-                    let open_menu = ui.rect_contains_pointer(space)
-                        && ui.input(|i| i.pointer.secondary_clicked());
-                    crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response))
+                        }
+                        if let Some(id) = id {
+                            let title = Rect::from_min_max(
+                                strip.min,
+                                egui::pos2(strip.right() - 24.0, strip.top() + 28.0),
+                            );
+                            self.rename_field(ui, title, id);
+                        }
+                        if ui.rect_contains_pointer(strip)
+                            && ui.input(|i| i.pointer.primary_pressed())
+                        {
+                            self.selected = id;
+                            if !over_inserts {
+                                self.selected_insert = None;
+                            }
+                            self.inspect_requested = true;
+                        }
+                        let menu_response =
+                            ui.interact(strip, ui.id().with("channel-menu"), egui::Sense::hover());
+                        let open_menu = ui.rect_contains_pointer(strip)
+                            && !over_inserts
+                            && ui.input(|i| i.pointer.secondary_clicked());
+                        if open_menu && let Some(id) = id {
+                            self.selected = Some(id);
+                            self.selected_insert = None;
+                            self.inspect_requested = true;
+                        }
+                        let definition =
+                            id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
+                        crate::dropdown::styled_popup(
+                            ui,
+                            egui::Popup::context_menu(&menu_response),
+                        )
                         .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
                         .show(|ui| {
-                            if let Some(menu_action) = channel_menu(
+                            if definition.is_none()
+                                && let Some(bus) = id.and_then(|id| {
+                                    self.bank.audio_inputs.iter().find(|b| b.id == id)
+                                })
+                            {
+                                if let Some(a) = audio_channel::menu(
+                                    ui,
+                                    bus,
+                                    slot,
+                                    self.bank.audio_inputs.len() < audio::MAX_INPUTS,
+                                ) {
+                                    action = Some(a);
+                                }
+                            } else if let Some(menu_action) = channel_menu(
                                 ui,
-                                None,
-                                slots.len(),
+                                definition,
+                                slot,
                                 self.can_paste(),
                                 self.bank.channels.len() < MAX_SIGNALS,
                                 self.deleted.is_some() || self.deleted_audio.is_some(),
@@ -454,25 +412,71 @@ impl Panel {
                                 action = Some(menu_action);
                             }
                         });
-                    if ui.rect_contains_pointer(space) {
-                        insertion_line = Some((slots.len(), space.left_top(), space.left_bottom()));
-                    }
-                });
-                // Resolve after every header has registered its payload, so moving
-                // left shows the guide immediately too. Paint above neighboring tracks.
-                if let Some((boundary, top, bottom)) = insertion_line
-                    && let Some(payload) = egui::DragAndDrop::payload::<ChannelDrag>(ui.ctx())
-                {
-                    ui.painter().line_segment(
-                        [top, bottom],
-                        egui::Stroke::new(1.5, ui.visuals().text_color()),
+                        if ui.rect_contains_pointer(strip)
+                            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                        {
+                            let (boundary, x) = if pos.x < strip.center().x {
+                                (slot, strip.left())
+                            } else {
+                                (slot + 1, strip.right())
+                            };
+                            insertion_line = Some((
+                                boundary,
+                                egui::pos2(x, strip.top()),
+                                egui::pos2(x, strip.bottom()),
+                            ));
+                        }
+                    });
+                }
+                // Fill only the remaining viewport; adding an offscreen blank
+                // track's worth of space would force an unnecessary scrollbar.
+                let free_width = (viewport_right - ui.next_widget_position().x - 1.0).max(0.0);
+                let (space, response) =
+                    ui.allocate_exact_size(egui::vec2(free_width, height), egui::Sense::hover());
+                if slots.is_empty() {
+                    ui.painter().text(
+                        space.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Right-click to add a channel",
+                        egui::FontId::proportional(13.0),
+                        ui.visuals().weak_text_color(),
                     );
-                    if ui.input(|i| i.pointer.any_released()) {
-                        action = Some(StripAction::Insert(payload.0, boundary));
-                        egui::DragAndDrop::take_payload::<ChannelDrag>(ui.ctx());
-                    }
+                }
+                let open_menu =
+                    ui.rect_contains_pointer(space) && ui.input(|i| i.pointer.secondary_clicked());
+                crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response))
+                    .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                    .show(|ui| {
+                        if let Some(menu_action) = channel_menu(
+                            ui,
+                            None,
+                            slots.len(),
+                            self.can_paste(),
+                            self.bank.channels.len() < MAX_SIGNALS,
+                            self.deleted.is_some() || self.deleted_audio.is_some(),
+                        ) {
+                            action = Some(menu_action);
+                        }
+                    });
+                if ui.rect_contains_pointer(space) {
+                    insertion_line = Some((slots.len(), space.left_top(), space.left_bottom()));
                 }
             });
+            // Resolve after every header has registered its payload, so moving
+            // left shows the guide immediately too. Paint above neighboring tracks.
+            if let Some((boundary, top, bottom)) = insertion_line
+                && let Some(payload) = egui::DragAndDrop::payload::<ChannelDrag>(ui.ctx())
+            {
+                ui.painter().line_segment(
+                    [top, bottom],
+                    egui::Stroke::new(1.5, ui.visuals().text_color()),
+                );
+                if ui.input(|i| i.pointer.any_released()) {
+                    action = Some(StripAction::Insert(payload.0, boundary));
+                    egui::DragAndDrop::take_payload::<ChannelDrag>(ui.ctx());
+                }
+            }
+        });
         debug_assert!(mixer_output.content_size.y <= mixer_output.inner_rect.height() + 1.0);
         debug_assert!(
             slots.len() as f32 * 156.0 > mixer_output.inner_rect.width()
@@ -629,6 +633,31 @@ impl Panel {
         editor.data_mut(|d| {
             d.remove::<String>(egui::Id::new("parameter-context"));
         });
+    }
+
+    /// Follow mixer order, including the fixed input at the right-hand end.
+    pub(crate) fn select_relative(&mut self, forward: bool) {
+        let order: Vec<_> = self
+            .bank
+            .slots
+            .iter()
+            .flatten()
+            .copied()
+            .chain(std::iter::once(MASTER_ID))
+            .collect();
+        let Some(index) = self
+            .selected
+            .and_then(|id| order.iter().position(|value| *value == id))
+        else {
+            return;
+        };
+        let next = if forward {
+            (index + 1).min(order.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
+        self.act(StripAction::Select(order[next]));
+        self.reveal_selected = true;
     }
 
     pub(crate) fn delete_selection(&mut self) {
@@ -2149,6 +2178,68 @@ mod tests {
             bank: Bank::test_sources(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn keyboard_selection_reveals_offscreen_signals_and_handles_a_master_only_mixer() {
+        let ctx = egui::Context::default();
+        let mut panel = Panel {
+            selected: Some(MASTER_ID),
+            ..Default::default()
+        };
+        for forward in [false, true] {
+            panel.select_relative(forward);
+            assert_eq!(panel.selected, Some(MASTER_ID));
+        }
+        assert!(panel.bank.channels.is_empty());
+        for _ in 0..12 {
+            panel.bank.add_source(Input::Lfo).unwrap();
+        }
+        let last = panel.bank.slots.last().copied().flatten().unwrap();
+        let bank = panel.bank.clone();
+        let render = |panel: &mut Panel| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.show(
+                        ui,
+                        ui.available_rect_before_wrap(),
+                        &AnalysisFrame::default(),
+                        false,
+                        &AppTheme::default(),
+                    )
+                },
+            );
+            out.textures_delta.clear();
+            out
+        };
+        render(&mut panel);
+        panel.select_relative(false); // From the pinned master to the last scene signal.
+        render(&mut panel);
+        let out = render(&mut panel);
+        assert_eq!(panel.selected, Some(last));
+        let (clip, label) = out
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "12 LFO" => Some((
+                    shape.clip_rect,
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            clip.contains_rect(label),
+            "the selected signal must scroll into view: clip {clip:?}, label {label:?}"
+        );
+        assert_eq!(panel.bank, bank);
     }
 
     #[test]

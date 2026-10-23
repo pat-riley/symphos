@@ -896,6 +896,61 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if (self.inspecting_signal || self.inspecting_macro.is_some())
             && self.panel_fullscreen.is_none()
             && !self.workspace_menu_blocked(ctx)
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.memory(|memory| memory.focused().is_none())
+        {
+            let direction = ctx.input_mut(|input| {
+                if !input.focused || input.modifiers.any() {
+                    return None;
+                }
+                let key = input.events.iter().find_map(|event| match event {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if !modifiers.any()
+                        && matches!(
+                            key,
+                            egui::Key::ArrowLeft
+                                | egui::Key::ArrowUp
+                                | egui::Key::ArrowRight
+                                | egui::Key::ArrowDown
+                        ) =>
+                    {
+                        Some(*key)
+                    }
+                    _ => None,
+                })?;
+                input.consume_key(egui::Modifiers::NONE, key);
+                Some(matches!(key, egui::Key::ArrowRight | egui::Key::ArrowDown))
+            });
+            if let Some(forward) = direction {
+                // Egui also uses arrows for widget focus. This gesture belongs
+                // to the selected channel rather than an inspector control.
+                ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+                if let Some(index) = self.inspecting_macro {
+                    let next = if forward {
+                        (index + 1).min(11)
+                    } else {
+                        index.saturating_sub(1)
+                    };
+                    self.inspecting_macro = Some(next);
+                    ctx.data_mut(|data| {
+                        data.insert_temp(egui::Id::new(crate::macros::REVEAL_SELECTION), next)
+                    });
+                } else {
+                    self.signal_ui
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .select_relative(forward);
+                }
+                return;
+            }
+        }
+        if (self.inspecting_signal || self.inspecting_macro.is_some())
+            && self.panel_fullscreen.is_none()
+            && !self.workspace_menu_blocked(ctx)
             && !crate::shortcuts::editing_text(ctx)
             && !egui::Popup::is_any_open(ctx)
             && ctx.input_mut(|input| {
@@ -2950,6 +3005,172 @@ mod workspace_interaction_tests {
         );
         output.textures_delta.clear();
         output
+    }
+
+    #[test]
+    fn arrow_keys_navigate_macros_reveal_selection_and_leave_focused_controls_alone() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let macros = app.scene_macros.slots.clone();
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let pos = out
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Macro 1" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::PointerMoved(pos), button(pos, true)],
+        );
+        workspace_frame(&mut app, &ctx, now, vec![button(pos, false)]);
+        assert_eq!(app.inspecting_macro, Some(0));
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        for (keycode, expected) in [
+            (egui::Key::ArrowLeft, 0),
+            (egui::Key::ArrowRight, 1),
+            (egui::Key::ArrowDown, 2),
+            (egui::Key::ArrowUp, 1),
+        ] {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![key(keycode, egui::Modifiers::NONE)],
+            );
+            assert_eq!(app.inspecting_macro, Some(expected));
+        }
+        let field = egui::Id::new("navigation-focused-control");
+        ctx.memory_mut(|m| m.request_focus(field));
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            app.inspecting_macro,
+            Some(1),
+            "a focused control owns its arrows"
+        );
+        ctx.memory_mut(|m| m.surrender_focus(field));
+        app.settings_window.open = true;
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.inspecting_macro, Some(1));
+        app.settings_window.open = false;
+        egui::Popup::open_id(&ctx, egui::Id::new("navigation-test-menu"));
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.inspecting_macro, Some(1));
+        egui::Popup::close_all(&ctx);
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(app.inspecting_macro, Some(1));
+        for _ in 0..16 {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            );
+        }
+        assert_eq!(app.inspecting_macro, Some(11));
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let (clip, label) = out
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Macro 12" => Some((
+                    shape.clip_rect,
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            clip.contains_rect(label),
+            "the selected macro must scroll into view"
+        );
+        assert_eq!(app.scene_macros.slots, macros);
+        assert!(!app.history.can_undo(), "selection is not a creative edit");
+    }
+
+    #[test]
+    fn arrow_keys_follow_signal_mixer_order_and_include_the_permanent_input() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let (a, b, c, bank) = {
+            let mut panel = app.signal_ui.lock().unwrap();
+            let a = panel.bank.add_source(crate::signals::Input::Lfo).unwrap();
+            let b = panel
+                .bank
+                .add_source(crate::signals::Input::System)
+                .unwrap();
+            let c = panel.bank.add_source(crate::signals::Input::Midi).unwrap();
+            panel.bank.insert_channel(b, 0);
+            panel.selected = Some(a);
+            panel.selected_insert = Some((a, 99));
+            panel.show_signals = true;
+            (a, b, c, panel.bank.clone())
+        };
+        app.scene_macros.open = false;
+        app.inspecting_macro = None;
+        app.inspecting_signal = true;
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        for (key, expected) in [
+            (egui::Key::ArrowRight, c),
+            (egui::Key::ArrowDown, crate::signals::ui::MASTER_ID),
+            (egui::Key::ArrowRight, crate::signals::ui::MASTER_ID),
+            (egui::Key::ArrowLeft, c),
+            (egui::Key::ArrowUp, a),
+            (egui::Key::ArrowLeft, b),
+            (egui::Key::ArrowLeft, b),
+        ] {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let panel = app.signal_ui.lock().unwrap();
+            assert_eq!(panel.selected, Some(expected));
+            assert!(panel.selected_insert.is_none());
+            assert_eq!(panel.bank, bank);
+        }
+        assert!(!app.history.can_undo());
     }
 
     #[test]

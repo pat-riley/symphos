@@ -12,6 +12,7 @@ mod menu;
 pub mod scene;
 pub const INSPECT_REQUEST: &str = "macro-inspect-request";
 pub const INSPECT_SELECTION: &str = "macro-inspect-selection";
+pub(crate) const REVEAL_SELECTION: &str = "macro-reveal-selection";
 use menu::*;
 pub(crate) fn delete_scene_slot(
     ctx: &egui::Context,
@@ -419,6 +420,7 @@ fn bar_impl(
         .unwrap_or_default();
     menu_state.sync(&state.banks[kind as usize]);
     let mut action = None;
+    let reveal = ui.data_mut(|data| data.remove_temp::<usize>(egui::Id::new(REVEAL_SELECTION)));
     let shared =
         ui.data(|d| d.get_temp::<signals::ui::Shared>(egui::Id::new(signals::ui::CONTEXT_KEY)));
     let snapshot = shared
@@ -450,10 +452,18 @@ fn bar_impl(
             .max_rect(row_bounds),
     );
     row.set_clip_rect(row_bounds.intersect(child.clip_rect()));
-    egui::ScrollArea::horizontal()
+    let mut scroll = egui::ScrollArea::horizontal()
         .id_salt("assignable-macro-row")
-        .auto_shrink([false, false])
-        .show(&mut row, |ui| {
+        .auto_shrink([false, false]);
+    if let Some(index) = reveal {
+        scroll = scroll.horizontal_scroll_offset(crate::workspace_ui::scroll_offset_for_strip(
+            &row,
+            "assignable-macro-row",
+            index,
+            width,
+        ));
+    }
+    scroll.show(&mut row, |ui| {
             let row_height = ui.available_height();
             let mut insertion = None;
             ui.horizontal_top(|ui| {

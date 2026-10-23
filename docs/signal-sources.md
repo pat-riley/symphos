@@ -389,3 +389,12 @@ modulation link. The visualizer’s manual parameter value stays unchanged.
 Scene Undo restores the deleted macro; the macro context menu also offers
 **Undo last edit**. Delete and Backspace edit text while a name or other text
 field has focus.
+
+### Keyboard channel navigation
+
+After selecting a macro or signal, Left/Up selects the previous channel and
+Right/Down selects the next in displayed order. Selection stops at the ends;
+the fixed default input is the final signal. The inspector follows selection,
+and horizontal scrolling reveals offscreen channels. Navigation does not change
+values or create an undo entry. Focused controls, text editing, open menus, and
+modal dialogs retain their normal keyboard behavior.
