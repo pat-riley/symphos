@@ -51,6 +51,12 @@ another pane's left, right, top, or bottom edge to split that pane and move the
 existing component there. Drop in its center to swap the two pane positions.
 Settings and histories travel with the moved component. Escape cancels a drag.
 
+Use **View → Show Panel Gaps** (**Cmd+Shift+G** on macOS, **Ctrl+Shift+G**
+on Linux/Windows) to switch between spaced panes and touching square edges.
+The preference is remembered locally and does not alter scenes or presets.
+Shared edges remain draggable when gaps are hidden; double-click an edge to
+balance its split.
+
 Each header has freeze/resume, fullscreen, and close buttons. Right-click anywhere
 in a pane for Inspect, Copy/Paste, Duplicate, Freeze/Resume, Fullscreen, Position,
 Swap with, Balance sizes, Reset settings, and Delete. Paste replaces the clicked

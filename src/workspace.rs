@@ -47,6 +47,27 @@ pub struct Divider {
     pub handle: Rect,
 }
 
+impl Divider {
+    /// Keep a usable target even when adjacent pane rectangles share an edge.
+    pub fn interaction_rect(&self) -> Rect {
+        let padding = if self.axis == Axis::Horizontal {
+            eframe::egui::vec2((GAP - self.handle.width()).max(0.0) * 0.5, 0.0)
+        } else {
+            eframe::egui::vec2(0.0, (GAP - self.handle.height()).max(0.0) * 0.5)
+        };
+        self.handle.expand2(padding).intersect(self.bounds)
+    }
+    pub fn dragged_fraction(&self, delta: eframe::egui::Vec2) -> f32 {
+        if self.axis == Axis::Horizontal {
+            (self.handle.left() - self.bounds.left() + delta.x)
+                / (self.bounds.width() - self.handle.width()).max(1.0)
+        } else {
+            (self.handle.top() - self.bounds.top() + delta.y)
+                / (self.bounds.height() - self.handle.height()).max(1.0)
+        }
+    }
+}
+
 impl Tile {
     pub fn split(axis: Axis, fraction: f32, first: Self, second: Self) -> Self {
         Self::Split {
@@ -218,7 +239,7 @@ impl Tile {
             }
         }
     }
-    fn minimum_size(&self) -> eframe::egui::Vec2 {
+    fn minimum_size(&self, gap: f32) -> eframe::egui::Vec2 {
         match self {
             Self::Pane(_) => eframe::egui::vec2(140.0, 96.0),
             Self::Split {
@@ -227,20 +248,28 @@ impl Tile {
                 second,
                 ..
             } => {
-                let a = first.minimum_size();
-                let b = second.minimum_size();
+                let a = first.minimum_size(gap);
+                let b = second.minimum_size(gap);
                 if *axis == Axis::Horizontal {
-                    eframe::egui::vec2(a.x + b.x + GAP, a.y.max(b.y))
+                    eframe::egui::vec2(a.x + b.x + gap, a.y.max(b.y))
                 } else {
-                    eframe::egui::vec2(a.x.max(b.x), a.y + b.y + GAP)
+                    eframe::egui::vec2(a.x.max(b.x), a.y + b.y + gap)
                 }
             }
         }
     }
     pub fn geometry(&self, rect: Rect) -> (Vec<(usize, Rect)>, Vec<Divider>) {
+        self.geometry_with_gaps(rect, true)
+    }
+    pub fn geometry_with_gaps(
+        &self,
+        rect: Rect,
+        show_gaps: bool,
+    ) -> (Vec<(usize, Rect)>, Vec<Divider>) {
         fn walk(
             tile: &Tile,
             rect: Rect,
+            gap_size: f32,
             path: &mut Vec<bool>,
             leaves: &mut Vec<(usize, Rect)>,
             handles: &mut Vec<Divider>,
@@ -258,10 +287,10 @@ impl Tile {
                     } else {
                         rect.height()
                     };
-                    let gap = GAP.min(extent * 0.1);
+                    let gap = gap_size.min(extent * 0.1);
                     let usable = (extent - gap).max(0.0);
-                    let a = first.minimum_size();
-                    let b = second.minimum_size();
+                    let a = first.minimum_size(gap_size);
+                    let b = second.minimum_size(gap_size);
                     let (a, b) = if *axis == Axis::Horizontal {
                         (a.x, b.x)
                     } else {
@@ -301,17 +330,24 @@ impl Tile {
                         handle,
                     });
                     path.push(false);
-                    walk(first, a, path, leaves, handles);
+                    walk(first, a, gap_size, path, leaves, handles);
                     path.pop();
                     path.push(true);
-                    walk(second, b, path, leaves, handles);
+                    walk(second, b, gap_size, path, leaves, handles);
                     path.pop();
                 }
             }
         }
         let mut leaves = Vec::new();
         let mut handles = Vec::new();
-        walk(self, rect, &mut Vec::new(), &mut leaves, &mut handles);
+        walk(
+            self,
+            rect,
+            if show_gaps { GAP } else { 0.0 },
+            &mut Vec::new(),
+            &mut leaves,
+            &mut handles,
+        );
         (leaves, handles)
     }
 }
@@ -973,6 +1009,36 @@ pub fn apply_layout(panes: &mut Vec<ModulePane>, previous: Option<&Tile>, templa
 mod tests {
     use super::*;
     use eframe::egui::Vec2;
+    #[test]
+    fn hidden_panel_gaps_tile_the_entire_area_and_keep_resize_targets() {
+        let rect = Rect::from_min_size(Pos2::new(20.0, 40.0), Vec2::new(1100.0, 800.0));
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let tree = Tile::split(axis, 0.4, Tile::Pane(0), Tile::Pane(1));
+            let (leaves, dividers) = tree.geometry_with_gaps(rect, false);
+            let divider = &dividers[0];
+            assert!((leaves.iter().map(|(_, r)| r.area()).sum::<f32>() - rect.area()).abs() < 1.0);
+            assert_eq!(
+                leaves[0].1.max,
+                if axis == Axis::Horizontal {
+                    Pos2::new(leaves[1].1.left(), rect.bottom())
+                } else {
+                    Pos2::new(rect.right(), leaves[1].1.top())
+                }
+            );
+            assert!(divider.interaction_rect().width() >= GAP);
+            assert!(divider.interaction_rect().height() >= GAP);
+            assert!((divider.dragged_fraction(Vec2::ZERO) - 0.4).abs() < 0.0001);
+            let delta = if axis == Axis::Horizontal {
+                Vec2::new(110.0, 0.0)
+            } else {
+                Vec2::new(0.0, 80.0)
+            };
+            assert!((divider.dragged_fraction(delta) - 0.5).abs() < 0.0001);
+        }
+        let (leaves, _) = Tile::default_view().geometry_with_gaps(rect, false);
+        assert!((leaves.iter().map(|(_, r)| r.area()).sum::<f32>() - rect.area()).abs() < 1.0);
+    }
+
     #[test]
     fn closing_promotes_sibling_without_touching_unrelated_proportions() {
         let tree = Tile::default_view().remove(2).unwrap();

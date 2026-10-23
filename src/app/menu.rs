@@ -110,6 +110,10 @@ impl SymphosApp {
                 checked = self.fullscreen;
                 true
             }
+            PanelGaps => {
+                checked = self.appearance.show_panel_gaps;
+                !panel_fullscreen
+            }
             Balance => ids.len() > 1 && !panel_fullscreen,
             ZoomIn => ctx.zoom_factor() < 2.0,
             ZoomOut => ctx.zoom_factor() > 0.6,
@@ -230,6 +234,7 @@ impl SymphosApp {
             Info => self.help_open = !self.help_open,
             PanelFullscreen => self.toggle_panel_fullscreen(self.selected_pane, Instant::now()),
             Fullscreen => self.toggle_fullscreen(ctx),
+            PanelGaps => self.appearance.show_panel_gaps = !self.appearance.show_panel_gaps,
             Balance => {
                 if let Some(tree) = &mut self.tiles {
                     equalize_splits(tree);
