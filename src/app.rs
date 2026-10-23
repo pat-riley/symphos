@@ -61,7 +61,6 @@ pub struct SymphosApp {
     fullscreen: bool,
     panel_fullscreen: Option<usize>,
     fullscreen_macros: bool,
-    presentation_decorations_hidden: bool,
     show_inspector: bool,
     show_issues: bool,
     show_shortcuts: bool,
@@ -141,7 +140,6 @@ impl SymphosApp {
             fullscreen: false,
             panel_fullscreen: None,
             fullscreen_macros: false,
-            presentation_decorations_hidden: false,
             show_inspector: false,
             show_issues: false,
             show_shortcuts: false,
@@ -1571,12 +1569,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         _now: Instant,
     ) {
-        let presentation = self.panel_fullscreen.is_some();
-        if presentation != self.presentation_decorations_hidden {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Decorations(!presentation));
-            self.presentation_decorations_hidden = presentation;
-        }
         let source_label = self
             .sources
             .iter()
@@ -2469,7 +2461,6 @@ mod workspace_interaction_tests {
             fullscreen: false,
             panel_fullscreen: None,
             fullscreen_macros: false,
-            presentation_decorations_hidden: false,
             show_inspector: false,
             show_issues: false,
             show_shortcuts: false,
@@ -4104,7 +4095,7 @@ mod workspace_interaction_tests {
     }
 
     #[test]
-    fn fullscreen_is_chrome_free_edge_to_edge_and_escape_restores_the_editor() {
+    fn fullscreen_keeps_window_controls_and_escape_restores_the_editor() {
         let mut app = app();
         app.panes[0].kind = ModuleKind::Rings;
         let mut saved = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
@@ -4129,10 +4120,10 @@ mod workspace_interaction_tests {
             if r.rect == bounds && r.stroke.width > 0.0))
         );
         assert!(
-            out.viewport_output[&egui::ViewportId::ROOT]
+            !out.viewport_output[&egui::ViewportId::ROOT]
                 .commands
                 .iter()
-                .any(|cmd| matches!(cmd, egui::ViewportCommand::Decorations(false)))
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::Decorations(_)))
         );
         assert_eq!(app.panes[0].copy_settings(), settings);
         let out = workspace_frame(
@@ -4149,12 +4140,11 @@ mod workspace_interaction_tests {
         );
         assert!(app.panel_fullscreen.is_none());
         assert!(
-            out.viewport_output[&egui::ViewportId::ROOT]
+            !out.viewport_output[&egui::ViewportId::ROOT]
                 .commands
                 .iter()
-                .any(|cmd| matches!(cmd, egui::ViewportCommand::Decorations(true)))
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::Decorations(_)))
         );
-        assert!(!app.presentation_decorations_hidden);
         app.toggle_panel_fullscreen(0, now);
         workspace_frame(&mut app, &ctx, now, vec![]);
         app.pane_action(0, pane_menu::Action::Inspect, &AnalysisFrame::default());

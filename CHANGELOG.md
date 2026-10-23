@@ -17,9 +17,10 @@ All notable changes to Symphos will be documented here. The project follows
   give the left-aligned Signals/Macros controls roomier icon/label padding.
 
 - Make pane fullscreen a clean edge-to-edge presentation: hide pane headers,
-  controls, outline, hover help, orientation navigator, exit hint, and native
-  title bar. Escape restores the workspace and window chrome without changing
-  visualizer settings; explicitly opened fullscreen macros remain available.
+  controls, outline, hover help, orientation navigator, and exit hint, while
+  retaining the native macOS red/yellow/green window controls. Escape restores
+  the workspace without changing visualizer settings; explicitly opened
+  fullscreen macros remain available.
 
 - Add a resizable Macros dock, including fullscreen, with double-click reset and
   a remembered local height. Center crisp resize guides evenly between pane,
