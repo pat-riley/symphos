@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Redesign the shared color picker with a larger saturation/brightness field,
+  rounded hue strip, and compact eyedropper. Add editable Hex, RGB, CSS, HSL,
+  and HSB representations with validation; preserve existing opaque colors.
+
 - Extend fullscreen scene backgrounds behind the native macOS traffic lights,
   including gradients, and restore the editor's title-bar inset on exit. Lower
   the minimum window width from 1024 to 768 and accept narrower saved workspaces.

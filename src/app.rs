@@ -895,7 +895,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
 
     fn handle_shortcut(&mut self, ctx: &egui::Context, frame: &AnalysisFrame, now: Instant) {
         use crate::shortcuts::Action;
-        if self.scene_library.busy() || self.settings_window.open {
+        if self.scene_library.busy()
+            || self.settings_window.open
+            || crate::color_picker::is_open(ctx)
+        {
             return; // The modal owns Escape and blocks workspace shortcuts.
         }
         if (self.inspecting_signal || self.inspecting_macro.is_some())

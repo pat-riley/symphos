@@ -7,6 +7,7 @@ use crate::project_menu::{Action, ItemState};
 impl SymphosApp {
     pub(super) fn workspace_menu_blocked(&self, ctx: &egui::Context) -> bool {
         self.settings_window.open
+            || crate::color_picker::is_open(ctx)
             || self.project_dialog.open
             || self.project_dialog.pending_new
             || self.project_dialog.pending_open.is_some()

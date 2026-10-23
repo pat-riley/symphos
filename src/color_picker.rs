@@ -3,12 +3,24 @@ use std::time::Duration;
 
 use egui::{Color32, Context, Id, Popup, PopupCloseBehavior, Response, Ui};
 
-use crate::{
-    help::HoverHelp,
-    icons::{self, Icon},
-};
+use crate::help::HoverHelp;
+
+mod editor;
+mod formats;
 
 const SAMPLING: &str = "screen-color-sampling";
+const OPEN_PICKER: &str = "open-color-picker";
+
+#[derive(Clone)]
+struct OpenPicker {
+    owner: Id,
+    last_seen: u64,
+}
+
+pub fn is_open(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<OpenPicker>(Id::new(OPEN_PICKER)))
+        .is_some_and(|open| ctx.cumulative_frame_nr().saturating_sub(open.last_seen) <= 1)
+}
 
 #[derive(Clone)]
 struct Sampling {
@@ -22,6 +34,9 @@ struct Sampling {
 /// Poll before drawing controls so an asynchronous color change gets its own
 /// undo transaction and updates the active preset's edited state.
 pub fn begin_frame(ctx: &Context) -> bool {
+    if !is_open(ctx) {
+        ctx.data_mut(|d| d.remove::<OpenPicker>(Id::new(OPEN_PICKER)));
+    }
     let id = Id::new(SAMPLING);
     let Some(mut pending) = ctx.data(|d| d.get_temp::<Sampling>(id)) else {
         return false;
@@ -73,35 +88,46 @@ pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
     }
 
     let popup_id = response.id.with("color-popup");
+    let editor_id = response.id.with("color-editor");
+    let open_id = Id::new(OPEN_PICKER);
+    let mut open = ui
+        .ctx()
+        .data(|d| d.get_temp::<OpenPicker>(open_id))
+        .is_some_and(|open| open.owner == response.id);
+    if response.clicked() {
+        open = !open;
+    }
+    // egui's ComboBox owns the single memory-backed popup. Keep the editor's
+    // open state separate so choosing a representation cannot dismiss it.
+    let nested_hovered = open
+        && ui
+            .ctx()
+            .data(|d| d.get_temp::<editor::Editor>(editor_id))
+            .is_some_and(|editor| editor.format_menu_hovered(ui.ctx()));
+    let close_behavior = if nested_hovered {
+        PopupCloseBehavior::IgnoreClicks
+    } else {
+        PopupCloseBehavior::CloseOnClickOutside
+    };
     Popup::menu(&response)
         .id(popup_id)
-        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .open_bool(&mut open)
+        .close_behavior(close_behavior)
         .show(|ui| {
-            ui.spacing_mut().slider_width = 275.0;
-            let mut selected = Color32::from_rgb(color[0], color[1], color[2]);
-            if egui::color_picker::color_picker_color32(
-                ui,
-                &mut selected,
-                egui::color_picker::Alpha::Opaque,
-            ) {
-                *color = [selected.r(), selected.g(), selected.b()];
+            let mut editor = ui
+                .ctx()
+                .data(|d| d.get_temp::<editor::Editor>(editor_id))
+                .unwrap_or_else(|| editor::Editor::new(*color));
+            editor.sync(*color);
+            let sample = editor.controls(ui);
+            if *color != editor.rgb() {
+                *color = editor.rgb();
                 response.mark_changed();
             }
-            ui.add_space(4.0);
-            let sample = ui.add_enabled(
-                cfg!(target_os = "macos") || cfg!(test),
-                egui::Button::new("      Sample screen color").min_size(egui::vec2(275.0, 26.0)),
-            );
-            let icon_rect = egui::Rect::from_center_size(
-                sample.rect.left_center() + egui::vec2(16.0, 0.0),
-                egui::Vec2::splat(18.0),
-            );
-            icons::paint(
-                ui,
-                icon_rect,
-                Icon::Eyedropper,
-                ui.style().interact(&sample).fg_stroke.color,
-            );
+            ui.ctx().data_mut(|d| d.insert_temp(editor_id, editor));
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(response.id.with("test-eyedropper"), sample.rect));
             if sample
                 .help_text(
                     "Sample a pixel anywhere on screen. Escape cancels without changing the color.",
@@ -126,6 +152,23 @@ pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
                 ui.close();
             }
         });
+    let last_seen = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|d| {
+        if open {
+            d.insert_temp(
+                open_id,
+                OpenPicker {
+                    owner: response.id,
+                    last_seen,
+                },
+            );
+        } else if d
+            .get_temp::<OpenPicker>(open_id)
+            .is_some_and(|open| open.owner == response.id)
+        {
+            d.remove::<OpenPicker>(open_id);
+        }
+    });
     response.help_text("Choose a color, or use the eyedropper to sample the screen.")
 }
 
@@ -216,18 +259,11 @@ mod tests {
         let (_, controls, _) = frame(&ctx, &mut colors, vec![]);
         click(&ctx, &mut colors, controls[0].rect.center());
         frame(&ctx, &mut colors, vec![]);
-        let (output, _, _) = frame(&ctx, &mut colors, vec![]);
-        let sample = output
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Text(t) if t.galley.job.text.trim() == "Sample screen color" => {
-                    Some(t.pos + t.galley.size() * 0.5)
-                }
-                _ => None,
-            })
+        frame(&ctx, &mut colors, vec![]);
+        let sample = ctx
+            .data(|d| d.get_temp::<egui::Rect>(controls[0].id.with("test-eyedropper")))
             .expect("every color popup has an eyedropper");
-        click(&ctx, &mut colors, sample);
+        click(&ctx, &mut colors, sample.center());
         assert_eq!(
             colors, original,
             "starting sampling must not change the color"
@@ -247,6 +283,90 @@ mod tests {
         assert!(!controls[1].changed());
         assert!(ctx.data(|d| d.get_temp::<Sampling>(key)).is_none());
         assert!(!frame(&ctx, &mut colors, vec![]).1[0].changed());
+    }
+
+    #[test]
+    fn format_menu_and_text_entry_update_colors_without_changing_them_on_mode_switch() {
+        let ctx = Context::default();
+        let mut colors = [[150, 60, 30], [30, 60, 150]];
+        let (_, controls, _) = frame(&ctx, &mut colors, vec![]);
+        click(&ctx, &mut colors, controls[0].rect.center());
+        frame(&ctx, &mut colors, vec![]);
+        let locate = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text.trim() == label => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing {label}: {:?}",
+                        output
+                            .shapes
+                            .iter()
+                            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape {
+                                Some(t.galley.job.text.clone())
+                            } else {
+                                None
+                            })
+                            .collect::<Vec<_>>()
+                    )
+                })
+        };
+        let output = frame(&ctx, &mut colors, vec![]).0;
+        click(&ctx, &mut colors, locate(&output, "Hex"));
+        frame(&ctx, &mut colors, vec![]);
+        let output = frame(&ctx, &mut colors, vec![]).0;
+        for label in ["Hex", "RGB", "CSS", "HSL", "HSB"] {
+            locate(&output, label);
+        }
+        click(&ctx, &mut colors, locate(&output, "CSS"));
+        let original = colors;
+        frame(&ctx, &mut colors, vec![]);
+        assert_eq!(colors, original);
+        let field = ctx
+            .data(|d| d.get_temp::<egui::Rect>(Id::new("test-color-text-field")))
+            .unwrap();
+        click(&ctx, &mut colors, field.center());
+        let select_all = || egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame(
+            &ctx,
+            &mut colors,
+            vec![select_all(), egui::Event::Paste("rgb(255 136 0)".into())],
+        );
+        assert_eq!(colors, [[255, 136, 0], original[1]]);
+        frame(
+            &ctx,
+            &mut colors,
+            vec![select_all(), egui::Event::Paste("invalid color".into())],
+        );
+        assert_eq!(
+            colors[0],
+            [255, 136, 0],
+            "invalid input must not replace the color"
+        );
+        let output = frame(&ctx, &mut colors, vec![]).0;
+        click(&ctx, &mut colors, locate(&output, "CSS"));
+        frame(&ctx, &mut colors, vec![]);
+        let output = frame(&ctx, &mut colors, vec![]).0;
+        click(&ctx, &mut colors, locate(&output, "HSL"));
+        let output = frame(&ctx, &mut colors, vec![]).0;
+        for label in ["H", "S", "L"] {
+            locate(&output, label);
+        }
+        assert_eq!(colors[0], [255, 136, 0]);
+        click(&ctx, &mut colors, egui::pos2(650.0, 650.0));
+        assert!(!is_open(&ctx), "a click outside dismisses the picker");
     }
 
     #[test]
