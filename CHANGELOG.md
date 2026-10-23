@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Give expanded macro docks wider strips and more generous control spacing.
+  Show the mapped parameter beneath the knob/value, independently of its macro
+  title, with component context and a separate modulation-source group.
+
 - Apply the borderless context-menu style to pane menus and their submenus,
   parameter/MIDI actions, library entries, and saved swatches. Remove the older
   competing menu styling path and keep pane menus to two deliberate dividers.

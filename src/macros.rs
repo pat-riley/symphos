@@ -441,7 +441,11 @@ fn bar_impl(
         .iter()
         .any(|s| s.parameter.is_some())
         .then(|| settings.parameter_document().ok().unwrap_or_default());
-    let width = ((child.available_width() - 1.0) / 12.0).max(116.0);
+    // Larger docks should open up the controls rather than add only empty space.
+    let expansion = ((child.available_height() - 220.0) / 200.0).clamp(0.0, 1.0);
+    let padding_x = (8.0 + expansion * 4.0).round() as i8;
+    let padding_y = (3.0 + expansion * 8.0).round() as i8;
+    let width = ((child.available_width() - 1.0) / 12.0).max(116.0 + expansion * 32.0);
     let row_bounds = Rect::from_min_max(
         child.available_rect_before_wrap().min,
         rect.max - Vec2::splat(1.0),
@@ -552,33 +556,23 @@ fn bar_impl(
                                 action = Some(rename);
                             }
                             egui::Frame::new()
-                                .inner_margin(egui::Margin::symmetric(8, 3))
+                                .inner_margin(egui::Margin::symmetric(padding_x, padding_y))
                                 .show(ui, |ui| {
-                                    let width = width - 16.0;
+                                    let width = width - 2.0 * f32::from(padding_x);
                                     ui.set_width(width);
-                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0 + expansion * 4.0);
                                     if let Some(p) = slot.parameter.clone() {
                                         let component = scene.as_deref().and_then(|components| {
                                             slot.target.as_ref().and_then(|target| {
                                                 components.iter().find(|c| &c.target == target)
                                             })
                                         });
-                                        if scene.is_some() {
-                                            let owner = component.map_or_else(
-                                                || "Component unavailable".into(),
-                                                |c| c.label.clone(),
-                                            );
-                                            ui.add_sized(
-                                                [width, 14.0],
-                                                egui::Label::new(
-                                                    egui::RichText::new(owner.clone())
-                                                        .small()
-                                                        .color(theme.muted),
-                                                )
-                                                .truncate(),
-                                            )
-                                            .help_text(owner);
-                                        }
+                                        let owner = component.map_or_else(
+                                            || if scene.is_some() { "Component unavailable".into() }
+                                                else { kind.label().to_owned() },
+                                            |c| c.label.clone(),
+                                        );
+                                        ui.add_space(expansion * 8.0);
                                         let base = component
                                             .map(|c| &c.document)
                                             .or(document.as_ref())
@@ -685,8 +679,27 @@ fn bar_impl(
                                                 set(settings, &p.field, p.value(value) * p.scale);
                                             }
                                         }
+                                        // A macro's user-assigned title may differ from its target.
+                                        // Keep the actual parameter explicit beneath the knob/value.
+                                        ui.vertical_centered(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 2.0;
+                                            ui.add_sized([width, 16.0], egui::Label::new(
+                                                egui::RichText::new(&p.label).size(12.0).strong()
+                                            ).truncate()).help_text(format!("{} · {}", owner, p.label));
+                                            if expansion > 0.15 && scene.is_some() {
+                                                ui.add_sized([width, 14.0], egui::Label::new(
+                                                    egui::RichText::new(&owner).size(10.0).color(theme.muted)
+                                                ).truncate()).help_text(&owner);
+                                            }
+                                        });
+                                        ui.add_space(expansion * 10.0);
+                                        if row_height >= 320.0 {
+                                            ui.add_sized([width, 14.0], egui::Label::new(
+                                                egui::RichText::new("Modulation source").size(10.0).color(theme.muted)
+                                            ).truncate());
+                                        }
                                         let badge = ui.add_sized(
-                                            [width, 24.0],
+                                            [width, 24.0 + expansion * 2.0],
                                             egui::Button::new(
                                                 egui::RichText::new(source).color(color),
                                             )
@@ -769,13 +782,13 @@ fn bar_impl(
                                             ui.data_mut(|d| d.remove::<egui::Id>(editor_key));
                                         }
                                         ui.horizontal(|ui| {
-                                            ui.spacing_mut().interact_size.y = 20.0;
+                                            ui.spacing_mut().interact_size.y = 20.0 + expansion * 4.0;
                                             if slot.signal.is_some() {
                                                 ui.checkbox(&mut slot.enabled, "Mod");
                                                 let mut depth = slot.depth * 100.0;
                                                 if ui
                                                     .add_sized(
-                                                        [ui.available_width().max(1.0), 20.0],
+                                                        [ui.available_width().max(1.0), 20.0 + expansion * 4.0],
                                                         egui::DragValue::new(&mut depth)
                                                             .range(-1200.0..=1200.0)
                                                             .speed(1.0)
