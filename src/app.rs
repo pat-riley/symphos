@@ -4150,10 +4150,7 @@ fn workspace_layout_animated(
     let help = help_open.then(|| {
         Rect::from_min_max(
             Pos2::new(content.left(), dashboard.bottom() - 160.0),
-            Pos2::new(
-                content.left() + DEFAULT_SETTINGS_WIDTH.min(dashboard.width()),
-                dashboard.bottom(),
-            ),
+            dashboard.right_bottom(),
         )
     });
     if let Some(help) = help {
@@ -4181,7 +4178,10 @@ fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect
         // Info View shares that baseline and grows with the selected dock.
         *help = Rect::from_min_max(
             Pos2::new(rect.left(), rect.top() + 8.0),
-            Pos2::new(rect.left() + help.width(), rect.bottom() - 8.0),
+            Pos2::new(
+                rect.left() + DEFAULT_SETTINGS_WIDTH.min(rect.width()),
+                rect.bottom() - 8.0,
+            ),
         );
         rect.min.x = help.right() + 10.0;
     }
@@ -4707,6 +4707,9 @@ mod layout_tests {
                 for height in [236.0, 320.0, 390.0, 600.0] {
                     let content = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 658.0));
                     let mut layout = workspace_layout(content, true, help, 236.0);
+                    if let Some(help) = layout.help {
+                        assert_eq!(help.x_range(), layout.dashboard.x_range());
+                    }
                     let bar = dock_performance(&mut layout, height);
                     assert!(layout.dashboard.height() >= 90.0);
                     assert!(!bar.intersects(layout.dashboard));
@@ -4717,6 +4720,7 @@ mod layout_tests {
                         assert_eq!(help.top(), bar.top() + 8.0);
                         assert_eq!(help.bottom(), bar.bottom() - 8.0);
                         assert_eq!(help.left(), content.left());
+                        assert_eq!(help.width(), DEFAULT_SETTINGS_WIDTH);
                         assert_eq!(bar.left(), help.right() + 10.0);
                     }
                     assert!(content.contains_rect(bar));
@@ -4811,6 +4815,7 @@ mod layout_tests {
                     assert!(content.contains_rect(layout.dashboard));
                     assert!(layout.dashboard.is_positive());
                     if let Some(help) = layout.help {
+                        assert_eq!(help.x_range(), layout.dashboard.x_range());
                         assert_eq!(
                             help.left_bottom(),
                             content.left_bottom() - Vec2::new(0.0, 50.0)

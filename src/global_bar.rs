@@ -72,49 +72,87 @@ impl GlobalBar {
         ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
         ui.spacing_mut().interact_size.y = 26.0;
         ui.style_mut().override_font_id = Some(FontId::proportional(12.0));
-        let compact = ui.available_width() < 900.0;
-        ui.horizontal_centered(|ui| {
-            help::toggle(ui, help_open);
-            if ui
-                .add(egui::Button::selectable(*macros_open, "Macros"))
-                .help_text(
-                    crate::shortcuts::platform_label("Show / hide macros · Ctrl + B").as_ref(),
-                )
-                .clicked()
-            {
-                *macros_open = !*macros_open;
-                if *macros_open {
-                    *signals_open = false;
-                }
-            }
+        let bounds = ui.available_rect_before_wrap();
+        let compact = bounds.width() < 900.0;
+        let help_rect = Rect::from_center_size(
+            Pos2::new(bounds.left() + 13.0, bounds.center().y),
+            Vec2::splat(26.0),
+        );
+        help::toggle(
+            &mut ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("help-toggle")
+                    .max_rect(help_rect),
+            ),
+            help_open,
+        );
 
-            if ui
-                .add(egui::Button::selectable(*signals_open, "Signals"))
-                .help_text("Signals\nShow the scene’s modulation sources. Create audio detectors, MIDI controls or LFOs, shape their output, then connect them to macros. The Signals and Macros docks share this space.")
-                .clicked()
-            {
-                *signals_open = !*signals_open;
-                if *signals_open {
-                    *macros_open = false;
+        // Keep the dock switcher centered independently of the help and meters.
+        let tabs = Rect::from_center_size(bounds.center(), Vec2::new(156.0, 28.0));
+        let border = Stroke::new(1.0, info.theme.foreground.gamma_multiply(0.16));
+        ui.painter().rect_filled(tabs, 3.0, info.theme.navigation);
+        for (index, (label, selected, description)) in [
+            ("Macros", *macros_open, crate::shortcuts::platform_label("Show / hide macros · Ctrl + B").into_owned()),
+            ("Signals", *signals_open, "Signals\nShow the scene’s modulation sources. Create audio detectors, MIDI controls or LFOs, shape their output, then connect them to macros. The Signals and Macros docks share this space.".into()),
+        ].into_iter().enumerate() {
+            let rect = Rect::from_min_size(
+                tabs.min + Vec2::new(index as f32 * 78.0, 0.0),
+                Vec2::new(78.0, tabs.height()),
+            );
+            let response = ui.interact(rect, ui.id().with(("dock-toggle", label)), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .help_text(description);
+            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label));
+            if selected || response.hovered() {
+                ui.painter().rect_filled(rect.shrink(1.0), 2.0, info.theme.foreground.gamma_multiply(if response.hovered() { 0.08 } else { 0.045 }));
+            }
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label,
+                FontId::proportional(12.0), if selected || response.hovered() { info.theme.foreground } else { info.theme.muted });
+            if selected {
+                ui.painter().hline(rect.x_range().shrink(16.0), rect.bottom() - 1.5, Stroke::new(2.0, info.theme.accent));
+            }
+            if response.clicked() {
+                if index == 0 {
+                    *macros_open = !*macros_open;
+                    if *macros_open { *signals_open = false; }
+                } else {
+                    *signals_open = !*signals_open;
+                    if *signals_open { *macros_open = false; }
                 }
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.meters(ui, &info, if compact { 160.0 } else { 220.0 });
-                if !compact {
-                    ui.label(
-                        RichText::new(format!("{:.1} kHz", info.frame.sample_rate as f32 / 1000.0))
-                            .small()
-                            .color(info.theme.muted),
-                    )
-                    .help_text("Sample rate of the selected audio source.");
-                    ui.label(
-                        RichText::new(format!("{:.0} FPS", info.fps))
-                            .small()
-                            .color(info.theme.muted),
-                    )
-                    .help_text("Measured display frame rate.");
-                }
-            });
+        }
+        ui.painter()
+            .rect_stroke(tabs, 3.0, border, egui::StrokeKind::Inside);
+        ui.painter().vline(tabs.center().x, tabs.y_range(), border);
+
+        let meter_bounds = Rect::from_center_size(
+            Pos2::new(
+                bounds.right() - if compact { 80.0 } else { 175.0 },
+                bounds.center().y,
+            ),
+            Vec2::new(if compact { 160.0 } else { 350.0 }, 30.0),
+        );
+        let mut meters = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("capture-meters")
+                .max_rect(meter_bounds),
+        );
+        meters.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            self.meters(ui, &info, if compact { 160.0 } else { 220.0 });
+            if !compact {
+                ui.label(
+                    RichText::new(format!("{:.1} kHz", info.frame.sample_rate as f32 / 1000.0))
+                        .small()
+                        .color(info.theme.muted),
+                )
+                .help_text("Sample rate of the selected audio source.");
+                ui.label(
+                    RichText::new(format!("{:.0} FPS", info.fps))
+                        .small()
+                        .color(info.theme.muted),
+                )
+                .help_text("Measured display frame rate.");
+            }
         });
     }
 
@@ -257,7 +295,7 @@ mod tests {
 
     #[test]
     fn compact_bar_fits_minimum_width_and_keeps_help_left_and_levels_right() {
-        for width in [540.0, 740.0, 1000.0, 1416.0] {
+        for width in [540.0, 740.0, 900.0, 1000.0, 1416.0] {
             let context = egui::Context::default();
             let mut bar = GlobalBar::default();
             let mut help = false;
@@ -305,6 +343,22 @@ mod tests {
             let x = |name| labels.iter().find(|(label, _)| *label == name).unwrap().1.x;
             assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Circle(c) if (c.radius - 9.5).abs() < 0.01 && c.center.x < x("Macros"))));
             assert!(x("Macros") < x("Signals"));
+            let text_center = |name| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == name => {
+                            Some(text.pos.x + text.galley.size().x * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            assert!(
+                ((text_center("Macros") + text_center("Signals")) * 0.5 - bounds.center().x).abs()
+                    < 1.0
+            );
             assert!(
                 !labels
                     .iter()
