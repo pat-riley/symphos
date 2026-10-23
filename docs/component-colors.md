@@ -35,7 +35,7 @@ at **Classic LED** and supports factory and saved/custom gradients. Adding a pan
 or dragging a component into an existing pane uses this preference. Existing
 scenes, component presets, and inspector overrides retain their stored colors.
 The preference is local to this installation and is not a scene-wide color link.
-It covers all fourteen visualizers with the shared Palette control; MilkDrop
+It covers all sixteen visualizers with the shared Palette control; MilkDrop
 presets and sketches with dedicated particle/material colors keep those systems.
 
 Choose **Appearance**, then open **Palette**. There are twenty
@@ -58,6 +58,11 @@ and interference. Color driver selects grain variation/energy or vibration/signe
 wave; spread, offset and contrast control the sampled range. Plate color remains
 independent. Older two-color presets keep their exact endpoints until a palette
 is chosen. Palette edits change rendering without scattering or restarting grains.
+Particle Waves and Spectral Bloom share the same picker, including independent
+palettes in each layer's appearance override. Their Color driver and Gradient
+blend controls still select and blend colors. Older presets keep their authored
+three-color distribution until a palette is selected. Color edits preserve
+particle offsets and spectrum history.
 The compact Viridis/Magma/Inferno/Plasma gradients use five color anchors.
 
 ## Edit and save

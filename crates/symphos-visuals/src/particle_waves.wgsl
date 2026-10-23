@@ -1,4 +1,4 @@
-struct Layer { transform:vec4f, rotation:vec4f, style:vec4f, a:vec4f, b:vec4f, c:vec4f }
+struct Layer { transform:vec4f, rotation:vec4f, style:vec4f, a:vec4f, b:vec4f, c:vec4f, gradient:array<vec4f,8>, palette:vec4f }
 struct Frame {
     clock:vec4f, geometry:vec4f, arrangement:vec4f, motion:vec4f, response:vec4f,
     ripple:vec4f, look:vec4f, optics:vec4f, color:vec4f, light:vec4f,
@@ -81,6 +81,21 @@ fn simulate(@builtin(global_invocation_id) gid:vec3u) {
     grains[id].offset=vec4f(o,0);grains[id].velocity=vec4f(velocity,0);
 }
 // RENDER_START: simulation is removed from the read-only vertex shader module.
+fn palette_color(l:Layer,t:f32)->vec3f {
+    let blend=clamp(l.rotation.z,0.0,1.0);
+    if l.palette.x<2.0 {
+        // Preserve the authored three-color distribution of older presets.
+        let width=max(0.001,blend);
+        let first=mix(l.a.xyz,l.b.xyz,smoothstep(0.58-0.3*width,0.58+0.3*width,t));
+        return mix(first,l.c.xyz,smoothstep(0.9-0.2*width,0.9+0.1*width,t));
+    }
+    let n=u32(clamp(l.palette.x,2.0,8.0));
+    var x=t*f32(n-1u);var i=min(u32(x),n-2u);var next=i+1u;
+    if l.palette.y>0.5 { x=fract(t)*f32(n);i=u32(x)%n;next=(i+1u)%n; }
+    let fraction=x-f32(i);
+    let weight=mix(select(0.0,1.0,fraction>=0.5),fraction,blend);
+    return mix(l.gradient[i].rgb,l.gradient[next].rgb,weight);
+}
 struct V { @builtin(position) position:vec4f,@location(0) uv:vec2f,@location(1) color:vec4f,@location(2) blur:f32,@location(3) strand:f32 }
 @vertex fn vertex(@builtin(vertex_index) vi:u32,@builtin(instance_index) id:u32)->V {
     var o:V;o.position=vec4f(2,2,2,1);o.uv=vec2f(0);o.color=vec4f(0);o.blur=0.0;o.strand=0.0;
@@ -127,9 +142,7 @@ struct V { @builtin(position) position:vec4f,@location(0) uv:vec2f,@location(1) 
     if f.color.x>1.5 && f.color.x<2.5 {driver=amp;}
     if f.color.x>2.5 {driver=f32(layer)/max(1.0,f.geometry.w-1.0);}
     let color_position=clamp(driver*f.color.y+f.color.z,0.0,1.0);
-    let blend=max(0.001,l.rotation.z);
-    var rgb=mix(l.a.xyz,l.b.xyz,smoothstep(0.58-0.3*blend,0.58+0.3*blend,color_position));
-    rgb=mix(rgb,l.c.xyz,smoothstep(0.9-0.2*blend,0.9+0.1*blend,color_position));
+    var rgb=palette_color(l,color_position);
     rgb=max(vec3f(0),mix(vec3f(dot(rgb,vec3f(0.2126,0.7152,0.0722))),rgb,f.color.w));
     // Spread light across the bokeh disk rather than brightening distant blur.
     let energy=select(pow(radius/max(core,0.01),1.15),1.0,o.strand>0.5);

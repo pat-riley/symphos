@@ -14,7 +14,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use symphos_visuals::particle_waves::{Frame, Layer, ROWS};
+use symphos_visuals::particle_waves::{Frame, ROWS};
 
 pub struct ParticleWaves {
     settings: Settings,
@@ -55,18 +55,22 @@ fn choice(ui: &mut egui::Ui, label: &str, value: &mut u32, options: &[&str], hel
             .help_text(help);
     });
 }
-fn colors(ui: &mut egui::Ui, a: &mut [u8; 3], b: &mut [u8; 3], c: &mut [u8; 3]) {
-    for (label, color) in [
-        ("First color", a),
-        ("Middle color", b),
-        ("Highlight color", c),
-    ] {
-        property_row(ui, label, |ui| {
-            ui.color_edit_button_srgb(color).help_text("Saved palette color. Color driver determines where particles sample this three-color gradient.");
-        });
+fn palette_control(
+    ui: &mut egui::Ui,
+    palette: &mut Option<crate::colors::Palette>,
+    legacy: [[u8; 3]; 3],
+) {
+    let mut selected = settings::resolved_palette(*palette, legacy);
+    let previous = selected;
+    selected.controls(ui);
+    if selected != previous {
+        *palette = Some(selected);
     }
 }
 impl ParticleWaves {
+    pub(super) fn set_palette(&mut self, palette: crate::colors::Palette) {
+        self.settings.palette = Some(palette);
+    }
     pub fn spectral_bloom() -> Self {
         Self {
             settings: Settings::spectral_bloom(),
@@ -151,11 +155,10 @@ impl ParticleWaves {
                 ui.checkbox(&mut layer.custom,"Override shared appearance and motion").help_text("Use this layer's palette, size, density, opacity and motion multipliers. Uncheck to use the shared settings; your overrides are retained.");
                 if layer.custom {
                     layer.numeric_controls(ui, "Override", &prefix);
-                    colors(
+                    palette_control(
                         ui,
-                        &mut layer.color_a,
-                        &mut layer.color_b,
-                        &mut layer.color_c,
+                        &mut layer.palette,
+                        [layer.color_a, layer.color_b, layer.color_c],
                     );
                 }
                 if ui.button("Reset layer").help_text("Restore only this layer's transform and overrides. Shared geometry and other layers are unaffected.").clicked(){*layer=Default::default();}
@@ -220,14 +223,14 @@ impl ParticleWaves {
         }
         settings_panel(ui, "Appearance", |ui| {
             settings_group(ui, "Palette", |ui| {
+                palette_control(ui, &mut s.palette, [s.color_a, s.color_b, s.color_c]);
                 choice(
                     ui,
                     "Color driver",
                     &mut s.color_mode,
                     &["Particle variation", "Frequency", "Spectral level", "Layer"],
-                    "Choose what samples the palette. Particle variation keeps a stable mix of blue, green and white dots; Frequency orders colors along the spectrum; Level follows incoming intensity; Layer separates stacked sheets.",
+                    "Choose what samples the palette. Particle variation gives each particle a stable color; Frequency orders colors along the spectrum; Level follows incoming intensity; Layer separates stacked sheets.",
                 );
-                colors(ui, &mut s.color_a, &mut s.color_b, &mut s.color_c);
                 s.numeric_controls(ui, "Palette", "");
             });
             settings_group(ui, "Light", |ui| {
@@ -357,14 +360,6 @@ impl ParticleWaves {
         }
         let axes = trackball::orientation_axes(s.yaw, s.elevation, s.roll)
             .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0]);
-        let color = |c: [u8; 3]| {
-            [
-                c[0] as f32 / 255.0,
-                c[1] as f32 / 255.0,
-                c[2] as f32 / 255.0,
-                1.0,
-            ]
-        };
         let frame = Frame {
             clock: [dt, self.time, 0.0, s.drift_fraction],
             geometry: [s.width, s.depth, s.height, s.layer_count as f32],
@@ -434,26 +429,7 @@ impl ParticleWaves {
                 [0.0; 4]
             },
             feedback_shift: [s.bloom.shift_x, s.bloom.shift_y, s.bloom.chroma, 0.0],
-            layers: std::array::from_fn(|i| {
-                let l = &s.layers[i];
-                Layer {
-                    transform: [l.x, l.y, l.z, l.scale],
-                    rotation: [
-                        l.rotation.to_radians(),
-                        l.tilt.to_radians(),
-                        s.color_blend,
-                        f32::from(l.enabled),
-                    ],
-                    style: if l.custom {
-                        [l.size, l.density, l.speed, l.opacity]
-                    } else {
-                        [1.0; 4]
-                    },
-                    a: color(if l.custom { l.color_a } else { s.color_a }),
-                    b: color(if l.custom { l.color_b } else { s.color_b }),
-                    c: color(if l.custom { l.color_c } else { s.color_c }),
-                }
-            }),
+            layers: s.gpu_layers(theme),
         };
         self.gpu.show(
             ui,

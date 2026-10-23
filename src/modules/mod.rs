@@ -755,6 +755,8 @@ impl ModulePane {
             ModuleKind::Strata => self.strata.set_palette(palette),
             ModuleKind::Flux => self.flux.set_palette(palette),
             ModuleKind::Cymatics => self.cymatics.set_palette(palette),
+            ModuleKind::ParticleWaves => self.particle_waves.set_palette(palette),
+            ModuleKind::SpectralBloom => self.spectral_bloom.set_palette(palette),
             // Preset shaders and sketches with material/particle color systems
             // keep their own color controls and authored defaults.
             _ => {}
