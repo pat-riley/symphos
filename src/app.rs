@@ -805,14 +805,17 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 ui.add_space(4.0);
                 let connected = {
                     let panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-                    matches!(self.panes[self.selected_pane].audio_input, crate::signals::audio::Connection::Input(id)
-                        if panel.bank.audio_inputs.iter().any(|bus| bus.id == id))
+                    match self.panes[self.selected_pane].audio_input {
+                        crate::signals::audio::Connection::Main => true,
+                        crate::signals::audio::Connection::Input(id) => panel.bank.audio_inputs.iter().any(|bus| bus.id == id),
+                        crate::signals::audio::Connection::Off => false,
+                    }
                 };
                 if ui.add_enabled(connected, egui::Button::new("Inspect audio signal…"))
                     .help_text(if connected {
-                        "Select the connected audio channel in Signals. Its inspector contains processing, frequency range and sketch response."
+                        "Select the connected input in Signals. The default capture opens audio settings; scene channels offer inserts and independent processing."
                     } else {
-                        "Connect this sketch from a System audio channel in Signals to edit its audio response there."
+                        "Select an audio input above to inspect its source in Signals."
                     }).clicked() {
                     self.inspect_audio_signal(self.selected_pane);
                 }
@@ -1479,6 +1482,22 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         now: Instant,
     ) {
+        let source_label = self
+            .sources
+            .iter()
+            .find(|source| Some(source.node_name.as_str()) == self.selected_node.as_deref())
+            .filter(|source| source.kind == SourceKind::Input)
+            .map_or_else(
+                || "System audio".to_owned(),
+                |source| source.display_name.clone(),
+            );
+        #[cfg(feature = "development")]
+        let source_label = if self.development.as_ref().is_some_and(|dev| dev.demo) {
+            "Demo audio".into()
+        } else {
+            source_label
+        };
+        crate::signals::audio::set_default_source_label(ui.ctx(), source_label);
         for pane in &mut self.panes {
             pane.set_scene_macros(&self.scene_macros);
         }
@@ -2469,6 +2488,37 @@ mod workspace_interaction_tests {
         app.undo_edit(true);
         assert!(!app.open_panes().contains(&0));
         assert_eq!(app.signal_ui.lock().unwrap().bank.channels.len(), 1);
+    }
+
+    #[test]
+    fn main_audio_inspection_never_creates_a_scene_channel() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.panes[0].audio_input = crate::signals::audio::Connection::Main;
+        let bank = app.signal_ui.lock().unwrap().bank.clone();
+        app.inspect_audio_signal(0);
+        assert_eq!(
+            app.signal_ui.lock().unwrap().selected,
+            Some(crate::signals::ui::MASTER_ID)
+        );
+        assert!(app.inspecting_signal && app.sidebar_open);
+        let now = Instant::now();
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Default audio input")));
+        assert_eq!(app.signal_ui.lock().unwrap().bank, bank);
+        app.sources = vec![crate::audio::AudioSource {
+            global_id: 42,
+            node_name: "test-input".into(),
+            display_name: "Studio input".into(),
+            kind: SourceKind::Input,
+        }];
+        app.selected_node = Some("test-input".into());
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        assert_eq!(
+            crate::signals::audio::default_source_label(&ctx),
+            "Studio input"
+        );
     }
 
     #[test]

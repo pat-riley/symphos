@@ -71,11 +71,7 @@ pub fn rounded_content_corners(ui: &egui::Ui, rect: Rect, radius: f32, color: eg
 }
 
 pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: bool) {
-    let body = sidebar_blend(
-        ui.visuals().panel_fill,
-        ui.visuals().text_color(),
-        if selected { 0.16 } else { 0.075 },
-    );
+    let body = ui.visuals().panel_fill;
     ui.painter().rect_filled(rect, 0.0, body);
     let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 28.0));
     ui.painter().rect_filled(header, 0.0, color);
@@ -86,6 +82,14 @@ pub fn strip_surface(ui: &egui::Ui, rect: Rect, color: egui::Color32, selected: 
     ui.painter()
         .vline(rect.right() - 0.5, rect.y_range(), divider);
     ui.painter().hline(rect.x_range(), header.bottom(), divider);
+    if selected {
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.0, color.gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 pub fn strip_title(ui: &egui::Ui, rect: Rect, text: String, color: egui::Color32) {

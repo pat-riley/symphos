@@ -6,6 +6,10 @@ impl SymphosApp {
     pub(super) fn signals_dock(&mut self, ui: &mut egui::Ui, rect: Rect, frame: &AnalysisFrame) {
         let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
         panel.show(ui, rect, frame, false, &self.theme);
+        if std::mem::take(&mut panel.master_settings_requested) {
+            self.settings_window.open = true;
+            self.settings_window.category = settings::Category::Audio;
+        }
         if std::mem::take(&mut panel.inspect_requested) {
             self.inspecting_signal = true;
             self.inspecting_macro = None;
@@ -15,14 +19,19 @@ impl SymphosApp {
 
     /// Jump to the existing source, without creating or substituting channels.
     pub(super) fn inspect_audio_signal(&mut self, index: usize) {
-        let Connection::Input(id) = self.panes[index].audio_input else {
-            return;
+        let id = match self.panes[index].audio_input {
+            Connection::Main => crate::signals::ui::MASTER_ID,
+            Connection::Input(id) if id != crate::signals::ui::MASTER_ID => id,
+            _ => return,
         };
         let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-        if !panel.bank.audio_inputs.iter().any(|bus| bus.id == id) {
+        if id != crate::signals::ui::MASTER_ID
+            && !panel.bank.audio_inputs.iter().any(|bus| bus.id == id)
+        {
             return;
         }
         panel.selected = Some(id);
+        panel.selected_insert = None;
         panel.show_signals = true;
         self.scene_macros.open = false;
         self.inspecting_signal = true;
@@ -46,6 +55,10 @@ impl SymphosApp {
         let Some(mut bus) = bus else {
             let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
             panel.show_inspector(ui, rect, frame, &self.theme);
+            if std::mem::take(&mut panel.master_settings_requested) {
+                self.settings_window.open = true;
+                self.settings_window.category = settings::Category::Audio;
+            }
             if std::mem::take(&mut panel.close_inspector) {
                 self.sidebar_open = false;
             }

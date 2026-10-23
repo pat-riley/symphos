@@ -213,3 +213,83 @@ fn benchmark_input_processing() {
         start.elapsed().as_secs_f64() * 1e6 / 10000.0
     );
 }
+
+#[test]
+fn connection_menu_keeps_default_capture_separate_and_available_without_scene_signals() {
+    fn render(
+        ctx: &egui::Context,
+        value: &mut Connection,
+        buses: &[InputBus],
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 500.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(240.0);
+                connection_picker(ui, value, buses);
+            },
+        );
+        out.textures_delta.clear();
+        out
+    }
+    fn text(out: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        out.shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing {label}"))
+    }
+    fn click(ctx: &egui::Context, value: &mut Connection, buses: &[InputBus], pos: egui::Pos2) {
+        render(ctx, value, buses, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            render(
+                ctx,
+                value,
+                buses,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+    }
+    for custom in [false, true] {
+        let ctx = egui::Context::default();
+        set_default_source_label(&ctx, "Studio capture".into());
+        let buses = if custom {
+            vec![InputBus {
+                id: 42,
+                name: "Bass detector".into(),
+                ..Default::default()
+            }]
+        } else {
+            vec![]
+        };
+        let mut value = Connection::Off;
+        let out = render(&ctx, &mut value, &buses, vec![]);
+        click(&ctx, &mut value, &buses, text(&out, "Unassigned"));
+        let out = render(&ctx, &mut value, &buses, vec![]);
+        let source = text(&out, "Studio capture");
+        assert!(text(&out, "Always available").y < source.y);
+        if custom {
+            assert!(source.y < text(&out, "Scene signals").y);
+            assert!(text(&out, "Scene signals").y < text(&out, "Bass detector").y);
+        }
+        click(&ctx, &mut value, &buses, source);
+        assert_eq!(value, Connection::Main);
+        assert_eq!(buses.len(), usize::from(custom));
+    }
+}

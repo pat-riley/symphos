@@ -16,8 +16,11 @@ use std::sync::Mutex;
 pub(crate) mod audio_channel;
 mod history;
 mod inserts;
+mod master;
 mod midi_preview;
 mod processor;
+/// UI identity for the permanent capture, never serialized as a scene channel.
+pub(crate) const MASTER_ID: u64 = 0;
 
 pub type Shared = Arc<Mutex<Panel>>;
 pub const MIN_DOCK_HEIGHT: f32 = 320.0;
@@ -31,6 +34,7 @@ pub struct Panel {
     pub(crate) selected_insert: Option<(u64, u64)>,
     pub show_signals: bool,
     pub inspect_requested: bool,
+    pub master_settings_requested: bool,
     pub consumers: BTreeMap<u64, Vec<String>>,
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
@@ -114,6 +118,7 @@ impl Default for Panel {
             selected_insert: None,
             show_signals: false,
             inspect_requested: false,
+            master_settings_requested: false,
             consumers: BTreeMap::new(),
             span: None,
             deleted: None,
@@ -175,6 +180,7 @@ impl Panel {
         self.selected = bank.channels.first().map(|d| d.id);
         self.bank = bank;
         self.selected_insert = None;
+        self.master_settings_requested = false;
         self.clipboard = None;
         self.snapshot = Arc::new(Snapshot::default());
         self.last_history_time = 0.0;
@@ -210,7 +216,7 @@ impl Panel {
                 .max_rect(rect),
         );
         page.set_clip_rect(rect.intersect(ui.clip_rect()));
-        workspace_ui::dock_style(&mut page);
+        workspace_ui::sidebar_style(&mut page, theme);
         let ui = &mut page;
         self.bank.sync_slots();
         self.observe_history();
@@ -247,16 +253,16 @@ impl Panel {
         }
         // Keep the dock edges aligned with the visual panes above it.
         let mixer = mixer.shrink2(egui::vec2(0.0, 8.0));
-        ui.painter()
-            .rect_filled(mixer, 7.0, ui.visuals().extreme_bg_color);
+        ui.painter().rect_filled(mixer, 7.0, theme.navigation);
         let content = mixer.shrink(1.0);
+        let (tracks, master) = master::layout(content);
         let mut board = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("signals-mixer")
-                .max_rect(content)
+                .max_rect(tracks)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        board.set_clip_rect(content.intersect(ui.clip_rect()));
+        board.set_clip_rect(tracks.intersect(ui.clip_rect()));
         let mut action = None;
         board.spacing_mut().item_spacing.x = 0.0;
         let slots = self.bank.slots.clone();
@@ -365,33 +371,36 @@ impl Panel {
                             }
                             let definition =
                                 id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
-                            egui::Popup::context_menu(&menu_response)
-                                .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
-                                .show(|ui| {
-                                    if definition.is_none()
-                                        && let Some(bus) = id.and_then(|id| {
-                                            self.bank.audio_inputs.iter().find(|b| b.id == id)
-                                        })
-                                    {
-                                        if let Some(a) = audio_channel::menu(
-                                            ui,
-                                            bus,
-                                            slot,
-                                            self.bank.audio_inputs.len() < audio::MAX_INPUTS,
-                                        ) {
-                                            action = Some(a);
-                                        }
-                                    } else if let Some(menu_action) = channel_menu(
+                            crate::dropdown::styled_popup(
+                                ui,
+                                egui::Popup::context_menu(&menu_response),
+                            )
+                            .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                            .show(|ui| {
+                                if definition.is_none()
+                                    && let Some(bus) = id.and_then(|id| {
+                                        self.bank.audio_inputs.iter().find(|b| b.id == id)
+                                    })
+                                {
+                                    if let Some(a) = audio_channel::menu(
                                         ui,
-                                        definition,
+                                        bus,
                                         slot,
-                                        self.can_paste(),
-                                        self.bank.channels.len() < MAX_SIGNALS,
-                                        self.deleted.is_some() || self.deleted_audio.is_some(),
+                                        self.bank.audio_inputs.len() < audio::MAX_INPUTS,
                                     ) {
-                                        action = Some(menu_action);
+                                        action = Some(a);
                                     }
-                                });
+                                } else if let Some(menu_action) = channel_menu(
+                                    ui,
+                                    definition,
+                                    slot,
+                                    self.can_paste(),
+                                    self.bank.channels.len() < MAX_SIGNALS,
+                                    self.deleted.is_some() || self.deleted_audio.is_some(),
+                                ) {
+                                    action = Some(menu_action);
+                                }
+                            });
                             if ui.rect_contains_pointer(strip)
                                 && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
                             {
@@ -424,7 +433,7 @@ impl Panel {
                     }
                     let open_menu = ui.rect_contains_pointer(space)
                         && ui.input(|i| i.pointer.secondary_clicked());
-                    egui::Popup::context_menu(&response)
+                    crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response))
                         .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
                         .show(|ui| {
                             if let Some(menu_action) = channel_menu(
@@ -462,9 +471,20 @@ impl Panel {
             slots.len() as f32 * 156.0 > mixer_output.inner_rect.width()
                 || mixer_output.content_size.x <= mixer_output.inner_rect.width()
         );
+        let (selected, settings) = master::strip(
+            ui,
+            master,
+            frame,
+            self.selected == Some(MASTER_ID),
+            theme.accent,
+        );
+        if selected {
+            self.act(StripAction::Select(MASTER_ID));
+        }
+        self.master_settings_requested |= settings;
         // egui's scissor is rectangular. Mask the track and scrollbar corners after
         // drawing, then paint the shared border above them for a continuous edge.
-        workspace_ui::rounded_content_corners(ui, content, 6.0, ui.visuals().extreme_bg_color);
+        workspace_ui::rounded_content_corners(ui, content, 6.0, theme.navigation);
         ui.painter().rect_stroke(
             mixer,
             7.0,
@@ -489,6 +509,12 @@ impl Panel {
         theme: &AppTheme,
     ) {
         self.close_inspector = false;
+        if self.selected == Some(MASTER_ID) {
+            let (close, settings) = master::inspector(ui, inspector, frame, theme);
+            self.close_inspector = close;
+            self.master_settings_requested |= settings;
+            return;
+        }
         if let Some(id) = self.selected
             && self.has_insert_channel(id)
         {
@@ -603,6 +629,9 @@ impl Panel {
         let Some(id) = self.selected else {
             return;
         };
+        if id == MASTER_ID {
+            return;
+        }
         if let Some((channel, insert)) = self.selected_insert.filter(|(channel, _)| *channel == id)
         {
             // An expired insert selection must never fall through to deleting its channel.
@@ -668,6 +697,9 @@ impl Panel {
                 self.inspect_requested = true;
             }
             StripAction::Delete(id) => {
+                if id == MASTER_ID {
+                    return;
+                }
                 if self
                     .selected_insert
                     .is_some_and(|(channel, _)| channel == id)
@@ -1404,7 +1436,7 @@ fn channel_menu(
     can_create: bool,
     can_undo: bool,
 ) -> Option<StripAction> {
-    ui.set_min_width(328.0);
+    ui.set_min_width(190.0);
     let mut action = None;
     if let Some(d) = d {
         for (label, value, enabled) in [
@@ -2111,6 +2143,23 @@ mod tests {
             bank: Bank::test_sources(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn master_cannot_be_deleted_and_does_not_consume_channel_undo() {
+        let mut panel = test_panel();
+        panel.act(StripAction::Delete(1));
+        let bank = panel.bank.clone();
+        panel.act(StripAction::Select(MASTER_ID));
+        panel.delete_selection();
+        panel.act(StripAction::Delete(MASTER_ID));
+        assert_eq!(panel.selected, Some(MASTER_ID));
+        assert_eq!(panel.bank, bank);
+        assert_eq!(panel.deleted.as_ref().unwrap().0.id, 1);
+        panel.act(StripAction::Undo);
+        assert!(panel.bank.channels.iter().any(|d| d.id == 1));
+        assert!(panel.bank.valid());
+        assert!(!panel.bank.slots.contains(&Some(MASTER_ID)));
     }
 
     #[test]
@@ -2826,7 +2875,7 @@ mod tests {
         drag(
             &mut panel,
             egui::pos2(left + 40.0, 22.0),
-            egui::pos2(left + 810.0, 90.0),
+            egui::pos2(left + 790.0, 90.0),
             left + 780.0,
         );
         assert_eq!(

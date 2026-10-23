@@ -13,14 +13,10 @@ fn insert_menu(ui: &mut egui::Ui, d: &Definition, index: usize) -> Option<StripA
     let data = chain.data_at(d.input, index);
     ui.add_enabled_ui(chain.stages.len() < crate::signals::inserts::MAX_INSERTS, |ui| {
         let button = insert_button(ui, "+ Insert", false, egui::Sense::click()).help_text("Add a processor at this position. Only inserts compatible with the incoming data type are offered. Audio detectors convert audio to control values; the audio feed remains available to sketches.");
-        egui::Popup::menu(&button)
+        crate::dropdown::styled_popup(ui, egui::Popup::menu(&button))
             .gap(5.0)
             .width(180.0)
             .show(|ui| {
-                ui.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-                ui.spacing_mut().interact_size.y = 20.0;
-                ui.spacing_mut().button_padding = egui::vec2(7.0, 3.0);
-                ui.spacing_mut().item_spacing.y = 1.0;
                 ui.small(if data == Data::Audio { "Audio effects & detectors" } else { "Control processors" });
                 ui.separator();
                 for effect in Effect::choices(data) {
@@ -148,7 +144,7 @@ fn slot_list(
                 egui::DragAndDrop::take_payload::<InsertDrag>(ui.ctx());
             }
         }
-        response.context_menu(|ui| {
+        crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response)).show(|ui| {
             if ui
                 .button(if insert.enabled { "Bypass" } else { "Enable" })
                 .clicked()

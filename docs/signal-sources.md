@@ -21,23 +21,31 @@ flowchart LR
 
 ## First use
 
-1. Choose system playback in Settings → Audio.
-2. Open **Signals** in the bottom toolbar. Right-click the blank workspace to
-   manually add Overall intensity, Band energy, Bass hits, Spectral change,
-   Stereo balance, or an LFO. New projects start with no sources.
+1. Choose system playback or your default input in Settings → Audio.
+2. Open **Signals** using the levels icon in the top toolbar. The default input
+   stays pinned at the far right, with a live spectrum and stereo meters. It
+   cannot be deleted and is not saved as a removable scene channel. Its
+   **Audio settings…** button opens capture settings. Right-click the blank
+   workspace to add **Audio**, **LFO**, or **MIDI** channels; add audio detectors
+   and control processors using **+ Insert** on a channel.
 3. Click a channel name. Its right inspector edits the frequency range,
    sensitivity, and response. Input and output meters help distinguish capture
    from shaping. The input meter shows measured activity before envelopes, so
    centered stereo can show input while its balance output remains zero. Bass hits has a hit indicator, threshold, and retrigger/hold.
-4. Click a visual pane (or its Inspect button), open Flux, Veroni, or Strata's inspector, and select
+4. Right-click a visual pane and choose **Inspect**, open Flux, Veroni, or Strata's inspector, and select
    Audio mappings. Choose a named signal and a destination. Depth, inversion,
    and range belong to this mapping only.
 5. **Edit signal** opens its shared configuration. To make an independent source,
    duplicate it in Signals, then assign the copy in Visualize.
 
-Signals uses vivid channel colors, rounded cards and recessed controls matching
-the Visualize workspace. Bright meter fills and activity traces sit against darker
-plots, with clear text and field borders.
+Every visualizer’s **Driven by** dropdown separates an **Always available**
+default input from **Scene signals**, even when no scene channels exist. The
+master strip follows the input selected in Settings. Inspecting it opens its
+capture information; custom channels provide independent inserts and processing.
+
+Signals shares the inspector panel background and compact themed menus.
+Channel colors remain in headers, meters, and activity traces; selecting a
+channel adds a subtle border without changing its background.
 
 Channel knobs adjust **visual influence** (0–200%, with 100% as unity). Drag
 vertically, hold Shift for fine adjustment, double-click to reset, or type a percentage.

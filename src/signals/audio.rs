@@ -14,9 +14,21 @@ pub enum Connection {
     Input(u64),
     Off,
 }
+const DEFAULT_SOURCE_KEY: &str = "default-audio-source-label";
+
+pub fn default_source_label(ctx: &egui::Context) -> String {
+    ctx.data(|data| data.get_temp::<String>(egui::Id::new(DEFAULT_SOURCE_KEY)))
+        .unwrap_or_else(|| "System audio".into())
+}
+
+pub fn set_default_source_label(ctx: &egui::Context, label: String) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(DEFAULT_SOURCE_KEY), label));
+}
+
 pub fn connection_picker(ui: &mut egui::Ui, value: &mut Connection, buses: &[InputBus]) {
+    let main = default_source_label(ui.ctx());
     let label = match value {
-        Connection::Main => "System audio",
+        Connection::Main => main.as_str(),
         Connection::Off => "Unassigned",
         Connection::Input(id) => buses
             .iter()
@@ -24,9 +36,15 @@ pub fn connection_picker(ui: &mut egui::Ui, value: &mut Connection, buses: &[Inp
             .map_or("Unavailable", |b| b.name.as_str()),
     };
     crate::dropdown::ComboBox::from_id_salt("audio-input-connection").width(ui.available_width().min(240.0)).selected_text(label).show_ui(ui, |ui| {
-        ui.selectable_value(value, Connection::Main, "System audio · direct");
+        ui.weak("Always available");
+        ui.selectable_value(value, Connection::Main, &main);
+        ui.separator();
+        if !buses.is_empty() {
+            ui.weak("Scene signals");
+            for bus in buses { ui.selectable_value(value, Connection::Input(bus.id), &bus.name); }
+            ui.separator();
+        }
         ui.selectable_value(value, Connection::Off, "Unassigned");
-        for bus in buses { ui.selectable_value(value, Connection::Input(bus.id), &bus.name); }
     }).response.help_text("Choose the waveform, spectrum and measurements feeding this consumer. Unassigned disables built-in audio response; separate modulation mappings continue.");
 }
 
