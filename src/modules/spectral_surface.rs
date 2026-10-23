@@ -215,7 +215,7 @@ impl Default for SpectralSurface {
             style: Style::Wireframe,
             palette: Palette::Spectrum,
             color_by: ColorBy::Frequency,
-            brightness: 1.0,
+            brightness: 1.6,
             contrast: 1.0,
             opacity: 0.95,
             rear_opacity: 0.18,
@@ -237,7 +237,7 @@ impl Default for SpectralSurface {
             orbit_speed: 8.0,
             orbit_reverse: false,
             guides: true,
-            show_gizmo: true,
+            show_gizmo: false,
             last_draw: None,
             mesh_cache: None,
         }
@@ -708,7 +708,7 @@ impl SpectralSurface {
                     ui,
                     brightness,
                     0.0..=2.0,
-                    1.0,
+                    1.6,
                     "Brightness",
                     "Overall light level. Audio also brightens each active frequency."
                 );
