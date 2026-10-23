@@ -602,7 +602,6 @@ impl Strata {
             );
             ui.checkbox(&mut s.show_layers, "Show membranes");
             ui.checkbox(&mut s.show_frame, "Show volume frame");
-            ui.checkbox(&mut s.labels, "Show navigation hints");
         });
         settings_panel(ui, "Camera", |ui| {
             super::settings_group(ui, "Framing", |ui| {
@@ -867,15 +866,6 @@ impl Strata {
             }
         }
         ui.painter_at(rect).add(egui::Shape::mesh(mesh));
-        if self.settings.labels && rect.width() > 290.0 && rect.height() > 180.0 {
-            ui.painter_at(rect).text(
-                rect.left_bottom() + Vec2::new(10.0, -8.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Drag: orbit · Scroll: zoom · Double-click: reset view",
-                egui::FontId::monospace(9.0),
-                theme.muted,
-            );
-        }
     }
     fn scene(&self, camera: &Camera, theme: &AppTheme) -> Vec<DrawItem> {
         let s = self.render_settings();

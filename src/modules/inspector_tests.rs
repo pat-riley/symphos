@@ -1,4 +1,5 @@
 use super::*;
+use egui::Vec2;
 
 #[test]
 fn initial_palette_applies_to_shared_palettes_and_saved_overrides_survive_restore() {
@@ -157,5 +158,119 @@ fn camera_defaults_upgrade_old_presets_without_changing_existing_values() {
         for (key, value) in original {
             assert_eq!(encoded[&key], value, "{kind:?}: {key}");
         }
+    }
+}
+
+#[test]
+fn pane_canvases_omit_descriptions_and_gesture_instructions() {
+    for kind in [
+        ModuleKind::Waterfall,
+        ModuleKind::Sphere,
+        ModuleKind::Cylinder,
+        ModuleKind::Rings,
+        ModuleKind::Resonance,
+        ModuleKind::Flux,
+        ModuleKind::Strata,
+    ] {
+        let mut pane = ModulePane::new(kind);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            pane.draw(
+                ui,
+                Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0)),
+                &AnalysisFrame::default(),
+                &AppTheme::default(),
+                false,
+            );
+        });
+        out.textures_delta.clear();
+        for shape in out.shapes {
+            if let egui::Shape::Text(t) = shape.shape {
+                let text = &t.galley.job.text;
+                assert!(
+                    ![
+                        "Drag:",
+                        "ORBITAL WAVEFORMS",
+                        "ORBITAL OSCILLOSCOPE",
+                        "LAYERED WAVEFRONTS",
+                        "LONGITUDE =",
+                        "AROUND =",
+                        "POLE RIPPLES",
+                        "AXIAL RIPPLES"
+                    ]
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix)),
+                    "{kind:?}: {text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn detailed_grids_are_visual_controls_that_restore_from_new_and_legacy_presets() {
+    for kind in [ModuleKind::Spectrum, ModuleKind::Oscilloscope] {
+        let mut pane = ModulePane::new(kind);
+        let original = pane.copy_settings();
+        let mut encoded = serde_json::to_value(&original).unwrap();
+        let body = encoded
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        body.get_mut("grid_detail").unwrap()["x_divisions"] = 16.into();
+        body.get_mut("grid_detail").unwrap()["subdivisions"] = 5.into();
+        let detailed: ModuleSettings = serde_json::from_value(encoded.clone()).unwrap();
+        assert!(pane.paste_settings(&detailed));
+        let saved = pane.snapshot();
+        let mut restored = ModulePane::new(kind);
+        restored.restore(&saved);
+        assert_eq!(restored.copy_settings(), detailed);
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.set_everything_is_visible(true));
+        pane.select_inspector_section(SettingsSection::Appearance);
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(440.0, 12000.0))),
+                ..Default::default()
+            },
+            |ui| pane.inspector_controls(ui, &AnalysisFrame::default()),
+        );
+        out.textures_delta.clear();
+        let keys = ctx
+            .data(|d| {
+                d.get_temp::<std::collections::BTreeSet<String>>(egui::Id::new(
+                    "test-rendered-parameter-keys",
+                ))
+            })
+            .unwrap();
+        for key in [
+            "x_divisions",
+            "y_divisions",
+            "subdivisions",
+            "opacity",
+            "minor_opacity",
+            "line_width",
+        ] {
+            assert!(
+                keys.contains(&format!("grid_detail.{key}")),
+                "{kind:?}: {key}"
+            );
+        }
+        let body = encoded
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        body.remove("grid_detail");
+        body.remove("status_labels");
+        let legacy: ModuleSettings = serde_json::from_value(encoded).unwrap();
+        assert_eq!(legacy, original);
     }
 }

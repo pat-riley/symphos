@@ -1171,12 +1171,6 @@ impl Waterfall {
                 format!("{:.0} dBFS", settings.ceiling),
                 theme.muted,
             );
-            label(
-                &painter,
-                rect.left_bottom() + Vec2::new(12.0, -18.0),
-                "Drag: rotate · Right/Shift-drag: pan · Scroll: zoom",
-                theme.muted,
-            );
         }
         if self.guides && self.show_gizmo {
             let gizmo_rect =

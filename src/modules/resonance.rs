@@ -11,7 +11,7 @@ mod tests;
 use super::{
     Palette, camera_gizmo,
     frequency::{BANDS, FrequencyData, FrequencySettings},
-    label, trackball,
+    trackball,
 };
 use crate::{analysis::AnalysisFrame, help::HoverHelp, theme::AppTheme};
 use egui::{self, Pos2, Rect, Sense, Vec2};
@@ -388,20 +388,6 @@ impl Resonance {
             }
         }
         painter.set(scene, egui::Shape::mesh(self.build_mesh(plot, theme)));
-        if self.settings.guides && rect.width() > 450.0 {
-            label(
-                &painter,
-                rect.left_top() + Vec2::new(12.0, 10.0),
-                "LAYERED WAVEFRONTS · ARTISTIC AUDIO RESPONSE",
-                theme.muted,
-            );
-            label(
-                &painter,
-                rect.left_bottom() + Vec2::new(12.0, -18.0),
-                "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
-                theme.muted,
-            );
-        }
     }
 }
 

@@ -32,6 +32,7 @@ pub struct Spectrum {
     palette: Palette,
     contrast: f32,
     grid: bool,
+    grid_detail: super::plot_grid::Settings,
     labels: bool,
     appearance: Appearance,
 }
@@ -64,6 +65,7 @@ fill_opacity: f32 => fill_opacity,
 palette: Palette => palette,
 contrast: f32 => contrast,
 grid: bool => grid,
+#[serde(default)] grid_detail: super::plot_grid::Settings => grid_detail,
 labels: bool => labels,
 #[serde(default)] appearance: Appearance => appearance,
 });
@@ -89,6 +91,7 @@ impl Default for Spectrum {
             palette: Palette::Theme,
             contrast: 1.0,
             grid: true,
+            grid_detail: Default::default(),
             labels: true,
             appearance: Appearance::default(),
         }
@@ -278,7 +281,9 @@ impl Spectrum {
             self.data.settings.label_controls(ui);
             super::settings_group(ui, "Guides", |ui| {
                 ui.checkbox(&mut self.grid, "Grid")
-                    .help_text("Show horizontal dB reference lines.");
+                    .help_text("Show frequency and dB reference lines.");
+                self.grid_detail
+                    .controls(ui, self.grid, "Frequency divisions", "Level divisions");
                 ui.checkbox(&mut self.labels, "Axis labels").help_text(
                     "Show dB and frequency labels. Musical labels can replace Hz with note names.",
                 );
@@ -371,19 +376,15 @@ impl Spectrum {
             return;
         }
         let settings = &self.data.settings;
-        for step in 0..=3 {
-            let t = step as f32 / 3.0;
-            let y = plot.bottom() - t * plot.height();
-            if self.grid {
-                painter.line_segment(
-                    [Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)],
-                    Stroke::new(0.5, mix(theme.background, theme.muted, 0.35)),
-                );
-            }
-            if self.labels {
-                label(
+        if self.grid {
+            self.grid_detail.paint(&painter, plot, theme);
+        }
+        if self.labels && self.grid_detail.y_labels {
+            for t in self.grid_detail.label_ticks(false, plot.height()) {
+                super::plot_grid::axis_label(
                     &painter,
-                    Pos2::new(rect.left() + 3.0, y - 5.0),
+                    Pos2::new(plot.left() - 6.0, plot.bottom() - t * plot.height()),
+                    egui::Align2::RIGHT_CENTER,
                     format!(
                         "{:.0}",
                         settings.floor + t * (settings.ceiling - settings.floor)
@@ -510,12 +511,19 @@ impl Spectrum {
                 Stroke::new(1.5, theme.foreground.gamma_multiply(0.65)),
             ));
         }
-        if self.labels {
-            for step in 0..=4 {
-                let t = step as f32 / 4.0;
-                label(
+        if self.labels && self.grid_detail.x_labels {
+            for t in self.grid_detail.label_ticks(true, plot.width()) {
+                let align = if t == 0.0 {
+                    egui::Align2::LEFT_TOP
+                } else if t == 1.0 {
+                    egui::Align2::RIGHT_TOP
+                } else {
+                    egui::Align2::CENTER_TOP
+                };
+                super::plot_grid::axis_label(
                     &painter,
-                    Pos2::new(plot.left() + t * (plot.width() - 25.0), plot.bottom() + 7.0),
+                    Pos2::new(plot.left() + t * plot.width(), plot.bottom() + 7.0),
+                    align,
                     settings.axis_label(t, frame.sample_rate),
                     theme.muted,
                 );

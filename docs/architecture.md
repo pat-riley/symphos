@@ -138,6 +138,16 @@ consume Undo history. CPU and GPU renderers retain their lenses and simulation
 state. All 3D views expose the same graphical axis navigator and six views;
 Flux and Strata also support free trackball rotation, pan and optional XYZ grids.
 Signals retain their separate processing rail.
+Canvas descriptions and camera gesture instructions live in hover help rather
+than over the visual output. Numeric reference axes and loading/error notices
+remain. Spectrum and Oscilloscope share display-only grid settings in Appearance:
+independent horizontal/vertical lines and labels, major divisions, minor
+subdivisions, opacity, minor strength and line width. Minor lines are omitted
+below five-pixel spacing, and major labels thin on small panes. Spectrum ticks
+follow its existing logarithmic/linear frequency mapping and dB range; scope ticks
+show milliseconds and normalized display amplitude. Scope signal status is opt-in.
+Grid preferences persist in presets with defaults for older documents and never
+change audio processing, spectrum resolution or trigger timing.
 3D Rings wraps signed time-domain samples around each orbit. Geometry → Trace
 source selects Waveform (a fixed time window) or Oscilloscope (1–8 pitch-locked
 cycles, using the standalone scope’s normalized autocorrelation and rising zero

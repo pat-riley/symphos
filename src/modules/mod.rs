@@ -43,6 +43,7 @@ mod orbital;
 mod oscilloscope;
 mod particle_waves;
 pub(crate) mod performance;
+mod plot_grid;
 mod resonance;
 mod retro;
 mod rings;

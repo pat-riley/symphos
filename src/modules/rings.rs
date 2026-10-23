@@ -2,7 +2,6 @@
 use super::{
     Palette,
     camera_gizmo::{self, Axis},
-    label,
     oscilloscope::{self, ScopeSelection},
     settings_group, settings_panel, trackball,
     waterfall::mesh_segment,
@@ -624,7 +623,6 @@ impl Rings {
                 );
             });
             settings_group(ui, "Guides", |ui| {
-                ui.checkbox(&mut s.guides, "Labels & navigation hints");
                 ui.checkbox(&mut s.show_gizmo, "Navigation gizmo");
             });
         });
@@ -1101,38 +1099,6 @@ impl Rings {
             }
         }
         painter.set(scene, egui::Shape::mesh(self.build_mesh(plot, theme)));
-        if self.settings.guides && rect.width() > 450.0 {
-            label(
-                &painter,
-                rect.left_top() + Vec2::new(12.0, 10.0),
-                match self.settings.trace_source {
-                    TraceSource::Waveform => {
-                        "ORBITAL WAVEFORMS · SIGNED AUDIO AMPLITUDE".to_owned()
-                    }
-                    TraceSource::Oscilloscope => self
-                        .scope_cache
-                        .as_ref()
-                        .and_then(|cache| cache.selection.pitch)
-                        .map_or_else(
-                            || "ORBITAL OSCILLOSCOPE · PITCH UNLOCKED · WINDOW FALLBACK".to_owned(),
-                            |pitch| {
-                                format!(
-                                    "ORBITAL OSCILLOSCOPE · {:.1} Hz · {} CYCLES",
-                                    pitch.frequency_hz,
-                                    self.settings.scope_cycles.clamp(1, 16)
-                                )
-                            },
-                        ),
-                },
-                theme.muted,
-            );
-            label(
-                &painter,
-                rect.left_bottom() + Vec2::new(12.0, -18.0),
-                "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
-                theme.muted,
-            );
-        }
     }
 }
 

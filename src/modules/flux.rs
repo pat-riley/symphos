@@ -494,7 +494,6 @@ impl Flux {
                 "Depth fade",
                 "Dim distant particles to emphasize the cloud's volume."
             );
-            ui.checkbox(&mut s.labels, "Show navigation hints");
         });
         settings_panel(ui, "Camera", |ui| {
             super::settings_group(ui, "Framing", |ui| {
@@ -838,15 +837,6 @@ impl Flux {
         }
         let mesh = self.mesh(&camera, theme);
         ui.painter_at(rect).add(egui::Shape::mesh(mesh));
-        if self.settings.labels && rect.width() > 380.0 && rect.height() > 160.0 {
-            ui.painter_at(rect).text(
-                rect.left_bottom() + Vec2::new(10.0, -8.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
-                egui::FontId::monospace(9.0),
-                theme.muted,
-            );
-        }
     }
     fn mesh(&self, camera: &Camera, theme: &AppTheme) -> egui::Mesh {
         let s = &self.settings;

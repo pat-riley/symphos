@@ -5,7 +5,7 @@ use super::{
     Palette,
     camera_gizmo::{self, Axis},
     frequency::{BANDS, History},
-    label, settings_group, settings_panel,
+    settings_group, settings_panel,
     waterfall::{mesh_dot, mesh_segment},
 };
 use crate::{analysis::AnalysisFrame, help::HoverHelp, parameter::Parameter, theme::AppTheme};
@@ -747,7 +747,6 @@ impl SpectralSurface {
                 self.history.data.settings.level_controls(ui);
             });
             settings_group(ui, "Viewport guides", |ui| {
-                ui.checkbox(&mut self.guides, "Labels & navigation hints");
                 ui.checkbox(&mut self.show_gizmo, "Navigation gizmo");
             });
         });
@@ -1466,61 +1465,6 @@ impl SpectralSurface {
             scene,
             egui::Shape::Mesh(self.cached_mesh(rect.shrink(24.0), now, theme)),
         );
-        if self.guides {
-            if rect.width() > 450.0 {
-                label(
-                    &painter,
-                    rect.left_top() + Vec2::new(12.0, 10.0),
-                    if self.is_cylinder() {
-                        if self.motion == Motion::PoleRipples {
-                            "AXIAL RIPPLES · TRAVELING AUDIO RINGS"
-                        } else {
-                            "AROUND = FREQUENCY · HEIGHT = HISTORY · RADIUS = LEVEL"
-                        }
-                    } else if self.motion == Motion::PoleRipples {
-                        "POLE RIPPLES · CIRCULAR AUDIO WAVES · RADIUS = DISPLACEMENT"
-                    } else {
-                        "LONGITUDE = FREQUENCY · LATITUDE = HISTORY · RADIUS = LEVEL"
-                    },
-                    theme.muted,
-                );
-                label(
-                    &painter,
-                    rect.left_bottom() + Vec2::new(12.0, -18.0),
-                    "Drag: free rotate · Edge: roll · Right/Shift-drag: pan · Scroll: zoom",
-                    theme.muted,
-                );
-            }
-            if rect.width() > 700.0 {
-                let f = &self.history.data.settings;
-                label(
-                    &painter,
-                    rect.left_top() + Vec2::new(12.0, 28.0),
-                    format!(
-                        "{}–{} Hz · {:.1} s · {}",
-                        f.axis_label(0.0, frame.sample_rate),
-                        f.axis_label(1.0, frame.sample_rate),
-                        if self.motion == Motion::PoleRipples {
-                            self.ripple_travel_time()
-                        } else {
-                            self.seconds
-                        },
-                        if self.is_cylinder() {
-                            if self.reverse_flow {
-                                "BOTTOM TO TOP"
-                            } else {
-                                "TOP TO BOTTOM"
-                            }
-                        } else if self.reverse_flow {
-                            "SOUTH TO NORTH"
-                        } else {
-                            "NORTH TO SOUTH"
-                        }
-                    ),
-                    theme.muted,
-                );
-            }
-        }
     }
 }
 #[derive(Clone, Copy)]

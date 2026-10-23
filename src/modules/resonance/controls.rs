@@ -321,7 +321,6 @@ impl Resonance {
                 }
             });
             settings_group(ui, "Guides", |ui| {
-                ui.checkbox(&mut s.guides, "Labels & navigation hints");
                 ui.checkbox(&mut s.show_gizmo, "Navigation gizmo");
             });
         });
