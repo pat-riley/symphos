@@ -1406,7 +1406,9 @@ impl ModulePane {
             canvas_theme.muted = Color32::from_gray(75);
         }
         let theme = &canvas_theme;
-        self.background.paint(ui, rect);
+        if !crate::background::pane_painted(ui) {
+            self.background.paint(ui, rect);
+        }
         let previous_background = ui.data_mut(|d| {
             let previous = d.get_temp::<crate::background::Background>(egui::Id::new(
                 crate::background::CONTEXT,

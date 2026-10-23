@@ -46,6 +46,15 @@ struct Cached {
     texture: egui::TextureHandle,
 }
 pub const CONTEXT: &str = "scene-canvas-background";
+/// The workspace already painted the full pane, including its header and gutters.
+/// Recording uses its own egui context and paints its complete output normally.
+pub const PANE_PAINTED: &str = "scene-background-painted-by-pane";
+pub fn pane_painted(ui: &egui::Ui) -> bool {
+    ui.data(|d| {
+        d.get_temp::<bool>(egui::Id::new(PANE_PAINTED))
+            .unwrap_or(false)
+    })
+}
 impl Background {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
@@ -69,8 +78,12 @@ impl Background {
         color(self.start).lerp_to_gamma(color(self.end), t.clamp(0.0, 1.0))
     }
     pub fn paint(&self, ui: &egui::Ui, rect: egui::Rect) {
+        self.paint_rounded(ui, rect, 0);
+    }
+    pub fn paint_rounded(&self, ui: &egui::Ui, rect: egui::Rect, radius: u8) {
         if matches!(self.mode, Mode::Black | Mode::Color) {
-            ui.painter().rect_filled(rect, 0.0, self.sample([0.0; 2]));
+            ui.painter()
+                .rect_filled(rect, radius, self.sample([0.0; 2]));
             return;
         }
         // One cached texture shared across panes; no per-frame rasterization or upload.
@@ -104,11 +117,11 @@ impl Background {
                 cached
             }
         };
-        ui.painter().image(
-            cached.texture.id(),
-            rect,
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
+        ui.painter().add(
+            egui::epaint::RectShape::filled(rect, radius, Color32::WHITE).with_texture(
+                cached.texture.id(),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            ),
         );
     }
     pub fn controls(&mut self, ui: &mut egui::Ui) {

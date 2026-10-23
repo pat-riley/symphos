@@ -5,6 +5,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Extend scene backgrounds to each pane’s rounded edges, including headers and
+  content padding, with continuous gradients behind the inset visualization.
+
 - Add scene-wide black, solid-color, linear and radial gradient backgrounds at
   the top of Appearance. Backgrounds follow scenes, presets, Undo and recordings;
   existing documents default to black. Milkdrop retains its preset-rendered canvas.

@@ -201,7 +201,9 @@ impl Recorder {
         if !s.armed {
             return false;
         }
-        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+        if !crate::background::pane_painted(ui) {
+            pane.background.paint(ui, rect);
+        }
         ui.painter().image(
             s.output.id,
             dest,

@@ -970,9 +970,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             && self.engine.analysis().is_current(frame);
         let selected = self.selected_pane == index;
         let painter = ui.painter_at(rect);
-        // Visual backdrop and default signal colors follow the platform palette,
-        // independently of the GUI skin. The header shares that backdrop.
-        painter.rect_filled(rect, 7.0, self.automatic_theme.background);
+        // A single background spans the header, content padding and rounded edges.
+        // Keep foreground layout inset without restarting gradients at the canvas.
+        self.background.paint_rounded(ui, rect, 7);
         painter.rect_stroke(
             rect,
             7.0,
@@ -1013,6 +1013,11 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         child.spacing_mut().interact_size.y = 24.0;
         child.spacing_mut().item_spacing.x = 6.0;
         child.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+        child.visuals_mut().override_text_color = Some(contrasting_color(
+            self.background.sample([0.5, 0.0]),
+            self.theme.foreground,
+            Color32::from_gray(25),
+        ));
         child.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
             pane_title(ui, self.panes[index].kind);
@@ -1044,6 +1049,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
             rect.max - Vec2::splat(8.0),
         );
+        let background_id = egui::Id::new(crate::background::PANE_PAINTED);
+        let previous_background = child.data_mut(|d| {
+            let previous = d.get_temp::<bool>(background_id);
+            d.insert_temp(background_id, true);
+            previous
+        });
         if canvas.width() >= 24.0
             && canvas.height() >= 24.0
             && !self.recording.draw(
@@ -1057,6 +1068,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         {
             self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
         }
+        child.data_mut(|d| {
+            d.remove::<bool>(background_id);
+            if let Some(previous) = previous_background {
+                d.insert_temp(background_id, previous);
+            }
+        });
         if let Some(started) = pane_started {
             self.performance.pane(
                 format!("{} · {}", index + 1, self.panes[index].kind.label()),
@@ -2153,6 +2170,64 @@ fn settings_kind_name(kind: ModuleKind) -> String {
 #[cfg(all(test, feature = "development"))]
 mod workspace_interaction_tests {
     use super::*;
+
+    #[test]
+    fn pane_background_covers_header_and_padding_without_restarting_the_gradient() {
+        use crate::background::{Background, Mode};
+        for mode in [Mode::Color, Mode::Linear, Mode::Radial] {
+            let ctx = egui::Context::default();
+            let mut app = app();
+            app.background = Background {
+                mode,
+                start: [90, 110, 130],
+                ..Default::default()
+            };
+            let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(700.0, 500.0));
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.pane(ui, 0, rect, &AnalysisFrame::default());
+                    assert!(
+                        !crate::background::pane_painted(ui),
+                        "pane context must not leak to other rendering"
+                    );
+                },
+            );
+            let background = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.rect == rect && r.stroke == Stroke::NONE => Some(r),
+                    _ => None,
+                })
+                .expect("background covers the complete pane, including the header and gutters");
+            assert_eq!(background.corner_radius, egui::CornerRadius::same(7));
+            if mode == Mode::Color {
+                assert_eq!(background.fill, Color32::from_rgb(90, 110, 130));
+            } else {
+                let texture = background.fill_texture_id();
+                let fills = output
+                    .shapes
+                    .iter()
+                    .filter(|s| match &s.shape {
+                        egui::Shape::Rect(r) => r.brush.is_some() && r.fill_texture_id() == texture,
+                        egui::Shape::Mesh(m) => m.texture_id == texture,
+                        _ => false,
+                    })
+                    .count();
+                assert_eq!(
+                    fills, 1,
+                    "the inset canvas must not restart the pane gradient"
+                );
+            }
+            // Exercise rounded textured-rectangle tessellation as well as its bounds.
+            ctx.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+            output.textures_delta.clear();
+        }
+    }
 
     #[test]
     fn scene_background_survives_switching_undo_and_full_view_presets() {
@@ -3321,6 +3396,11 @@ mod workspace_interaction_tests {
     #[test]
     fn fullscreen_button_fills_window_and_escape_preserves_inspector_and_layout() {
         let mut app = app();
+        app.background = crate::background::Background {
+            mode: crate::background::Mode::Color,
+            start: [28, 45, 68],
+            ..Default::default()
+        };
         let ctx = egui::Context::default();
         let now = Instant::now();
         app.sidebar_open = true;
@@ -3339,7 +3419,7 @@ mod workspace_interaction_tests {
         assert_eq!(app.panel_fullscreen, Some(0));
         let output = workspace_frame(&mut app, &ctx, now, vec![]);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(shape)
-            if shape.fill == app.theme.background && shape.rect == Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0)))));
+            if shape.fill == app.background.sample([0.5; 2]) && shape.rect == Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0)))));
         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Components")));
         app.show_shortcuts = true; // A hidden modal must never trap fullscreen.
         workspace_frame(
