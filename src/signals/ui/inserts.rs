@@ -144,7 +144,7 @@ fn slot_list(
                 egui::DragAndDrop::take_payload::<InsertDrag>(ui.ctx());
             }
         }
-        crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response)).show(|ui| {
+        crate::dropdown::context_popup(ui, egui::Popup::context_menu(&response)).show(|ui| {
             if ui
                 .button(if insert.enabled { "Bypass" } else { "Enable" })
                 .clicked()

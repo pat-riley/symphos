@@ -78,7 +78,6 @@ pub(super) fn macro_menu(
     ui.set_min_width(328.0);
     if let (Some(target), Some(spec)) = (&bank[index].target, &bank[index].parameter) {
         crate::midi::mapping::menu(ui, target, spec);
-        ui.separator();
     }
     let mut action = None;
     let occupied = bank[index].parameter.is_some();
@@ -108,7 +107,7 @@ pub(super) fn macro_menu(
             ui.close();
         }
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     for (label, command, enabled) in [
         ("Rename", MacroAction::Rename(index), true),
         ("Insert empty macro", MacroAction::Insert(index), vacant),
@@ -125,7 +124,7 @@ pub(super) fn macro_menu(
         action = Some(MacroAction::Undo);
         ui.close();
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     ui.small("Macro color");
     if let Some(color) = signals::ui::color_palette(ui, color) {
         action = Some(MacroAction::Color(index, Some(color)));

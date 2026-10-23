@@ -829,7 +829,7 @@ fn bar_impl(
                         // their primary drags/clicks from the children.
                         let right_click = ui.rect_contains_pointer(area)
                             && ui.input(|input| input.pointer.secondary_clicked());
-                        egui::Popup::menu(&response)
+                        crate::dropdown::context_popup(ui, egui::Popup::menu(&response))
                             .open_memory(right_click.then_some(egui::SetOpenCommand::Bool(true)))
                             .at_pointer_fixed()
                             .show(|ui| {

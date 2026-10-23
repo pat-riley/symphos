@@ -110,6 +110,46 @@ pub(crate) fn styled_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'
     )
 }
 
+/// Context menus have comfortable rows and no per-item button frames.
+/// Explicit group separators are drawn by `menu_separator`.
+pub(crate) fn context_popup<'a>(ui: &Ui, popup: egui::Popup<'a>) -> egui::Popup<'a> {
+    use egui::containers::menu::MenuConfig;
+    let base = ui.visuals().panel_fill;
+    let text = ui.visuals().text_color();
+    let accent = ui.visuals().selection.bg_fill;
+    let config = MenuConfig::new().style(egui::style::StyleModifier::new(move |style| {
+        popup_style(style, base, text, accent);
+        style.spacing.menu_margin = egui::Margin::same(6);
+        style.spacing.interact_size.y = 25.0;
+        style.spacing.button_padding = egui::vec2(8.0, 5.0);
+        for widget in [
+            &mut style.visuals.widgets.noninteractive,
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            widget.bg_stroke = egui::Stroke::NONE;
+        }
+        style.visuals.widgets.inactive.weak_bg_fill = base;
+        style.visuals.widgets.noninteractive.weak_bg_fill = base;
+    }));
+    popup.style(config.style.clone()).info(
+        egui::UiStackInfo::new(egui::UiKind::Menu)
+            .with_tag_value(MenuConfig::MENU_CONFIG_TAG, config),
+    )
+}
+
+pub(crate) fn menu_separator(ui: &mut Ui) {
+    ui.scope(|ui| {
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::new(
+            1.0,
+            blend(ui.visuals().panel_fill, ui.visuals().text_color(), 0.16),
+        );
+        ui.add(egui::Separator::default().spacing(11.0));
+    });
+}
+
 /// Parameter assignment editors use the same surface and scale as the inspector.
 pub(crate) fn editor_popup<'a>(
     ui: &Ui,

@@ -5,6 +5,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Clean up channel and macro context menus with borderless rows, two deliberate
+  group dividers, consistent menu padding, and roomier shared color swatches.
+
 - Move Macros and Signals back to the footer with compact controls on narrow
   workspaces. Selected macro/signal strips use a subtle neutral background lift
   instead of colored outlines.

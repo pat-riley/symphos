@@ -280,7 +280,7 @@ pub(super) fn menu(
             ui.close();
         }
     }
-    ui.separator();
+    crate::dropdown::menu_separator(ui);
     ui.small("Channel color");
     let [r, g, b] = bus.color_rgb();
     if let Some(color) = color_palette(ui, egui::Color32::from_rgb(r, g, b)) {

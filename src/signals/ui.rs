@@ -382,7 +382,7 @@ impl Panel {
                         }
                         let definition =
                             id.and_then(|id| self.bank.channels.iter().find(|d| d.id == id));
-                        crate::dropdown::styled_popup(
+                        crate::dropdown::context_popup(
                             ui,
                             egui::Popup::context_menu(&menu_response),
                         )
@@ -444,7 +444,7 @@ impl Panel {
                 }
                 let open_menu =
                     ui.rect_contains_pointer(space) && ui.input(|i| i.pointer.secondary_clicked());
-                crate::dropdown::styled_popup(ui, egui::Popup::context_menu(&response))
+                crate::dropdown::context_popup(ui, egui::Popup::context_menu(&response))
                     .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
                     .show(|ui| {
                         if let Some(menu_action) = channel_menu(
@@ -1488,7 +1488,7 @@ fn channel_menu(
                 ui.close();
             }
         }
-        ui.separator();
+        crate::dropdown::menu_separator(ui);
         if ui
             .button(if d.inserts.is_some() {
                 "Inspect channel & inserts"
@@ -1544,7 +1544,7 @@ fn channel_menu(
         ui.close();
     }
     if let Some(d) = d {
-        ui.separator();
+        crate::dropdown::menu_separator(ui);
         ui.small("Channel color");
         if let Some(color) = color_palette(ui, channel_color(d)) {
             action = Some(StripAction::Color(d.id, color));
@@ -1553,40 +1553,47 @@ fn channel_menu(
     action
 }
 pub(crate) fn color_palette(ui: &mut egui::Ui, selected: egui::Color32) -> Option<[u8; 3]> {
-    let mut choice = None;
-    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-    ui.spacing_mut().interact_size.y = 16.0;
-    for row in CHANNEL_SWATCHES {
-        ui.horizontal(|ui| {
-            for [r, g, b] in row {
-                let color = egui::Color32::from_rgb(r, g, b);
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-                ui.painter().rect_filled(rect, 0.0, color);
-                if color == selected {
-                    ui.painter().rect_stroke(
-                        rect.expand(1.0),
-                        1.0,
-                        egui::Stroke::new(1.0, ui.visuals().text_color()),
-                        egui::StrokeKind::Outside,
-                    );
+    ui.scope(|ui| {
+        let mut choice = None;
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.add_space(6.0);
+        for row in CHANNEL_SWATCHES {
+            ui.horizontal(|ui| {
+                for [r, g, b] in row {
+                    let color = egui::Color32::from_rgb(r, g, b);
+                    let (hit, response) =
+                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                    let rect = hit.shrink(3.0);
+                    ui.painter().rect_filled(rect, 1.0, color);
+                    if color == selected || response.hovered() {
+                        ui.painter().rect_stroke(
+                            rect.expand(1.5),
+                            2.0,
+                            egui::Stroke::new(
+                                1.0,
+                                ui.visuals()
+                                    .text_color()
+                                    .gamma_multiply(if color == selected { 0.95 } else { 0.55 }),
+                            ),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .help_text(format!("#{r:02X}{g:02X}{b:02X}"))
+                        .clicked()
+                    {
+                        choice = Some([r, g, b]);
+                        ui.close();
+                    }
                 }
-                if response
-                    .help_text(format!(
-                        "#{:02X}{:02X}{:02X}",
-                        color.r(),
-                        color.g(),
-                        color.b()
-                    ))
-                    .clicked()
-                {
-                    choice = Some([color.r(), color.g(), color.b()]);
-                    ui.close();
-                }
-            }
-        });
-    }
-    choice
+            });
+        }
+        ui.add_space(6.0);
+        choice
+    })
+    .inner
 }
 
 fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
