@@ -604,6 +604,7 @@ mod tests {
             start: [20, 40, 80],
             end: [200, 100, 70],
             angle: 30.0,
+            alpha: [255; 2],
         };
         assert!(scene.validate());
         let restored: SceneState =

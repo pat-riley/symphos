@@ -229,7 +229,13 @@ fn vertex(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V
     out.color=max(mix(vec3f(luminance),out.color,f.particle_color.w),vec3f(0.0));
     let variation_light=mix(1.0,mix(0.1,1.9,hash(ii+547u)),f.particle_light.y);
     out.color *= f.look.z * (1.0 + f.audio.x * f.audio.z * 3.0) * select(f.particle_light.x*variation_light,f.particle_light.w,is_orb);
-    if !is_orb {out.color*=optical_illumination(p);}
+    if !is_orb {
+        out.color*=optical_illumination(p);
+        if u32(f.particle_color.x)==7u {
+            let t=driver*f.particle_color.z+f.look.w+f.clock.y*f.particle_light.z;
+            out.color*=mix(f.color_start.a,f.color_end.a,1.0-abs(fract(t*0.5)*2.0-1.0));
+        }
+    }
     out.kind = select(0.0,f32(ii)-f.clock.z+1.0,is_orb); return out;
 }
 @fragment
@@ -299,7 +305,7 @@ fn fragment(in: Vertex) -> @location(0) vec4f {
             }
             default: {}
         }
-        intensity *= (1.0-smoothstep(0.92,1.0,r))*f.orb_style.w;
+        intensity *= (1.0-smoothstep(0.92,1.0,r))*f.orb_style.w*optical_alpha(u32(in.kind-1.0));
         intensity *= select(1.0, 1.0-exp2(-render_dt/max(f.light.w,0.001)), f.light.w>0.001);
         var color=in.color;
         if f.orb_color.x>0.5 {

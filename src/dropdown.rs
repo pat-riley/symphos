@@ -1,10 +1,14 @@
 //! Shared dropdown chrome. Styling is local so fields and other buttons keep their layout.
 use egui::{Color32, FontId, InnerResponse, Ui, WidgetText};
 
-pub struct ComboBox(egui::ComboBox);
+pub struct ComboBox(egui::ComboBox, Option<f32>);
 impl ComboBox {
     pub fn from_id_salt(id: impl egui::AsIdSalt) -> Self {
-        Self(egui::ComboBox::from_id_salt(id).truncate())
+        Self(egui::ComboBox::from_id_salt(id).truncate(), None)
+    }
+    pub fn control_height(mut self, height: f32) -> Self {
+        self.1 = Some(height);
+        self
     }
     pub fn selected_text(mut self, text: impl Into<WidgetText>) -> Self {
         self.0 = self.0.selected_text(text);
@@ -32,6 +36,10 @@ impl ComboBox {
         let accent = ui.visuals().selection.bg_fill;
         ui.scope(|ui| {
             button_style(ui.style_mut(), base, text, accent);
+            if let Some(height) = self.1 {
+                ui.spacing_mut().button_padding.y =
+                    ((height - ui.spacing().icon_width) / 2.0).max(0.0);
+            }
             self.0
                 .popup_style(egui::style::StyleModifier::new(move |style| {
                     popup_style(style, base, text, accent);

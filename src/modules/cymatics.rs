@@ -255,8 +255,17 @@ impl Cymatics {
                     "For sand, choose stable per-grain variation or local vibration. For surfaces, choose vibration energy or signed displacement.",
                 );
                 property_row(ui, "Plate color", |ui| {
-                    crate::color_picker::color_edit_button_srgb(ui, &mut s.plate_color)
-                        .help_text("Base plate and nodal background color. Grains and shaded surfaces use the palette above.");
+                    let mut alpha = (s.plate_opacity * 255.0).round() as u8;
+                    let before = alpha;
+                    let response = crate::color_picker::color_edit_button_srgba(
+                        ui,
+                        &mut s.plate_color,
+                        &mut alpha,
+                    );
+                    if alpha != before {
+                        s.plate_opacity = alpha as f32 / 255.0;
+                    }
+                    response.help_text("Base plate and nodal background color. Grains and shaded surfaces use the palette above.");
                 });
             });
             settings_group(ui, "Surface, grain and light", |ui| {
@@ -613,6 +622,7 @@ mod tests {
         let palette = Palette::Custom(Gradient {
             colors,
             count: 3,
+            alpha: [255; 8],
             cyclic: true,
         });
         cymatics.set_palette(palette);

@@ -198,7 +198,10 @@ pub(super) fn apply_macro_action(
             ui.data_mut(|d| d.insert_temp(egui::Id::new(INSPECT_REQUEST), i));
         }
         MacroAction::RenameTo(i, name) => bank[i].name = Some(name),
-        MacroAction::Color(i, color) => bank[i].color = color,
+        MacroAction::Color(i, color) => {
+            bank[i].color = color;
+            bank[i].color_alpha = 255;
+        }
         MacroAction::Insert(i) => insert(bank, i, Slot::default()),
         MacroAction::Undo => {
             if let Some(previous) = menu.undo.take() {

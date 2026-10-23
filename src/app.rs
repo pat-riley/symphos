@@ -2415,6 +2415,7 @@ mod workspace_interaction_tests {
             start: [12, 34, 56],
             end: [100, 30, 70],
             angle: 45.0,
+            alpha: [255; 2],
         };
         app.begin_edit(true);
         app.background = background;

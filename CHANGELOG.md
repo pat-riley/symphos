@@ -5,6 +5,15 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Reduce development build debug artifacts and disable the incremental object
+  cache. Reclaim debug build artifacts before supervised builds exceed a 12 GiB
+  cache budget, preserving development workspaces, presets, and the working app.
+
+- Use one inspector-colored, movable Color panel with an explicit close button,
+  aligned format controls, a checkerboard opacity slider, and tighter spacing.
+  Show editable hex codes beside inspector swatches. Persist color/gradient
+  opacity and carry it through CPU and GPU drawing; older colors stay opaque.
+
 - Redesign the shared color picker with a larger saturation/brightness field,
   rounded hue strip, and compact eyedropper. Add editable Hex, RGB, CSS, HSL,
   and HSB representations with validation; preserve existing opaque colors.

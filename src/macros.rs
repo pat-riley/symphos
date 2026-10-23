@@ -39,6 +39,7 @@ pub struct Slot {
     pub target: Option<ParameterContext>,
     pub name: Option<String>,
     pub color: Option<[u8; 3]>,
+    pub color_alpha: u8,
     pub signal: Option<u64>,
     pub depth: f32,
     pub enabled: bool,
@@ -53,6 +54,7 @@ impl Default for Slot {
             target: None,
             name: None,
             color: None,
+            color_alpha: 255,
             signal: None,
             depth: 0.35,
             enabled: true,
@@ -280,7 +282,9 @@ pub fn inspector_indicators(
                     source: source.map_or_else(|| "Unavailable source".into(), |d| d.name.clone()),
                     color: slot
                         .color
-                        .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                        .map(|[r, g, b]| {
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, slot.color_alpha)
+                        })
                         .unwrap_or_else(|| {
                             source
                                 .map_or(ui.visuals().selection.bg_fill, signals::ui::channel_color)
@@ -478,7 +482,7 @@ fn bar_impl(
                         let strip = Rect::from_min_size(start, Vec2::new(width, row_height));
                         let header_color = slot
                             .color
-                            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                            .map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, slot.color_alpha))
                             .or_else(|| {
                                 shared.as_ref().and_then(|shared| {
                                     let panel = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -634,7 +638,7 @@ fn bar_impl(
                                         );
                                         let color = slot
                                             .color
-                                            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                                            .map(|[r, g, b]| egui::Color32::from_rgba_unmultiplied(r, g, b, slot.color_alpha))
                                             .unwrap_or(color);
                                         let map = |v: f32| {
                                             slot.output_min

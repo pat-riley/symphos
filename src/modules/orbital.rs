@@ -27,12 +27,14 @@ macro_rules! parameters {
             pub color_mode:u32,
             pub color_start:[u8;3],
             pub color_end:[u8;3],
+            pub color_alpha:[u8;2],
             pub orb_style:u32,
             pub orb_color_mode:u32,
             pub orb_palette:u32,
             pub orb_color_start:[u8;3],
             pub orb_color_end:[u8;3],
             pub orb_colors:[[u8;3];5],
+            pub orb_color_alpha:[u8;7],
             pub orb_field_enabled:bool,
             pub orb_solid:bool,
             pub show_paths:bool,
@@ -44,7 +46,7 @@ macro_rules! parameters {
             pub auto_orbit:bool,
         }
         impl Default for OrbitalSettings {
-            fn default()->Self { Self {camera_motion:super::camera_motion::Settings::y_up_default(),$($field:$default,)*quality:1,attractors:3,particle_shape:0,color_palette:0,color_mode:0,color_start:[20,220,255],color_end:[255,40,150],orb_style:0,orb_color_mode:0,orb_palette:2,orb_color_start:[20,220,255],orb_color_end:[255,40,150],orb_colors:[[40,200,255],[255,70,140],[255,190,40],[120,255,90],[150,90,255]],orb_field_enabled:false,orb_solid:true,show_paths:false,show_grid:true,show_axes:true,show_gizmo:false,grid_plane:0,projection:0,auto_orbit:false} }
+            fn default()->Self { Self {camera_motion:super::camera_motion::Settings::y_up_default(),$($field:$default,)*color_alpha:[255;2],orb_color_alpha:[255;7],quality:1,attractors:3,particle_shape:0,color_palette:0,color_mode:0,color_start:[20,220,255],color_end:[255,40,150],orb_style:0,orb_color_mode:0,orb_palette:2,orb_color_start:[20,220,255],orb_color_end:[255,40,150],orb_colors:[[40,200,255],[255,70,140],[255,190,40],[120,255,90],[150,90,255]],orb_field_enabled:false,orb_solid:true,show_paths:false,show_grid:true,show_axes:true,show_gizmo:false,grid_plane:0,projection:0,auto_orbit:false} }
         }
         impl OrbitalSettings {
             fn sanitize(&mut self) {
@@ -406,9 +408,11 @@ impl Orbital {
                     s.orb_surface_gradient,
                     0.0,
                 ],
-                orb_start: rgba(s.orb_color_start),
-                orb_end: rgba(s.orb_color_end),
-                orb_colors: s.orb_colors.map(rgba),
+                orb_start: rgba(s.orb_color_start, s.orb_color_alpha[0]),
+                orb_end: rgba(s.orb_color_end, s.orb_color_alpha[1]),
+                orb_colors: std::array::from_fn(|i| {
+                    rgba(s.orb_colors[i], s.orb_color_alpha[i + 2])
+                }),
                 particle_style: [
                     s.particle_shape as f32,
                     s.size_variation,
@@ -433,18 +437,8 @@ impl Orbital {
                     s.color_cycle,
                     s.orb_brightness,
                 ],
-                color_start: [
-                    s.color_start[0] as f32 / 255.0,
-                    s.color_start[1] as f32 / 255.0,
-                    s.color_start[2] as f32 / 255.0,
-                    0.0,
-                ],
-                color_end: [
-                    s.color_end[0] as f32 / 255.0,
-                    s.color_end[1] as f32 / 255.0,
-                    s.color_end[2] as f32 / 255.0,
-                    0.0,
-                ],
+                color_start: rgba(s.color_start, s.color_alpha[0]),
+                color_end: rgba(s.color_end, s.color_alpha[1]),
             },
             symphos_visuals::particle_count(s.quality),
             if s.quality == 0 { 0.5 } else { 0.75 },
@@ -472,12 +466,12 @@ fn choice(ui: &mut egui::Ui, label: &str, value: &mut u32, choices: &[&str], hel
     });
 }
 
-fn rgba(color: [u8; 3]) -> [f32; 4] {
+fn rgba(color: [u8; 3], alpha: u8) -> [f32; 4] {
     [
         color[0] as f32 / 255.0,
         color[1] as f32 / 255.0,
         color[2] as f32 / 255.0,
-        0.0,
+        alpha as f32 / 255.0,
     ]
 }
 

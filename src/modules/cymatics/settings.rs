@@ -84,6 +84,7 @@ impl CymaticsSettings {
             crate::colors::Palette::Custom(crate::colors::Gradient {
                 colors,
                 count: 2,
+                alpha: [255; 8],
                 cyclic: false,
             })
         })
@@ -91,14 +92,7 @@ impl CymaticsSettings {
     pub fn gpu_palette(&self, theme: &AppTheme) -> ([[f32; 4]; 8], [f32; 4]) {
         let gradient = self.resolved_palette().gradient(theme);
         (
-            gradient.colors.map(|c| {
-                [
-                    c[0] as f32 / 255.0,
-                    c[1] as f32 / 255.0,
-                    c[2] as f32 / 255.0,
-                    1.0,
-                ]
-            }),
+            gradient.gpu(),
             [
                 gradient.count.clamp(2, 8) as f32,
                 u8::from(gradient.cyclic) as f32,

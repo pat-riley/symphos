@@ -9,28 +9,39 @@ use crate::{
 #[derive(Clone)]
 pub(super) struct Editor {
     color: [u8; 3],
+    alpha: u8,
     hsv: [f32; 3],
     format: Format,
     text: String,
     invalid: bool,
     field: Option<(f32, TextureHandle)>,
-    format_popup: Option<egui::Id>,
+    opacity_texture: Option<([u8; 3], TextureHandle)>,
 }
 
 impl Editor {
     pub fn new(color: [u8; 3]) -> Self {
         Self {
             color,
+            alpha: 255,
             hsv: formats::hsv(color),
             format: Format::Hex,
             text: Format::Hex.text(color),
             invalid: false,
             field: None,
-            format_popup: None,
+            opacity_texture: None,
         }
     }
     pub fn rgb(&self) -> [u8; 3] {
         self.color
+    }
+    pub fn alpha(&self) -> u8 {
+        self.alpha
+    }
+    pub fn sync_alpha(&mut self, alpha: u8) {
+        if self.alpha != alpha {
+            self.alpha = alpha;
+            self.refresh_text();
+        }
     }
     pub fn sync(&mut self, color: [u8; 3]) {
         if self.color != color {
@@ -48,6 +59,15 @@ impl Editor {
     }
     fn refresh_text(&mut self) {
         self.text = self.format.text(self.color);
+        if self.alpha < 255 {
+            if self.format == Format::Css {
+                self.text.pop();
+                self.text
+                    .push_str(&format!(" / {:.3})", self.alpha as f32 / 255.0));
+            } else {
+                self.text.push_str(&format!("{:02X}", self.alpha));
+            }
+        }
         self.invalid = false;
     }
     fn set_hsv(&mut self, hsv: [f32; 3]) {
@@ -66,8 +86,8 @@ impl Editor {
     pub fn controls(&mut self, ui: &mut Ui) -> Response {
         let width = (ui.ctx().content_rect().width() - 32.0).clamp(220.0, 300.0);
         ui.set_width(width);
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 10.0);
-        ui.spacing_mut().interact_size.y = 28.0;
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
+        ui.spacing_mut().interact_size.y = 26.0;
         self.saturation_value(ui, width);
         let sample = ui
             .horizontal(|ui| {
@@ -77,7 +97,7 @@ impl Editor {
                             ui,
                             Icon::Eyedropper,
                             false,
-                            28.0,
+                            26.0,
                             "Sample screen color",
                         )
                     })
@@ -85,21 +105,16 @@ impl Editor {
                 sample.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Sample screen color")
                 });
-                self.hue_slider(ui, width - 34.0);
+                self.hue_slider(ui, width - 32.0);
                 sample
             })
             .inner;
+        ui.horizontal(|ui| {
+            ui.add_space(32.0);
+            self.opacity_slider(ui, width - 32.0);
+        });
         self.values(ui);
         sample
-    }
-
-    pub fn format_menu_hovered(&self, ctx: &egui::Context) -> bool {
-        self.format_popup.is_some_and(|id| {
-            egui::Popup::is_id_open(ctx, id)
-                && ctx
-                    .pointer_hover_pos()
-                    .is_some_and(|pos| ctx.read_response(id).is_some_and(|r| r.rect.contains(pos)))
-        })
     }
 
     fn saturation_value(&mut self, ui: &mut Ui, width: f32) {
@@ -171,8 +186,8 @@ impl Editor {
 
     fn hue_slider(&mut self, ui: &mut Ui, width: f32) {
         let (bounds, response) =
-            ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click_and_drag());
-        let rect = bounds.shrink2(egui::vec2(8.0, 5.0));
+            ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click_and_drag());
+        let rect = bounds.shrink2(egui::vec2(8.0, 4.0));
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         if let Some(pos) = response.interact_pointer_pos() {
             self.set_hsv([
@@ -214,6 +229,66 @@ impl Editor {
         response.help_text("Drag to choose the hue. Saturation and brightness stay unchanged.");
     }
 
+    fn opacity_slider(&mut self, ui: &mut Ui, width: f32) {
+        let (bounds, response) =
+            ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click_and_drag());
+        let rect = bounds.shrink2(egui::vec2(8.0, 4.0));
+        if let Some(pos) = response.interact_pointer_pos() {
+            self.alpha =
+                (((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0) * 255.0).round() as u8;
+            self.refresh_text();
+        }
+        if self
+            .opacity_texture
+            .as_ref()
+            .is_none_or(|(color, _)| *color != self.color)
+        {
+            let [r, g, b] = self.color;
+            let pixels = (0..128 * 8)
+                .map(|i| {
+                    let background =
+                        Color32::from_gray(if ((i % 128) / 4 + (i / 128) / 4) % 2 == 0 {
+                            72
+                        } else {
+                            104
+                        });
+                    background.lerp_to_gamma(Color32::from_rgb(r, g, b), (i % 128) as f32 / 127.0)
+                })
+                .collect();
+            let image = egui::ColorImage::new([128, 8], pixels);
+            if let Some((color, texture)) = &mut self.opacity_texture {
+                texture.set(image, egui::TextureOptions::LINEAR);
+                *color = self.color;
+            } else {
+                self.opacity_texture = Some((
+                    self.color,
+                    ui.ctx()
+                        .load_texture("Color opacity", image, egui::TextureOptions::LINEAR),
+                ));
+            }
+        }
+        ui.painter().add(
+            egui::epaint::RectShape::filled(rect, 100, Color32::WHITE).with_texture(
+                self.opacity_texture.as_ref().unwrap().1.id(),
+                Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            ),
+        );
+        self.handle(
+            ui,
+            egui::pos2(
+                rect.left() + self.alpha as f32 / 255.0 * rect.width(),
+                rect.center().y,
+            ),
+            self.color,
+        );
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .help_text("Drag to set opacity: transparent on the left, opaque on the right.");
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("test-opacity-slider"), rect));
+    }
+
     fn handle(&self, ui: &Ui, pos: egui::Pos2, [r, g, b]: [u8; 3]) {
         ui.painter()
             .circle_filled(pos, 9.5, Color32::from_black_alpha(80));
@@ -227,25 +302,32 @@ impl Editor {
             let before = self.format;
             let menu = crate::dropdown::ComboBox::from_id_salt("color-format")
                 .width(66.0)
+                .control_height(26.0)
                 .selected_text(self.format.label())
                 .show_ui(ui, |ui| {
                     for format in Format::ALL {
                         ui.selectable_value(&mut self.format, format, format.label());
                     }
                 });
-            self.format_popup = Some(menu.response.id.with("popup"));
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(egui::Id::new("test-format-control"), menu.response.rect)
+            });
+            let _ = menu;
             if self.format != before {
                 self.refresh_text();
             }
             if matches!(self.format, Format::Hex | Format::Css) {
                 let edit = egui::TextEdit::singleline(&mut self.text)
                     .char_limit(96)
-                    .font(egui::FontId::monospace(12.0))
-                    .desired_width(ui.available_width());
-                let response = ui.add_sized([ui.available_width(), 28.0], edit);
+                    .font(egui::FontId::monospace(11.0))
+                    .vertical_align(egui::Align::Center)
+                    .desired_width((ui.available_width() - 60.0).max(50.0));
+                let response = ui.add_sized([(ui.available_width() - 60.0).max(50.0), 26.0], edit);
                 if response.changed() {
-                    if let Some(color) = self.format.parse(&self.text) {
+                    if let Some((color, alpha)) = self.format.parse_color(&self.text) {
                         self.set_rgb(color);
+                        self.alpha = alpha;
                         self.invalid = false;
                     } else {
                         self.invalid = true;
@@ -267,23 +349,31 @@ impl Editor {
                     );
                 }
                 response.help_text(if self.format == Format::Hex {
-                    "Enter RGB hex, such as FF8800 or #F80."
+                    "Enter RGB or RGBA hex, such as FF8800, #F80, or FF880080."
                 } else {
-                    "Enter #hex, rgb(255 136 0), or hsl(32deg 100% 50%). Colors are opaque."
+                    "Enter #hex, rgb(255 136 0 / 50%), or hsl(32deg 100% 50%)."
                 });
             } else {
                 self.components(ui);
             }
-        });
-        ui.horizontal(|ui| {
-            if self.invalid {
-                ui.colored_label(ui.visuals().error_fg_color, "Enter a valid opaque color.");
+            let mut opacity = self.alpha as f32 / 255.0 * 100.0;
+            if ui
+                .add_sized(
+                    [54.0, 26.0],
+                    egui::DragValue::new(&mut opacity)
+                        .range(0.0..=100.0)
+                        .suffix("%")
+                        .max_decimals(0),
+                )
+                .changed()
+            {
+                self.alpha = (opacity / 100.0 * 255.0).round() as u8;
+                self.refresh_text();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("100% opacity").size(10.0).weak())
-                    .help_text("This color is opaque.");
-            });
         });
+        if self.invalid {
+            ui.colored_label(ui.visuals().error_fg_color, "Enter a valid color.");
+        }
     }
 
     fn components(&mut self, ui: &mut Ui) {
@@ -303,7 +393,7 @@ impl Editor {
             Format::Hsl => ["H", "S", "L"],
             _ => ["H", "S", "B"],
         };
-        let width = ((ui.available_width() - 12.0) / 3.0).max(35.0);
+        let width = ((ui.available_width() - 72.0) / 3.0).max(35.0);
         let mut changed = false;
         for (i, value) in values.iter_mut().enumerate() {
             ui.vertical(|ui| {
@@ -311,7 +401,7 @@ impl Editor {
                 ui.spacing_mut().item_spacing.y = 3.0;
                 changed |= ui
                     .add_sized(
-                        [width, 28.0],
+                        [width, 26.0],
                         egui::DragValue::new(value)
                             .range(
                                 0.0..=if self.format == Format::Rgb {

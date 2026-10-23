@@ -10,6 +10,35 @@ pub(super) enum Format {
 }
 
 impl Format {
+    pub fn parse_color(self, value: &str) -> Option<([u8; 3], u8)> {
+        let value = value.trim();
+        let hex = value.strip_prefix('#').unwrap_or(value);
+        if self == Self::Hex || value.starts_with('#') {
+            if !hex.is_ascii() {
+                return None;
+            }
+            let (rgb, alpha) = match hex.len() {
+                4 => (&hex[..3], u8::from_str_radix(&hex[3..], 16).ok()? * 17),
+                8 => (&hex[..6], u8::from_str_radix(&hex[6..], 16).ok()?),
+                _ => (hex, 255),
+            };
+            return Some((Self::Hex.parse(rgb)?, alpha));
+        }
+        if let Some((function, body)) = value.split_once('(') {
+            let parts = body.strip_suffix(')')?.replace([',', '/'], " ");
+            let parts: Vec<_> = parts.split_whitespace().collect();
+            if parts.len() == 4 {
+                let alpha = if parts[3].ends_with('%') {
+                    percentage(parts[3])?
+                } else {
+                    number(parts[3])?.clamp(0.0, 1.0)
+                };
+                let opaque = format!("{}({} {} {} / 1)", function, parts[0], parts[1], parts[2]);
+                return Some((Self::Css.parse(&opaque)?, (alpha * 255.0).round() as u8));
+            }
+        }
+        Some((self.parse(value)?, 255))
+    }
     pub const ALL: [Self; 5] = [Self::Hex, Self::Rgb, Self::Css, Self::Hsl, Self::Hsb];
     pub fn label(self) -> &'static str {
         match self {
@@ -214,6 +243,22 @@ mod tests {
             assert_eq!(Format::Css.parse(value), None, "{value}");
         }
     }
+    #[test]
+    fn rgba_codes_and_css_alpha_are_preserved() {
+        for value in ["#3366CC80", "#36C8"] {
+            let (_, alpha) = Format::Hex.parse_color(value).unwrap();
+            assert!(alpha > 0 && alpha < 255);
+        }
+        assert_eq!(
+            Format::Hex.parse_color("#3366CC80"),
+            Some(([51, 102, 204], 128))
+        );
+        assert_eq!(
+            Format::Css.parse_color("rgb(51 102 204 / 50%)"),
+            Some(([51, 102, 204], 128))
+        );
+    }
+
     #[test]
     fn switching_formats_preserves_primary_secondary_gray_and_arbitrary_colors() {
         for r in [0, 13, 128, 241, 255] {

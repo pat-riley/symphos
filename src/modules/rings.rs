@@ -957,10 +957,10 @@ impl Rings {
                     position,
                     depth,
                     color: Color32::from_rgba_unmultiplied(
-                        rgb(color.r()),
-                        rgb(color.g()),
-                        rgb(color.b()),
-                        (alpha * 255.0) as u8,
+                        rgb(color.to_srgba_unmultiplied()[0]),
+                        rgb(color.to_srgba_unmultiplied()[1]),
+                        rgb(color.to_srgba_unmultiplied()[2]),
+                        (alpha * color.a() as f32) as u8,
                     ),
                 });
             }

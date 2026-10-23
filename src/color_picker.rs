@@ -1,7 +1,7 @@
 //! Shared color popup with an asynchronous, explicitly invoked screen sampler.
 use std::time::Duration;
 
-use egui::{Color32, Context, Id, Popup, PopupCloseBehavior, Response, Ui};
+use egui::{Color32, Context, Id, Popup, Response, Ui};
 
 use crate::help::HoverHelp;
 
@@ -62,13 +62,51 @@ pub fn begin_frame(ctx: &Context) -> bool {
     ready
 }
 
+pub const fn opaque() -> u8 {
+    255
+}
+
+#[cfg(test)]
 pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
+    color_edit_button_srgba(ui, color, &mut 255)
+}
+
+pub fn color_edit_button_srgba(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8) -> Response {
+    ui.horizontal(|ui| color_control(ui, color, alpha)).inner
+}
+
+fn color_control(ui: &mut Ui, color: &mut [u8; 3], alpha: &mut u8) -> Response {
     let mut response = ui.add(
         egui::Button::new("")
-            .min_size(ui.spacing().interact_size)
+            .min_size(egui::vec2(28.0, 26.0))
             .fill(Color32::from_rgb(color[0], color[1], color[2])),
     );
     response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));
+    let rect = response.rect.shrink(1.0);
+    for y in 0..4 {
+        for x in 0..5 {
+            let cell = egui::Rect::from_min_max(
+                egui::pos2(
+                    rect.left() + x as f32 * rect.width() / 5.0,
+                    rect.top() + y as f32 * rect.height() / 4.0,
+                ),
+                egui::pos2(
+                    rect.left() + (x + 1) as f32 * rect.width() / 5.0,
+                    rect.top() + (y + 1) as f32 * rect.height() / 4.0,
+                ),
+            );
+            ui.painter().rect_filled(
+                cell,
+                0,
+                Color32::from_gray(if (x + y) % 2 == 0 { 72 } else { 104 }),
+            );
+        }
+    }
+    ui.painter().rect_filled(
+        rect,
+        1,
+        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], *alpha),
+    );
     let state_id = Id::new(SAMPLING);
     if let Some(mut pending) = ui.ctx().data(|d| d.get_temp::<Sampling>(state_id))
         && pending.owner == response.id
@@ -87,7 +125,7 @@ pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
         }
     }
 
-    let popup_id = response.id.with("color-popup");
+    let window_id = response.id.with("color-window");
     let editor_id = response.id.with("color-editor");
     let open_id = Id::new(OPEN_PICKER);
     let mut open = ui
@@ -97,31 +135,59 @@ pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
     if response.clicked() {
         open = !open;
     }
-    // egui's ComboBox owns the single memory-backed popup. Keep the editor's
-    // open state separate so choosing a representation cannot dismiss it.
-    let nested_hovered = open
-        && ui
-            .ctx()
-            .data(|d| d.get_temp::<editor::Editor>(editor_id))
-            .is_some_and(|editor| editor.format_menu_hovered(ui.ctx()));
-    let close_behavior = if nested_hovered {
-        PopupCloseBehavior::IgnoreClicks
-    } else {
-        PopupCloseBehavior::CloseOnClickOutside
-    };
-    Popup::menu(&response)
-        .id(popup_id)
-        .open_bool(&mut open)
-        .close_behavior(close_behavior)
-        .show(|ui| {
+    let style = ui.style().clone();
+    let base = ui.visuals().panel_fill;
+    let frame = egui::Frame::window(ui.style())
+        .fill(base)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .inner_margin(10.0);
+    let escape =
+        open && !Popup::is_any_open(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut close_requested = false;
+    let panel = egui::Window::new("Color")
+        .id(window_id)
+        .open(&mut open)
+        .movable(true)
+        .resizable(false)
+        .collapsible(false)
+        .title_bar(false)
+        .default_pos(response.rect.right_top() + egui::vec2(8.0, 0.0))
+        .frame(frame)
+        .show(ui.ctx(), |ui| {
+            ui.set_style(style);
+            let header = ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Color").strong().size(12.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close = crate::icons::sized_button(
+                        ui,
+                        crate::icons::Icon::Close,
+                        false,
+                        22.0,
+                        "Close color picker",
+                    );
+                    close_requested = close.clicked();
+                    #[cfg(test)]
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(response.id.with("test-close"), close.rect));
+                });
+            });
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(response.id.with("test-title"), header.response.rect));
+            let _ = header;
             let mut editor = ui
                 .ctx()
                 .data(|d| d.get_temp::<editor::Editor>(editor_id))
                 .unwrap_or_else(|| editor::Editor::new(*color));
             editor.sync(*color);
+            editor.sync_alpha(*alpha);
             let sample = editor.controls(ui);
             if *color != editor.rgb() {
                 *color = editor.rgb();
+                response.mark_changed();
+            }
+            if *alpha != editor.alpha() {
+                *alpha = editor.alpha();
                 response.mark_changed();
             }
             ui.ctx().data_mut(|d| d.insert_temp(editor_id, editor));
@@ -149,9 +215,17 @@ pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
                     )
                 });
                 ui.ctx().request_repaint();
-                ui.close();
             }
         });
+    #[cfg(test)]
+    if let Some(panel) = &panel {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(response.id.with("test-panel"), panel.response.rect));
+    }
+    let _ = panel;
+    if escape || close_requested {
+        open = false;
+    }
     let last_seen = ui.ctx().cumulative_frame_nr();
     ui.ctx().data_mut(|d| {
         if open {
@@ -169,6 +243,41 @@ pub fn color_edit_button_srgb(ui: &mut Ui, color: &mut [u8; 3]) -> Response {
             d.remove::<OpenPicker>(open_id);
         }
     });
+    let code_id = response.id.with("inline-color-code");
+    let mut canonical = formats::Format::Hex.text(*color);
+    if *alpha != 255 {
+        canonical.push_str(&format!("{alpha:02X}"));
+    }
+    let mut text = ui
+        .ctx()
+        .data(|d| d.get_temp::<String>(code_id))
+        .unwrap_or_else(|| canonical.clone());
+    let edit_id = code_id.with("input");
+    if !ui.memory(|m| m.has_focus(edit_id)) {
+        text = canonical;
+    }
+    let edit = ui.add_sized(
+        [ui.available_width().clamp(50.0, 118.0), 26.0],
+        egui::TextEdit::singleline(&mut text)
+            .id(edit_id)
+            .char_limit(9)
+            .font(egui::FontId::monospace(11.0))
+            .hint_text("#RRGGBB"),
+    );
+    if edit.changed()
+        && let Some((value, opacity)) = formats::Format::Hex.parse_color(&text)
+        && (*color != value || *alpha != opacity)
+    {
+        *color = value;
+        *alpha = opacity;
+        response.mark_changed();
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(code_id, text));
+    edit.clone()
+        .help_text("Enter a hex color code, with or without #.");
+    #[cfg(test)]
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(response.id.with("test-inline-code"), edit.rect));
     response.help_text("Choose a color, or use the eyedropper to sample the screen.")
 }
 
@@ -205,6 +314,134 @@ fn poll(request: u64, color: &mut [u8; 3]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rgba_frame(
+        ctx: &Context,
+        color: &mut [u8; 3],
+        alpha: &mut u8,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, Response) {
+        let mut response = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                time: Some(ctx.cumulative_frame_nr() as f64 / 60.0),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                begin_frame(ctx);
+                ui.visuals_mut().panel_fill = Color32::from_rgb(23, 26, 29);
+                response = Some(color_edit_button_srgba(ui, color, alpha));
+            },
+        );
+        output.textures_delta.clear();
+        (output, response.unwrap())
+    }
+
+    #[test]
+    fn floating_panel_matches_inspector_moves_edits_opacity_and_closes_with_x() {
+        let ctx = Context::default();
+        let mut color = [240, 100, 40];
+        let mut alpha = 255;
+        let (_, button) = rgba_frame(&ctx, &mut color, &mut alpha, vec![]);
+        let event = |pos, pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    pressed,
+                    button: egui::PointerButton::Primary,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        for pressed in [true, false] {
+            rgba_frame(
+                &ctx,
+                &mut color,
+                &mut alpha,
+                event(button.rect.center(), pressed),
+            );
+        }
+        for _ in 0..20 {
+            rgba_frame(&ctx, &mut color, &mut alpha, vec![]);
+        }
+        let (out, _) = rgba_frame(&ctx, &mut color, &mut alpha, vec![]);
+        fn themed_panel(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Rect(r) => {
+                    r.fill == Color32::from_rgb(23, 26, 29)
+                        && r.rect.width() > 300.0
+                        && r.rect.height() > 300.0
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().any(themed_panel),
+                _ => false,
+            }
+        }
+        assert!(out.shapes.iter().any(|s| themed_panel(&s.shape)));
+        let rect = |key| {
+            ctx.data(|d| d.get_temp::<egui::Rect>(button.id.with(key)))
+                .unwrap()
+        };
+        let before = rect("test-panel");
+        let grab = rect("test-title").left_center() + egui::vec2(80.0, 0.0);
+        rgba_frame(&ctx, &mut color, &mut alpha, event(grab, true));
+        rgba_frame(
+            &ctx,
+            &mut color,
+            &mut alpha,
+            vec![egui::Event::PointerMoved(grab + egui::vec2(60.0, 40.0))],
+        );
+        rgba_frame(
+            &ctx,
+            &mut color,
+            &mut alpha,
+            event(grab + egui::vec2(60.0, 40.0), false),
+        );
+        rgba_frame(&ctx, &mut color, &mut alpha, vec![]);
+        assert!(
+            rect("test-panel").min.distance(before.min) > 30.0,
+            "the panel must be draggable"
+        );
+        let slider = ctx
+            .data(|d| d.get_temp::<egui::Rect>(Id::new("test-opacity-slider")))
+            .unwrap();
+        let point = egui::pos2(slider.left() + slider.width() * 0.25, slider.center().y);
+        for pressed in [true, false] {
+            rgba_frame(&ctx, &mut color, &mut alpha, event(point, pressed));
+        }
+        assert!((alpha as i16 - 64).abs() <= 1);
+        assert_eq!(color, [240, 100, 40]);
+        let close = rect("test-close").center();
+        for pressed in [true, false] {
+            rgba_frame(&ctx, &mut color, &mut alpha, event(close, pressed));
+        }
+        assert!(!is_open(&ctx));
+        let code = rect("test-inline-code");
+        for pressed in [true, false] {
+            rgba_frame(&ctx, &mut color, &mut alpha, event(code.center(), pressed));
+        }
+        rgba_frame(
+            &ctx,
+            &mut color,
+            &mut alpha,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                egui::Event::Paste("#3366CC80".into()),
+            ],
+        );
+        assert_eq!((color, alpha), ([51, 102, 204], 128));
+    }
 
     fn frame(
         ctx: &Context,
@@ -366,7 +603,22 @@ mod tests {
         }
         assert_eq!(colors[0], [255, 136, 0]);
         click(&ctx, &mut colors, egui::pos2(650.0, 650.0));
-        assert!(!is_open(&ctx), "a click outside dismisses the picker");
+        assert!(
+            is_open(&ctx),
+            "the floating panel stays open until explicitly closed"
+        );
+        frame(
+            &ctx,
+            &mut colors,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!is_open(&ctx));
     }
 
     #[test]

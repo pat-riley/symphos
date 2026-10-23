@@ -96,6 +96,21 @@ fn palette_color(l:Layer,t:f32)->vec3f {
     let weight=mix(select(0.0,1.0,fraction>=0.5),fraction,blend);
     return mix(l.gradient[i].rgb,l.gradient[next].rgb,weight);
 }
+fn palette_alpha(l:Layer,t:f32)->f32 {
+    let blend=clamp(l.rotation.z,0.0,1.0);
+    if l.palette.x<2.0 {
+        // Preserve the authored three-color distribution of older presets.
+        let width=max(0.001,blend);
+        let first=mix(l.a.w,l.b.w,smoothstep(0.58-0.3*width,0.58+0.3*width,t));
+        return mix(first,l.c.w,smoothstep(0.9-0.2*width,0.9+0.1*width,t));
+    }
+    let n=u32(clamp(l.palette.x,2.0,8.0));
+    var x=t*f32(n-1u);var i=min(u32(x),n-2u);var next=i+1u;
+    if l.palette.y>0.5 { x=fract(t)*f32(n);i=u32(x)%n;next=(i+1u)%n; }
+    let fraction=x-f32(i);
+    let weight=mix(select(0.0,1.0,fraction>=0.5),fraction,blend);
+    return mix(l.gradient[i].a,l.gradient[next].a,weight);
+}
 struct V { @builtin(position) position:vec4f,@location(0) uv:vec2f,@location(1) color:vec4f,@location(2) blur:f32,@location(3) strand:f32 }
 @vertex fn vertex(@builtin(vertex_index) vi:u32,@builtin(instance_index) id:u32)->V {
     var o:V;o.position=vec4f(2,2,2,1);o.uv=vec2f(0);o.color=vec4f(0);o.blur=0.0;o.strand=0.0;
@@ -148,7 +163,7 @@ struct V { @builtin(position) position:vec4f,@location(0) uv:vec2f,@location(1) 
     let energy=select(pow(radius/max(core,0.01),1.15),1.0,o.strand>0.5);
     // Normalize new light against persistence so 60/120 Hz do not double brightness.
     let injection=select(1.0,1.0-exp(-max(f.clock.x,0.0083333)/max(f.feedback.x,0.001)),f.feedback.x>0.0 && f.feedback_shift.w<0.5);
-    o.color=vec4f(rgb*f.light.y*(1.0+amp*f.light.w)*select(1.0,f.arrangement.z,is_cloud),f.look.z*l.style.w*energy*injection*select(1.0,mix(f.arrangement.w,1.0,smoothstep(0.0,0.3,amp)),f.sculpture.x>0.5));
+    o.color=vec4f(rgb*f.light.y*(1.0+amp*f.light.w)*select(1.0,f.arrangement.z,is_cloud),palette_alpha(l,color_position)*f.look.z*l.style.w*energy*injection*select(1.0,mix(f.arrangement.w,1.0,smoothstep(0.0,0.3,amp)),f.sculpture.x>0.5));
     o.blur=clamp(defocus/max(core,0.01),0.0,1.0);
     return o;
 }

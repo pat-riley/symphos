@@ -2034,10 +2034,13 @@ pub(crate) fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
     let channel = |left: u8, right: u8| {
         (left as f32 + (right as f32 - left as f32) * amount.clamp(0.0, 1.0)) as u8
     };
-    Color32::from_rgb(
-        channel(a.r(), b.r()),
-        channel(a.g(), b.g()),
-        channel(a.b(), b.b()),
+    let a = a.to_srgba_unmultiplied();
+    let b = b.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(
+        channel(a[0], b[0]),
+        channel(a[1], b[1]),
+        channel(a[2], b[2]),
+        channel(a[3], b[3]),
     )
 }
 

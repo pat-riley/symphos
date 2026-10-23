@@ -290,6 +290,7 @@ fn shared_and_layer_palettes_roundtrip_without_resetting_particle_history() {
         let palette = Palette::Custom(Gradient {
             colors,
             count: 8,
+            alpha: [255; 8],
             cyclic: true,
         });
         wave.set_palette(palette);
