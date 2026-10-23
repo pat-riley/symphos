@@ -42,6 +42,8 @@ pub enum Icon {
     #[cfg(feature = "development")]
     Clock,
     AudioMappings,
+    Knob,
+    Levels,
 }
 
 pub fn sized_button(
@@ -63,14 +65,14 @@ pub fn sized_button(
 
 /// A monochrome, borderless toolbar control matching a native sidebar toggle.
 pub fn sidebar_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
-    sidebar_button(ui, Icon::Inspector, open, size, description)
+    toolbar_toggle(ui, Icon::Inspector, open, size, description)
 }
 
 pub fn library_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
-    sidebar_button(ui, Icon::Plus, open, size, description)
+    toolbar_toggle(ui, Icon::Plus, open, size, description)
 }
 
-fn sidebar_button(
+pub(crate) fn toolbar_toggle(
     ui: &mut egui::Ui,
     icon: Icon,
     open: bool,
@@ -158,6 +160,23 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
         Icon::Clock => {
             painter.circle_stroke(p(10.0, 10.0), 8.0, stroke);
             line(&[(10.0, 4.0), (10.0, 10.0), (14.0, 12.0)]);
+        }
+        Icon::Knob => {
+            let points = (0..=32)
+                .map(|i| {
+                    let angle = std::f32::consts::PI * (0.75 + i as f32 / 32.0 * 1.5);
+                    p(10.0 + 8.0 * angle.cos(), 10.0 + 8.0 * angle.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(points, stroke));
+            painter.circle_stroke(p(10.0, 10.0), 5.4, stroke);
+            line(&[(10.0, 10.0), (7.0, 6.8)]);
+        }
+        Icon::Levels => {
+            for (x, top) in [(3.0, 9.0), (8.5, 3.0), (14.0, 6.0)] {
+                painter.rect_filled(Rect::from_min_max(p(x, top), p(x + 3.0, 17.0)), 0.6, color);
+                line(&[(x, top - 2.5), (x + 3.0, top - 2.5)]);
+            }
         }
         Icon::AudioMappings => {
             line(&[(2.0, 10.0), (8.0, 10.0), (13.0, 4.0), (18.0, 4.0)]);

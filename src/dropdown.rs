@@ -73,7 +73,7 @@ fn button_style(style: &mut egui::Style, base: Color32, text: Color32, accent: C
     visuals.selection.bg_fill = blend(base, accent, 0.18);
     visuals.selection.stroke = egui::Stroke::new(1.0, text);
 }
-fn popup_style(style: &mut egui::Style, base: Color32, text: Color32, accent: Color32) {
+pub(crate) fn popup_style(style: &mut egui::Style, base: Color32, text: Color32, accent: Color32) {
     button_style(style, base, text, accent);
     style.spacing.menu_margin = egui::Margin::ZERO;
     style.spacing.interact_size.y = 22.0;

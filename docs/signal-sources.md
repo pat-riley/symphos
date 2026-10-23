@@ -357,3 +357,12 @@ navbar inspector toggle both retract it.
 - **Mappings:** visualizer parameters consuming the selected channel.
 
 Each channel remembers its selected tab for the current app session.
+
+The top navigation has a knob icon for Macros and a levels icon for Signals,
+beside the inspector toggle. These buttons open the existing bottom docks;
+keyboard shortcuts and saved open states are unchanged. The footer keeps Info
+View on the left, followed by measured FPS and capture sample rate. Clicking FPS
+opens the local 30/60/90/120 target selector, shared with Settings. The labeled
+System audio meters on the right show the master capture before Signals inserts
+or channel gain (Audio input/Demo audio is labeled accordingly when selected).
+The display target never changes audio analysis or recording frame rate.

@@ -1642,11 +1642,14 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         if let Some(action) = menu_action {
             self.menu_action(ui.ctx(), action);
         }
-        let signals_open = self
+        let mut signals_open = self
             .signal_ui
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .show_signals;
+        let signals_were_open = signals_open;
+        let mut macros_open = !signals_open && self.scene_macros.open;
+        let macros_were_open = macros_open;
         if signals_open && self.tiles.is_none() {
             self.inspecting_signal = true;
             self.inspecting_macro = None;
@@ -1709,8 +1712,53 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         }
                     },
                 );
+                if nav_dock_toggle(
+                    ui,
+                    icons::Icon::Levels,
+                    signals_open,
+                    "Signals",
+                    &crate::shortcuts::platform_label("Show / hide Signals · Ctrl + Shift + B"),
+                )
+                .clicked()
+                {
+                    signals_open = !signals_open;
+                    if signals_open {
+                        macros_open = false;
+                    }
+                }
+                if nav_dock_toggle(
+                    ui,
+                    icons::Icon::Knob,
+                    macros_open,
+                    "Macros",
+                    &crate::shortcuts::platform_label("Show / hide Macros · Ctrl + B"),
+                )
+                .clicked()
+                {
+                    macros_open = !macros_open;
+                    if macros_open {
+                        signals_open = false;
+                    }
+                }
             });
         });
+        self.scene_macros.open = macros_open;
+        if signals_open && !signals_were_open {
+            self.inspecting_signal = true;
+            self.inspecting_macro = None;
+        }
+        {
+            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
+            panel.show_signals = signals_open;
+            if std::mem::take(&mut panel.inspect_requested) {
+                self.inspecting_signal = true;
+                self.inspecting_macro = None;
+                self.sidebar_open = true;
+            }
+        }
+        if !signals_open || (macros_open && !macros_were_open) {
+            self.inspecting_signal = false;
+        }
         let inspector_open = self.sidebar_open
             && (self.tiles.is_some() || self.inspecting_signal || self.inspecting_macro.is_some());
         let browser_openness =
@@ -1756,46 +1804,39 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             rect.max,
         );
         let footer = Rect::from_min_max(
-            Pos2::new(content_bounds.left(), rect.bottom() - 42.0),
+            Pos2::new(content_bounds.left(), rect.bottom() - 50.0),
             Pos2::new(
                 drawer_dashboard_right(content_bounds, self.sidebar_width, inspector_openness),
-                rect.bottom() - 2.0,
+                rect.bottom(),
             ),
         );
         let mut footer_ui = ui.new_child(egui::UiBuilder::new().id_salt("footer").max_rect(footer));
-        let signals_were_open = signals_open;
-        let mut signals_open = signals_open;
-        let mut macros_open = !signals_open && self.scene_macros.open;
-        let macros_were_open = macros_open;
+        let source_label = if self.sources.iter().any(|source| {
+            Some(source.node_name.as_str()) == self.selected_node.as_deref()
+                && source.kind == SourceKind::Input
+        }) {
+            "Audio input"
+        } else {
+            "System audio"
+        };
+        #[cfg(feature = "development")]
+        let source_label = if self.development.as_ref().is_some_and(|dev| dev.demo) {
+            "Demo audio"
+        } else {
+            source_label
+        };
         self.global_bar.show(
             &mut footer_ui,
             &mut self.help_open,
-            &mut signals_open,
-            &mut macros_open,
+            &mut self.render_fps,
             BarInfo {
                 frame: snapshot,
                 status: &self.status,
                 theme: &self.theme,
                 fps: self.display_fps,
+                source_label,
             },
         );
-        self.scene_macros.open = macros_open;
-        if signals_open && !signals_were_open {
-            self.inspecting_signal = true;
-            self.inspecting_macro = None;
-        }
-        {
-            let mut panel = self.signal_ui.lock().unwrap_or_else(|e| e.into_inner());
-            panel.show_signals = signals_open;
-            if std::mem::take(&mut panel.inspect_requested) {
-                self.inspecting_signal = true;
-                self.inspecting_macro = None;
-                self.sidebar_open = true;
-            }
-        }
-        if !signals_open || (macros_open && !macros_were_open) {
-            self.inspecting_signal = false;
-        }
         let content = content_bounds;
         resize_settings(
             ui,
@@ -3117,6 +3158,64 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn nav_icons_are_aligned_and_footer_fps_changes_only_the_local_display_target() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        let nav = |name| {
+            ctx.data(|d| {
+                d.get_temp::<Rect>(egui::Id::new(("test-dock-toggle", name)))
+                    .unwrap()
+            })
+        };
+        let macros = nav("Macros");
+        let signals = nav("Signals");
+        assert!(macros.right() < signals.left());
+        assert!((macros.center().y - signals.center().y).abs() < 0.1);
+        assert!(signals.bottom() < workspace_ui::NAV_HEIGHT);
+        let fps = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-footer-fps")))
+            .unwrap();
+        assert!(fps.center().x < 200.0 && fps.center().y > 750.0);
+        let scene = app.capture_scene();
+        let recording_fps = app.recording.target_fps();
+        let capture = app.selected_node.clone();
+        let click = |app: &mut SymphosApp, pos| {
+            workspace_frame(
+                app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos), button(pos, true)],
+            );
+            workspace_frame(app, &ctx, now, vec![button(pos, false)])
+        };
+        click(&mut app, fps.center());
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        let position = |out: &egui::FullOutput, label: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == label => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+        // A footer menu opens upward, remaining on screen and clear of the meters.
+        let target = position(&out, "120 FPS");
+        assert!(target.y < fps.top());
+        click(&mut app, target);
+        assert_eq!(app.render_fps, 120);
+        assert_eq!(app.workspace(&ctx).render_fps, 120);
+        assert!(app.capture_scene() == scene);
+        assert_eq!(app.recording.target_fps(), recording_fps);
+        assert_eq!(app.selected_node, capture);
+    }
+
+    #[test]
     fn bottom_docks_switch_resize_and_route_inspection_without_creating_sources() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -3149,8 +3248,15 @@ mod workspace_interaction_tests {
             workspace_frame(app, &ctx, now, vec![button(pos, false)]);
         };
         workspace_frame(&mut app, &ctx, now, vec![]);
-        let out = workspace_frame(&mut app, &ctx, now, vec![]);
-        click(&mut app, label(&out, "Signals"));
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        click(
+            &mut app,
+            ctx.data(|d| {
+                d.get_temp::<Rect>(egui::Id::new(("test-dock-toggle", "Signals")))
+                    .unwrap()
+                    .center()
+            }),
+        );
         assert!(app.signal_ui.lock().unwrap().show_signals);
         assert!(!app.scene_macros.open);
         assert_eq!(app.open_panes().len(), 4);
@@ -3197,8 +3303,15 @@ mod workspace_interaction_tests {
         click(&mut app, Pos2::new(100.0, 110.0));
         assert!(!app.inspecting_signal);
         assert!(app.signal_ui.lock().unwrap().show_signals);
-        let out = workspace_frame(&mut app, &ctx, now, vec![]);
-        click(&mut app, label(&out, "Macros"));
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        click(
+            &mut app,
+            ctx.data(|d| {
+                d.get_temp::<Rect>(egui::Id::new(("test-dock-toggle", "Macros")))
+                    .unwrap()
+                    .center()
+            }),
+        );
         assert!(!app.signal_ui.lock().unwrap().show_signals);
         assert!(app.scene_macros.open);
         workspace_frame(&mut app, &ctx, now, vec![]);
@@ -3770,7 +3883,7 @@ mod workspace_interaction_tests {
         click(&mut app, appearance);
         assert!(app.pane_highlighted);
         // Empty footer space also deselects, without closing the inspector.
-        click(&mut app, Pos2::new(90.0, 775.0));
+        click(&mut app, Pos2::new(400.0, 775.0));
         assert!(!app.pane_highlighted);
         assert!(app.sidebar_open);
         app.inspect_panel(0);
@@ -4221,6 +4334,31 @@ struct WorkspaceLayout {
     dashboard: Rect,
     sidebar: Option<Rect>,
     help: Option<Rect>,
+}
+
+fn nav_dock_toggle(
+    ui: &mut egui::Ui,
+    icon: icons::Icon,
+    open: bool,
+    label: &str,
+    description: &str,
+) -> egui::Response {
+    let response = ui
+        .push_id(label, |ui| {
+            icons::toolbar_toggle(
+                ui,
+                icon,
+                open,
+                workspace_ui::NAV_CONTROL_HEIGHT,
+                description,
+            )
+        })
+        .inner;
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
+    #[cfg(test)]
+    ui.data_mut(|data| data.insert_temp(egui::Id::new(("test-dock-toggle", label)), response.rect));
+    response
 }
 
 fn audio_source_picker(

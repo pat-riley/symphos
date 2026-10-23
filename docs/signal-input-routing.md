@@ -5,7 +5,7 @@ This experiment lives on `codex/signal-input-routing`, branched from GitHub
 
 ## Try it
 
-1. Open **Signals** in the footer. Audio, LFO, MIDI and detector channels share
+1. Open **Signals** with the levels icon in the top navigation. Audio, LFO, MIDI and detector channels share
    one mixer; there are no extra dock tabs.
 2. Right-click empty mixer space and choose **Add channel → Audio**.
    A **System audio** channel appears with a live frequency-spectrum preview.

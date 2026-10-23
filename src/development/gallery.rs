@@ -60,7 +60,7 @@ impl Gallery {
                 },
                 2=>{
                     ui.heading("Shared outline icons");
-                    ui.horizontal_wrapped(|ui|{for (icon,label) in [(Icon::Plus,"Add"),(Icon::Inspector,"Inspector"),(Icon::Save,"Save"),(Icon::Play,"Play"),(Icon::Pause,"Pause"),(Icon::Camera,"Camera"),(Icon::Clock,"Motion"),(Icon::Settings,"Settings"),(Icon::Palette,"Appearance"),(Icon::AudioMappings,"Signals"),(Icon::GridView,"Grid"),(Icon::ListView,"List"),(Icon::Close,"Close")] {let _=icons::sized_button(ui,icon,false,28.0,label);}});
+                    ui.horizontal_wrapped(|ui|{for (icon,label) in [(Icon::Plus,"Add"),(Icon::Inspector,"Inspector"),(Icon::Save,"Save"),(Icon::Play,"Play"),(Icon::Pause,"Pause"),(Icon::Camera,"Camera"),(Icon::Clock,"Motion"),(Icon::Settings,"Settings"),(Icon::Palette,"Appearance"),(Icon::Knob,"Macros"),(Icon::Levels,"Signals"),(Icon::GridView,"Grid"),(Icon::ListView,"List"),(Icon::Close,"Close")] {let _=icons::sized_button(ui,icon,false,28.0,label);}});
                     ui.weak("Use the shared icon painter. Avoid mixing filled toolbar buttons and outline sidebar toggles for equivalent actions.");
                 },
                 3=>{

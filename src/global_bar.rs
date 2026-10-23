@@ -31,6 +31,7 @@ pub struct BarInfo<'a> {
     pub status: &'a AudioStatus,
     pub theme: &'a AppTheme,
     pub fps: f32,
+    pub source_label: &'a str,
 }
 
 impl GlobalBar {
@@ -58,13 +59,12 @@ impl GlobalBar {
         }
     }
 
-    /// Bottom dock toggles and capture meters.
+    /// Help, compact performance controls, and identified master capture meters.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         help_open: &mut bool,
-        signals_open: &mut bool,
-        macros_open: &mut bool,
+        target_fps: &mut u32,
         info: BarInfo<'_>,
     ) {
         self.update_meter_hold(&info);
@@ -87,72 +87,51 @@ impl GlobalBar {
             help_open,
         );
 
-        // Keep the dock switcher centered independently of the help and meters.
-        let tabs = Rect::from_center_size(bounds.center(), Vec2::new(156.0, 28.0));
-        let border = Stroke::new(1.0, info.theme.foreground.gamma_multiply(0.16));
-        ui.painter().rect_filled(tabs, 3.0, info.theme.navigation);
-        for (index, (label, selected, description)) in [
-            ("Macros", *macros_open, crate::shortcuts::platform_label("Show / hide macros · Ctrl + B").into_owned()),
-            ("Signals", *signals_open, "Signals\nShow the scene’s modulation sources. Create audio detectors, MIDI controls or LFOs, shape their output, then connect them to macros. The Signals and Macros docks share this space.".into()),
-        ].into_iter().enumerate() {
-            let rect = Rect::from_min_size(
-                tabs.min + Vec2::new(index as f32 * 78.0, 0.0),
-                Vec2::new(78.0, tabs.height()),
-            );
-            let response = ui.interact(rect, ui.id().with(("dock-toggle", label)), Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .help_text(description);
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label));
-            if selected || response.hovered() {
-                ui.painter().rect_filled(rect.shrink(1.0), 2.0, info.theme.foreground.gamma_multiply(if response.hovered() { 0.08 } else { 0.045 }));
-            }
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label,
-                FontId::proportional(12.0), if selected || response.hovered() { info.theme.foreground } else { info.theme.muted });
-            if selected {
-                ui.painter().hline(rect.x_range().shrink(16.0), rect.bottom() - 1.5, Stroke::new(2.0, info.theme.accent));
-            }
-            if response.clicked() {
-                if index == 0 {
-                    *macros_open = !*macros_open;
-                    if *macros_open { *signals_open = false; }
-                } else {
-                    *signals_open = !*signals_open;
-                    if *signals_open { *macros_open = false; }
-                }
-            }
-        }
-        ui.painter()
-            .rect_stroke(tabs, 3.0, border, egui::StrokeKind::Inside);
-        ui.painter().vline(tabs.center().x, tabs.y_range(), border);
-
-        let meter_bounds = Rect::from_center_size(
+        let meter_width = if bounds.width() < 440.0 {
+            120.0
+        } else if compact {
+            160.0
+        } else {
+            220.0
+        };
+        let audio_bounds = Rect::from_center_size(
             Pos2::new(
-                bounds.right() - if compact { 80.0 } else { 175.0 },
+                bounds.right() - (meter_width + 82.0) * 0.5,
                 bounds.center().y,
             ),
-            Vec2::new(if compact { 160.0 } else { 350.0 }, 30.0),
+            Vec2::new(meter_width + 82.0, 30.0),
         );
-        let mut meters = ui.new_child(
+        let stats_bounds = Rect::from_min_max(
+            Pos2::new(help_rect.right() + 10.0, bounds.center().y - 15.0),
+            Pos2::new(audio_bounds.left() - 12.0, bounds.center().y + 15.0),
+        );
+        let mut stats = ui.new_child(
             egui::UiBuilder::new()
-                .id_salt("capture-meters")
-                .max_rect(meter_bounds),
+                .id_salt("performance")
+                .max_rect(stats_bounds),
         );
-        meters.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            self.meters(ui, &info, if compact { 160.0 } else { 220.0 });
-            if !compact {
+        stats.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            let _response = fps_menu(ui, target_fps, &info);
+            #[cfg(test)]
+            ui.data_mut(|d| d.insert_temp(egui::Id::new("test-footer-fps"), _response.rect));
+            if stats_bounds.width() >= 150.0 {
                 ui.label(
                     RichText::new(format!("{:.1} kHz", info.frame.sample_rate as f32 / 1000.0))
-                        .small()
+                        .size(11.0)
                         .color(info.theme.muted),
                 )
-                .help_text("Sample rate of the selected audio source.");
-                ui.label(
-                    RichText::new(format!("{:.0} FPS", info.fps))
-                        .small()
-                        .color(info.theme.muted),
-                )
-                .help_text("Measured display frame rate.");
+                .help_text("Sample rate of the master audio capture.");
             }
+        });
+        let mut audio = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("capture-meters")
+                .max_rect(audio_bounds),
+        );
+        audio.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            self.meters(ui, &info, meter_width);
+            ui.label(RichText::new(info.source_label).size(11.0).color(info.theme.muted))
+                .help_text("Master capture levels before Signals inserts and track gain. Each visualizer can select its driving signal independently.");
         });
     }
 
@@ -269,9 +248,52 @@ impl GlobalBar {
                 color,
             );
         }
-        response.help_text_with(|| format!("{} levels: RMS bars, live peak markers, retained peak markers, and latched clip indicators. Reset hold in Settings → Analysis & Meters. Capture: {}. {} dropped samples.",
-            if self.stereo { "Stereo L/R" } else { self.channel.label() }, info.status.label(), info.frame.dropped_samples));
+        response.help_text_with(|| format!("{} · {} levels: RMS bars, live peak markers, retained peak markers, and latched clip indicators. Reset hold in Settings → Analysis & Meters. Capture: {}. {} dropped samples.",
+            info.source_label, if self.stereo { "Stereo L/R" } else { self.channel.label() }, info.status.label(), info.frame.dropped_samples));
     }
+}
+
+fn fps_menu(ui: &mut egui::Ui, target: &mut u32, info: &BarInfo<'_>) -> egui::Response {
+    let label = if info.fps.is_finite() && info.fps > 0.0 {
+        format!("{:.0} FPS", info.fps)
+    } else {
+        "— FPS".into()
+    };
+    let base = ui.visuals().panel_fill;
+    let text = info.theme.foreground;
+    let accent = info.theme.accent;
+    let config = egui::containers::menu::MenuConfig::new().style(egui::style::StyleModifier::new(
+        move |style| crate::dropdown::popup_style(style, base, text, accent),
+    ));
+    let (response, _) = egui::containers::menu::MenuButton::from_button(
+        egui::Button::new(RichText::new(label).size(11.0).color(info.theme.muted))
+            .frame(false)
+            .min_size(Vec2::new(68.0, 26.0)),
+    )
+    .config(config)
+    .ui(ui, |ui| {
+        ui.weak("Target frame rate");
+        for rate in [30, 60, 90, 120] {
+            if ui
+                .selectable_label(*target == rate, format!("{rate} FPS"))
+                .clicked()
+            {
+                *target = rate;
+                ui.close();
+            }
+        }
+    });
+    let arrow = response.rect.right_center() - Vec2::new(5.0, 0.0);
+    ui.painter().add(egui::Shape::line(
+        vec![
+            arrow + Vec2::new(-2.0, -1.0),
+            arrow + Vec2::new(0.0, 1.0),
+            arrow + Vec2::new(2.0, -1.0),
+        ],
+        Stroke::new(1.0, info.theme.muted),
+    ));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .help_text(format!("Measured display frame rate · target {target} FPS. Click to change the global display target. Audio analysis and recording frame rates are unchanged."))
 }
 
 pub(crate) fn channel_selector(
@@ -295,11 +317,11 @@ mod tests {
 
     #[test]
     fn compact_bar_fits_minimum_width_and_keeps_help_left_and_levels_right() {
-        for width in [540.0, 740.0, 900.0, 1000.0, 1416.0] {
+        for width in [320.0, 400.0, 540.0, 740.0, 900.0, 1000.0, 1416.0] {
             let context = egui::Context::default();
             let mut bar = GlobalBar::default();
             let mut help = false;
-            let mut inspector = false;
+            let mut target = 60;
             let bounds = Rect::from_min_size(Pos2::new(12.0, 600.0), Vec2::new(width, 40.0));
             let mut actual = Rect::NOTHING;
             let mut output = context.run_ui(
@@ -315,13 +337,13 @@ mod tests {
                     bar.show(
                         &mut child,
                         &mut help,
-                        &mut inspector,
-                        &mut true,
+                        &mut target,
                         BarInfo {
                             frame: &AnalysisFrame::default(),
                             status: &AudioStatus::Idle,
                             theme: &AppTheme::default(),
                             fps: 60.0,
+                            source_label: "System audio",
                         },
                     );
                     actual = child.min_rect();
@@ -341,23 +363,22 @@ mod tests {
                 })
                 .collect();
             let x = |name| labels.iter().find(|(label, _)| *label == name).unwrap().1.x;
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Circle(c) if (c.radius - 9.5).abs() < 0.01 && c.center.x < x("Macros"))));
-            assert!(x("Macros") < x("Signals"));
-            let text_center = |name| {
-                output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.job.text == name => {
-                            Some(text.pos.x + text.galley.size().x * 0.5)
-                        }
-                        _ => None,
-                    })
-                    .unwrap()
-            };
+            let help = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Circle(c) if (c.radius - 9.5).abs() < 0.01 => Some(c.center),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((help.y - bounds.center().y).abs() < 0.1);
+            assert!(help.x < x("60 FPS") && x("60 FPS") < bounds.center().x);
+            assert!(x("System audio") > x("60 FPS"));
+            assert!(x("System audio") < x("L"));
             assert!(
-                ((text_center("Macros") + text_center("Signals")) * 0.5 - bounds.center().x).abs()
-                    < 1.0
+                !labels
+                    .iter()
+                    .any(|(text, _)| ["Macros", "Signals"].contains(text))
             );
             assert!(
                 !labels
@@ -392,6 +413,7 @@ mod tests {
             status: &AudioStatus::Streaming,
             theme: &theme,
             fps: 60.0,
+            source_label: "System audio",
         });
         assert_eq!(bar.held_peaks, [0.8, 1.1, 0.7]);
         assert_eq!(bar.clip_latched, [false, true, false]);
@@ -403,6 +425,7 @@ mod tests {
             status: &AudioStatus::Streaming,
             theme: &theme,
             fps: 60.0,
+            source_label: "System audio",
         });
         assert_eq!(bar.held_peaks, [0.8, 1.1, 0.7]);
         assert_eq!(bar.clip_latched, [false, true, false]);
@@ -413,6 +436,7 @@ mod tests {
             status: &AudioStatus::Streaming,
             theme: &theme,
             fps: 60.0,
+            source_label: "System audio",
         });
         assert_eq!(bar.held_peaks, [0.2, 0.3, 0.1]);
         assert_eq!(bar.clip_latched, [false; 3]);
@@ -422,6 +446,7 @@ mod tests {
             status: &AudioStatus::Idle,
             theme: &theme,
             fps: 60.0,
+            source_label: "System audio",
         });
         assert_eq!(bar.held_peaks, [0.0; 3]);
         assert_eq!(bar.clip_latched, [false; 3]);
