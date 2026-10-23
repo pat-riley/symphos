@@ -5,6 +5,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Place FPS/sample-rate readouts beside system audio meters on the right, and
+  give the left-aligned Signals/Macros controls roomier icon/label padding.
+
 - Make pane fullscreen a clean edge-to-edge presentation: hide pane headers,
   controls, outline, hover help, orientation navigator, exit hint, and native
   title bar. Escape restores the workspace and window chrome without changing

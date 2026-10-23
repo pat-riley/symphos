@@ -20,16 +20,27 @@ fn capture_width(bounds: Rect) -> f32 {
     meter_width(bounds) + if bounds.width() < 540.0 { 0.0 } else { 82.0 }
 }
 
-/// Left-align dock controls after the compact help/performance readout.
+pub(crate) const DOCK_CONTROL_HEIGHT: f32 = 30.0;
+
+/// Dock navigation stays beside Help; performance readouts sit by capture meters.
 pub(crate) fn dock_bounds(bounds: Rect) -> Rect {
-    let (offset, width) = if bounds.width() < 650.0 {
-        (128.0, 60.0)
-    } else {
-        (200.0, 196.0)
-    };
+    let width = if bounds.width() < 600.0 { 64.0 } else { 224.0 };
     Rect::from_min_size(
-        egui::pos2(bounds.left() + offset, bounds.center().y - 13.0),
-        egui::vec2(width, 26.0),
+        egui::pos2(
+            bounds.left() + 36.0,
+            bounds.center().y - DOCK_CONTROL_HEIGHT * 0.5,
+        ),
+        egui::vec2(width, DOCK_CONTROL_HEIGHT),
+    )
+}
+
+fn performance_bounds(bounds: Rect) -> Rect {
+    let right = bounds.right() - capture_width(bounds) - 12.0;
+    let available = right - dock_bounds(bounds).right() - 12.0;
+    let width = if available >= 150.0 { 150.0 } else { 70.0 };
+    Rect::from_min_size(
+        egui::pos2(right - width, bounds.center().y - 15.0),
+        egui::vec2(width, 30.0),
     )
 }
 
@@ -121,10 +132,7 @@ impl GlobalBar {
             ),
             Vec2::new(capture_width(bounds), 30.0),
         );
-        let stats_bounds = Rect::from_min_max(
-            Pos2::new(help_rect.right() + 10.0, bounds.center().y - 15.0),
-            Pos2::new(dock_bounds(bounds).left() - 8.0, bounds.center().y + 15.0),
-        );
+        let stats_bounds = performance_bounds(bounds);
         let mut stats = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("performance")
@@ -342,8 +350,10 @@ mod tests {
         for width in [320.0, 400.0, 540.0, 640.0, 650.0, 740.0, 900.0, 1416.0] {
             let bounds = Rect::from_min_size(Pos2::new(12.0, 600.0), Vec2::new(width, 50.0));
             let dock = dock_bounds(bounds);
-            assert!(dock.left() >= bounds.left() + 128.0);
-            assert!(dock.right() + 8.0 <= bounds.right() - capture_width(bounds));
+            let stats = performance_bounds(bounds);
+            assert_eq!(dock.left(), bounds.left() + 36.0);
+            assert!(dock.right() + 12.0 <= stats.left());
+            assert_eq!(stats.right() + 12.0, bounds.right() - capture_width(bounds));
             assert_eq!(dock.center().y, bounds.center().y);
         }
     }
@@ -405,7 +415,9 @@ mod tests {
                 })
                 .unwrap();
             assert!((help.y - bounds.center().y).abs() < 0.1);
-            assert!(help.x < x("60 FPS") && x("60 FPS") < bounds.center().x);
+            assert!(help.x < x("60 FPS"));
+            assert!(x("60 FPS") >= performance_bounds(bounds).left());
+            assert!(x("60 FPS") > dock_bounds(bounds).right());
             if width >= 540.0 {
                 assert!(x("System audio") > x("60 FPS"));
                 assert!(x("System audio") < x("L"));

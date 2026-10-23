@@ -3492,7 +3492,8 @@ mod workspace_interaction_tests {
         let fps = ctx
             .data(|d| d.get_temp::<Rect>(egui::Id::new("test-footer-fps")))
             .unwrap();
-        assert!(fps.center().x < 200.0 && fps.center().y > 750.0);
+        assert!(fps.left() > macros.right() && fps.center().y > 750.0);
+        assert!((fps.center().y - signals.center().y).abs() < 0.1);
         let scene = app.capture_scene();
         let recording_fps = app.recording.target_fps();
         let capture = app.selected_node.clone();
@@ -4899,7 +4900,7 @@ fn dock_toggle(
     width: f32,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(width, workspace_ui::NAV_CONTROL_HEIGHT),
+        Vec2::new(width, crate::global_bar::DOCK_CONTROL_HEIGHT),
         Sense::click(),
     );
     let base = ui.visuals().panel_fill;
@@ -4938,7 +4939,7 @@ fn dock_toggle(
     let content_width = if compact {
         20.0
     } else {
-        20.0 + 5.0 + galley.size().x
+        20.0 + 8.0 + galley.size().x
     };
     let left = rect.center().x - content_width * 0.5;
     icons::paint(
@@ -4949,7 +4950,7 @@ fn dock_toggle(
     );
     if !compact {
         ui.painter().galley(
-            Pos2::new(left + 25.0, rect.center().y - galley.size().y * 0.5),
+            Pos2::new(left + 28.0, rect.center().y - galley.size().y * 0.5),
             galley,
             color,
         );
