@@ -1631,6 +1631,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     &mut self.macros_height,
                     DockKind::Macros,
                     &self.theme,
+                    self.appearance.show_panel_gaps,
                 );
                 panel_rect = layout.dashboard;
                 self.scene_macro_bar(ui, bar_rect);
@@ -1674,6 +1675,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
     }
     fn normal_workspace(&mut self, ui: &mut egui::Ui, rect: Rect, snapshot: &AnalysisFrame) {
+        let show_gaps = self.appearance.show_panel_gaps;
         let navigation = Rect::from_min_max(
             rect.min,
             Pos2::new(rect.right(), rect.top() + workspace_ui::NAV_HEIGHT),
@@ -1844,14 +1846,10 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.open_panes().len() < MAX_PANES,
             );
             self.manager_actions(actions);
-            // Register the boundary after the list/scrollbar so it owns edge gestures.
-            if self.manager.library_open && browser_openness == 1.0 {
-                resize_library(ui, browser_bounds, inspector_open, &mut self.library_width);
-            }
         }
         let content_bounds = Rect::from_min_max(
             Pos2::new(
-                rect.left() + 12.0 + browser_width * browser_openness,
+                rect.left() + if show_gaps { 12.0 } else { 0.0 } + browser_width * browser_openness,
                 rect.top() + workspace_ui::NAV_HEIGHT,
             ),
             rect.max,
@@ -1859,7 +1857,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let footer = Rect::from_min_max(
             Pos2::new(content_bounds.left(), rect.bottom() - 50.0),
             Pos2::new(
-                drawer_dashboard_right(content_bounds, self.sidebar_width, inspector_openness),
+                drawer_dashboard_right(
+                    content_bounds,
+                    self.sidebar_width,
+                    inspector_openness,
+                    show_gaps,
+                ),
                 rect.bottom(),
             ),
         );
@@ -1927,18 +1930,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             .unwrap_or_else(|e| e.into_inner())
             .show_signals;
         let content = content_bounds;
-        resize_settings(
-            ui,
-            content,
-            inspector_open && inspector_openness == 1.0,
-            self.help_open,
-            &mut self.sidebar_width,
-        );
         let mut layout = workspace_layout_animated(
             content,
             inspector_openness,
             self.help_open,
             self.sidebar_width,
+            show_gaps,
         );
         if signals_open {
             let dock = resize_performance_dock(
@@ -1947,6 +1944,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 &mut self.signals_height,
                 DockKind::Signals,
                 &self.theme,
+                show_gaps,
             );
             self.signals_dock(ui, dock, snapshot);
         } else if self.scene_macros.open {
@@ -1956,6 +1954,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 &mut self.macros_height,
                 DockKind::Macros,
                 &self.theme,
+                show_gaps,
             );
             self.scene_macro_bar(ui, dock);
         }
@@ -2009,6 +2008,25 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         self.scene_library.canvas = Some(layout.dashboard);
         self.dashboard(ui, layout.dashboard, snapshot);
+        // Shared edges overlap pane hitboxes in the gapless layout. Register the
+        // drawer handles last so resizing still owns those narrow edge gestures.
+        resize_settings(
+            ui,
+            content,
+            inspector_open && inspector_openness == 1.0,
+            self.help_open,
+            &mut self.sidebar_width,
+            show_gaps,
+        );
+        if self.manager.library_open && browser_openness == 1.0 {
+            resize_library(
+                ui,
+                browser_bounds,
+                inspector_open,
+                &mut self.library_width,
+                show_gaps,
+            );
+        }
         if self.show_inspector {
             egui::Window::new("FFT inspector / diagnostics")
                 .open(&mut self.show_inspector)
@@ -4858,6 +4876,133 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn hidden_panel_gaps_fill_outer_viewport_edges_with_drawers_help_and_docks() {
+        for browser in [false, true] {
+            for inspector in [false, true] {
+                for help in [false, true] {
+                    for dock in [None, Some(DockKind::Signals), Some(DockKind::Macros)] {
+                        let mut app = app();
+                        app.appearance.show_panel_gaps = false;
+                        app.manager.library_open = browser;
+                        app.sidebar_open = inspector;
+                        app.help_open = help;
+                        app.scene_macros.open = matches!(dock, Some(DockKind::Macros));
+                        app.signal_ui.lock().unwrap().show_signals =
+                            matches!(dock, Some(DockKind::Signals));
+                        let ctx = egui::Context::default();
+                        let now = Instant::now();
+                        settle_drawers(&mut app, &ctx, now);
+                        let bounds = ctx.content_rect();
+                        let canvas = app.scene_library.canvas.unwrap();
+                        let browser_bounds = Rect::from_min_max(
+                            bounds.min + Vec2::new(0.0, workspace_ui::NAV_HEIGHT),
+                            bounds.max,
+                        );
+                        let left = bounds.left()
+                            + if browser {
+                                library_width(browser_bounds, inspector, app.library_width)
+                            } else {
+                                0.0
+                            };
+                        let content =
+                            Rect::from_min_max(Pos2::new(left, browser_bounds.top()), bounds.max);
+                        let mut expected = workspace_layout_animated(
+                            content,
+                            if inspector { 1.0 } else { 0.0 },
+                            help,
+                            app.sidebar_width,
+                            false,
+                        );
+                        assert_eq!(canvas.left(), left);
+                        assert_eq!(canvas.top(), bounds.top() + workspace_ui::NAV_HEIGHT);
+                        assert_eq!(
+                            canvas.right(),
+                            expected.sidebar.map_or(bounds.right(), |r| r.left())
+                        );
+                        if let Some(kind) = dock {
+                            let height = match kind {
+                                DockKind::Signals => app.signals_height,
+                                DockKind::Macros => app.macros_height,
+                            };
+                            let dock = dock_performance(&mut expected, height, false);
+                            assert_eq!(
+                                canvas.bottom(),
+                                dock.top() + 8.0,
+                                "viewport meets the visible dock frame"
+                            );
+                        } else {
+                            assert_eq!(
+                                canvas.bottom(),
+                                expected.help.map_or(bounds.bottom() - 50.0, |r| r.top())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hidden_panel_gaps_keep_outer_drawer_and_dock_resize_targets() {
+        for target in ["browser", "inspector", "signals", "macros"] {
+            let mut app = app();
+            app.appearance.show_panel_gaps = false;
+            app.manager.library_open = target == "browser";
+            app.sidebar_open = target == "inspector";
+            app.signal_ui.lock().unwrap().show_signals = target == "signals";
+            app.scene_macros.open = target == "macros";
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            settle_drawers(&mut app, &ctx, now);
+            let canvas = app.scene_library.canvas.unwrap();
+            let (pos, delta, cursor) = match target {
+                "browser" => (
+                    canvas.left_center(),
+                    Vec2::new(24.0, 0.0),
+                    egui::CursorIcon::ResizeHorizontal,
+                ),
+                "inspector" => (
+                    canvas.right_center(),
+                    Vec2::new(-24.0, 0.0),
+                    egui::CursorIcon::ResizeHorizontal,
+                ),
+                _ => (
+                    canvas.center_bottom(),
+                    Vec2::new(0.0, -24.0),
+                    egui::CursorIcon::ResizeVertical,
+                ),
+            };
+            let before = match target {
+                "browser" => app.library_width,
+                "inspector" => app.sidebar_width,
+                "signals" => app.signals_height,
+                _ => app.macros_height,
+            };
+            let out = workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            assert_eq!(out.platform_output.cursor_icon, cursor, "hover {target}");
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, true)]);
+            let out = workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos + delta)],
+            );
+            assert_eq!(out.platform_output.cursor_icon, cursor, "drag {target}");
+            let after = match target {
+                "browser" => app.library_width,
+                "inspector" => app.sidebar_width,
+                "signals" => app.signals_height,
+                _ => app.macros_height,
+            };
+            assert!(
+                after > before,
+                "drag must resize {target}: {before} -> {after}"
+            );
+            workspace_frame(&mut app, &ctx, now, vec![button(pos + delta, false)]);
+        }
+    }
+
+    #[test]
     fn hidden_panel_gaps_keep_resize_cursors_and_dragging() {
         for axis in [Axis::Horizontal, Axis::Vertical] {
             let mut app = app();
@@ -5217,11 +5362,18 @@ fn library_width(bounds: Rect, inspector_open: bool, requested: f32) -> f32 {
     requested.clamp(workspace_ui::LIBRARY_WIDTH, maximum)
 }
 
-fn resize_library(ui: &mut egui::Ui, bounds: Rect, inspector_open: bool, width: &mut f32) {
+fn resize_library(
+    ui: &mut egui::Ui,
+    bounds: Rect,
+    inspector_open: bool,
+    width: &mut f32,
+    show_gaps: bool,
+) {
     let edge = bounds.left() + library_width(bounds, inspector_open, *width);
+    let center = edge + if show_gaps { 6.0 } else { 0.0 };
     let handle = Rect::from_min_max(
-        Pos2::new(edge + 2.0, bounds.top()),
-        Pos2::new(edge + 10.0, bounds.bottom()),
+        Pos2::new(center - 4.0, bounds.top()),
+        Pos2::new(center + 4.0, bounds.bottom()),
     );
     let response = ui
         .interact(
@@ -5253,14 +5405,28 @@ fn settings_width(content: Rect, requested: f32) -> f32 {
     requested.clamp(DEFAULT_SETTINGS_WIDTH, maximum)
 }
 
-fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool, width: &mut f32) {
-    let layout = workspace_layout(content, open, help_open, *width);
+fn resize_settings(
+    ui: &mut egui::Ui,
+    content: Rect,
+    open: bool,
+    help_open: bool,
+    width: &mut f32,
+    show_gaps: bool,
+) {
+    let layout = workspace_layout_animated(
+        content,
+        if open { 1.0 } else { 0.0 },
+        help_open,
+        *width,
+        show_gaps,
+    );
     let Some(sidebar) = layout.sidebar else {
         return;
     };
+    let center = sidebar.left() - if show_gaps { 5.0 } else { 0.0 };
     let handle = Rect::from_min_max(
-        Pos2::new(sidebar.left() - 9.0, sidebar.top()),
-        Pos2::new(sidebar.left() - 1.0, sidebar.bottom()),
+        Pos2::new(center - 4.0, sidebar.top()),
+        Pos2::new(center + 4.0, sidebar.bottom()),
     );
     let response = ui
         .interact(
@@ -5294,14 +5460,22 @@ fn drawer_openness(ctx: &egui::Context, name: &str, open: bool) -> f32 {
     )
 }
 
-fn drawer_dashboard_right(content: Rect, requested_width: f32, openness: f32) -> f32 {
+fn drawer_dashboard_right(
+    content: Rect,
+    requested_width: f32,
+    openness: f32,
+    show_gaps: bool,
+) -> f32 {
     egui::lerp(
-        (content.right() - 12.0)
-            ..=(content.right() - settings_width(content, requested_width) - 10.0),
+        (content.right() - if show_gaps { 12.0 } else { 0.0 })
+            ..=(content.right()
+                - settings_width(content, requested_width)
+                - if show_gaps { 10.0 } else { 0.0 }),
         openness,
     )
 }
 
+#[cfg(test)]
 fn workspace_layout(
     content: Rect,
     sidebar_open: bool,
@@ -5313,6 +5487,7 @@ fn workspace_layout(
         if sidebar_open { 1.0 } else { 0.0 },
         help_open,
         requested_width,
+        true,
     )
 }
 
@@ -5321,6 +5496,7 @@ fn workspace_layout_animated(
     inspector_openness: f32,
     help_open: bool,
     requested_width: f32,
+    show_gaps: bool,
 ) -> WorkspaceLayout {
     let settings_width = settings_width(content, requested_width);
     let sidebar = (inspector_openness > 0.0).then(|| {
@@ -5331,9 +5507,9 @@ fn workspace_layout_animated(
         .translate(Vec2::new(settings_width * (1.0 - inspector_openness), 0.0))
     });
     let mut dashboard = Rect::from_min_max(
-        content.min + Vec2::new(0.0, 12.0),
+        content.min + Vec2::new(0.0, if show_gaps { 12.0 } else { 0.0 }),
         Pos2::new(
-            drawer_dashboard_right(content, requested_width, inspector_openness),
+            drawer_dashboard_right(content, requested_width, inspector_openness, show_gaps),
             content.bottom() - 50.0,
         ),
     );
@@ -5344,7 +5520,7 @@ fn workspace_layout_animated(
         )
     });
     if let Some(help) = help {
-        dashboard.max.y = help.top() - 10.0;
+        dashboard.max.y = help.top() - if show_gaps { 10.0 } else { 0.0 };
     }
     WorkspaceLayout {
         dashboard,
@@ -5393,6 +5569,7 @@ fn resize_performance_dock(
     requested: &mut f32,
     kind: DockKind,
     theme: &AppTheme,
+    show_gaps: bool,
 ) -> Rect {
     let bottom = layout
         .help
@@ -5400,7 +5577,7 @@ fn resize_performance_dock(
     let maximum = (bottom - layout.dashboard.top() - 106.0).clamp(30.0, 1000.0);
     let minimum = kind.minimum().min(maximum);
     let height = requested.clamp(minimum, maximum);
-    let center = bottom - height + 1.0;
+    let center = bottom - height + if show_gaps { 1.0 } else { 8.0 };
     let grip = Rect::from_min_max(
         Pos2::new(layout.dashboard.left(), center - 4.0),
         Pos2::new(layout.dashboard.right(), center + 4.0),
@@ -5419,7 +5596,7 @@ fn resize_performance_dock(
             .clamp(minimum, maximum)
             .max(180.0);
     }
-    let dock = dock_performance(layout, requested.clamp(minimum, maximum));
+    let dock = dock_performance(layout, requested.clamp(minimum, maximum), show_gaps);
     if response.hovered() || response.dragged() {
         let gap = Rect::from_min_max(
             Pos2::new(layout.dashboard.left(), layout.dashboard.bottom()),
@@ -5443,7 +5620,7 @@ fn paint_resize_divider(ui: &egui::Ui, gap: Rect, axis: Axis, color: Color32) {
     }
 }
 
-fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect {
+fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32, show_gaps: bool) -> Rect {
     let bottom = layout
         .help
         .map_or(layout.dashboard.bottom(), |r| r.bottom());
@@ -5452,7 +5629,9 @@ fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect
         Pos2::new(layout.dashboard.left(), bottom - height),
         Pos2::new(layout.dashboard.right(), bottom),
     );
-    layout.dashboard.max.y = rect.top() - 6.0;
+    // Docks draw their visible frame eight points below their allocation.
+    // Fill all the way to that visible edge when viewport gaps are hidden.
+    layout.dashboard.max.y = rect.top() + if show_gaps { -6.0 } else { 8.0 };
     if let Some(help) = &mut layout.help {
         // Both docks inset their visible frame by eight points vertically.
         // Info View shares that baseline and grows with the selected dock.
@@ -5879,7 +6058,7 @@ mod layout_tests {
                     events,
                     ..Default::default()
                 },
-                |ui| resize_settings(ui, content, true, false, width),
+                |ui| resize_settings(ui, content, true, false, width, true),
             );
             output.textures_delta.clear();
         };
@@ -6018,6 +6197,7 @@ mod layout_tests {
                                 &mut requested,
                                 kind,
                                 &theme,
+                                true,
                             );
                             gap = Rect::from_min_max(
                                 layout.dashboard.left_bottom(),
@@ -6068,7 +6248,7 @@ mod layout_tests {
                     if let Some(help) = layout.help {
                         assert_eq!(help.x_range(), layout.dashboard.x_range());
                     }
-                    let bar = dock_performance(&mut layout, height);
+                    let bar = dock_performance(&mut layout, height, true);
                     assert!(layout.dashboard.height() >= 90.0);
                     assert!(!bar.intersects(layout.dashboard));
                     assert!(!bar.intersects(layout.sidebar.unwrap()));
@@ -6116,7 +6296,7 @@ mod layout_tests {
                     p > previous && p < 1.0,
                     "opening must slide over several frames"
                 );
-                let layout = workspace_layout_animated(content, p, true, width);
+                let layout = workspace_layout_animated(content, p, true, width, true);
                 let drawer = layout.sidebar.unwrap();
                 assert!(
                     (drawer.width() - width).abs() < 0.001,
@@ -6141,7 +6321,7 @@ mod layout_tests {
             }
             assert_eq!(step(false), 0.0);
             assert!(
-                workspace_layout_animated(content, 0.0, false, width)
+                workspace_layout_animated(content, 0.0, false, width, true)
                     .sidebar
                     .is_none()
             );
@@ -6150,7 +6330,7 @@ mod layout_tests {
             }
             assert_eq!(step(true), 1.0);
             assert_eq!(
-                workspace_layout_animated(content, 1.0, false, width)
+                workspace_layout_animated(content, 1.0, false, width, true)
                     .sidebar
                     .unwrap()
                     .right(),

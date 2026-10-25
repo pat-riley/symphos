@@ -53,6 +53,8 @@ Settings and histories travel with the moved component. Escape cancels a drag.
 
 Use **View → Show Panel Gaps** (**Cmd+Shift+G** on macOS, **Ctrl+Shift+G**
 on Linux/Windows) to switch between spaced panes and touching square edges.
+Hiding gaps also removes the viewport's outer margins against the toolbar,
+window edges, component browser, inspector, Info View, and visible bottom docks.
 The preference is remembered locally and does not alter scenes or presets.
 Shared edges remain draggable when gaps are hidden; double-click an edge to
 balance its split.

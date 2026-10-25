@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Extend Show Panel Gaps to the viewport's outer edges, including the toolbar,
+  window sides, drawers, Info View, and visible Signals/Macros dock boundary.
+  Keep drawer resize handles available along the touching edges.
+
 - Add View → Show Panel Gaps (Cmd/Ctrl+Shift+G), with a remembered local
   preference. Hidden gaps join pane edges with square corners while preserving
   resize cursors, dragging, and double-click balancing along shared edges.
