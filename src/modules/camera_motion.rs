@@ -81,7 +81,9 @@ impl Default for Settings {
 }
 impl Settings {
     pub(crate) fn pan_controls(&mut self, ui: &mut Ui, prefix: &str) {
-        ui.checkbox(&mut self.pan, "Enable auto-pan").help_text("Move the framing smoothly around the saved center while automatic camera motion is enabled. This moves the view only; particle forces, audio and object positions stay unchanged.");
+        ui.push_id((prefix, "pan-enabled"), |ui| {
+            ui.checkbox(&mut self.pan, "Enable auto-pan").help_text("Move the framing smoothly around the saved center, independently of auto-orbit and wobble. This moves the view only; particle forces, audio and object positions stay unchanged.");
+        });
         ui.add_enabled_ui(self.pan, |ui| {
             for (name, value, field, default) in [("Horizontal ±", &mut self.pan_horizontal, "pan_horizontal", 0.1), ("Vertical ±", &mut self.pan_vertical, "pan_vertical", 0.05)] {
                 ui.add(Parameter::new(value, 0.0..=0.5, default).bounds(0.0..=1.0).key(format!("{prefix}.{field}")).text(name)).help_text("Maximum travel from the saved framing, as a fraction of the viewport. 0.1 is ten percent of the viewport size.");
@@ -171,8 +173,10 @@ impl Settings {
         self.wobble_controls_keyed(ui, "motion");
     }
     pub(crate) fn wobble_controls_keyed(&mut self, ui: &mut Ui, prefix: &str) {
-        ui.checkbox(&mut self.wobble, "Enable wobble")
-            .help_text("Add a smooth figure-eight camera drift on top of the orbit or sweep. Set rotation speed to zero to use wobble on its own. Wobble moves the view only; the audio and terrain are untouched.");
+        ui.push_id((prefix, "wobble-enabled"), |ui| {
+            ui.checkbox(&mut self.wobble, "Enable wobble")
+                .help_text("Add a smooth figure-eight camera drift. Runs independently with auto-orbit off, or combines with an enabled orbit. Wobble moves the view only; audio and geometry are untouched.");
+        });
         ui.add_enabled_ui(self.wobble, |ui| {
             ui.add(Parameter::new(&mut self.wobble_horizontal, 0.0..=90.0, 8.0)
                 .key(format!("{prefix}.wobble_horizontal")).text("Horizontal ±°"))
@@ -205,6 +209,7 @@ impl Runtime {
         speed: f32,
         reverse: bool,
         dt: f32,
+        orbit: bool,
     ) {
         let dt = if self.active {
             f64::from(dt.clamp(0.0, 0.1))
@@ -213,44 +218,50 @@ impl Runtime {
             self.orbit_angles = base;
             0.0
         };
-        let amplitude = f64::from(settings.swing_degrees.clamp(1.0, 180.0).to_radians());
-        let rate =
-            f64::from(speed.clamp(0.0, 360.0)).to_radians() * if reverse { -1.0 } else { 1.0 };
-        self.phase = (self.phase
-            + dt * rate
-                / if settings.path == Path::Swing {
-                    amplitude
-                } else {
-                    1.0
-                })
-        .rem_euclid(std::f64::consts::TAU);
-        let angle = if settings.path == Path::Swing {
-            amplitude * self.phase.sin()
-        } else {
-            self.phase
-        } as f32;
-        if settings.axis == Axis::Level {
-            self.orbit_angles = (wrap_angle(base.0 + angle), base.1);
-        } else {
-            let direction = direction(base);
-            let axis = settings.axis_vector();
-            let (s, c) = (-angle).sin_cos();
-            let dot = direction.iter().zip(axis).map(|(v, a)| v * a).sum::<f32>();
-            let cross = [
-                axis[1] * direction[2] - axis[2] * direction[1],
-                axis[2] * direction[0] - axis[0] * direction[2],
-                axis[0] * direction[1] - axis[1] * direction[0],
-            ];
-            let rotated = std::array::from_fn(|i| {
-                direction[i] * c + cross[i] * s + axis[i] * dot * (1.0 - c)
-            });
-            self.orbit_angles = angles(rotated, self.orbit_angles);
+        // Orbit off holds the last orbit pose. Editing its axis, sweep or speed
+        // must not move a camera that is only wobbling or panning.
+        if orbit {
+            let amplitude = f64::from(settings.swing_degrees.clamp(1.0, 180.0).to_radians());
+            let rate =
+                f64::from(speed.clamp(0.0, 360.0)).to_radians() * if reverse { -1.0 } else { 1.0 };
+            self.phase = (self.phase
+                + dt * rate
+                    / if settings.path == Path::Swing {
+                        amplitude
+                    } else {
+                        1.0
+                    })
+            .rem_euclid(std::f64::consts::TAU);
+            let angle = if settings.path == Path::Swing {
+                amplitude * self.phase.sin()
+            } else {
+                self.phase
+            } as f32;
+            if settings.axis == Axis::Level {
+                self.orbit_angles = (wrap_angle(base.0 + angle), base.1);
+            } else {
+                let direction = direction(base);
+                let axis = settings.axis_vector();
+                let (s, c) = (-angle).sin_cos();
+                let dot = direction.iter().zip(axis).map(|(v, a)| v * a).sum::<f32>();
+                let cross = [
+                    axis[1] * direction[2] - axis[2] * direction[1],
+                    axis[2] * direction[0] - axis[0] * direction[2],
+                    axis[0] * direction[1] - axis[1] * direction[0],
+                ];
+                let rotated = std::array::from_fn(|i| {
+                    direction[i] * c + cross[i] * s + axis[i] * dot * (1.0 - c)
+                });
+                self.orbit_angles = angles(rotated, self.orbit_angles);
+            }
         }
         // Independent phases make speed/reverse edits continuous, and f64
         // accumulators avoid the drift that appears at high display rates.
-        self.wobble_phase = (self.wobble_phase
-            + dt * f64::from(settings.wobble_hz.clamp(0.0, 5.0)) * std::f64::consts::TAU)
-            .rem_euclid(std::f64::consts::TAU);
+        if settings.wobble {
+            self.wobble_phase = (self.wobble_phase
+                + dt * f64::from(settings.wobble_hz.clamp(0.0, 5.0)) * std::f64::consts::TAU)
+                .rem_euclid(std::f64::consts::TAU);
+        }
         let wobble = if settings.wobble {
             Vec2::new(
                 settings.wobble_horizontal.clamp(0.0, 90.0).to_radians()
@@ -265,9 +276,11 @@ impl Runtime {
             wrap_angle(self.orbit_angles.0 + wobble.x),
             wrap_angle(self.orbit_angles.1 + wobble.y),
         );
-        self.pan_phase = (self.pan_phase
-            + dt * f64::from(settings.pan_hz.clamp(0.0, 2.0)) * std::f64::consts::TAU)
-            .rem_euclid(std::f64::consts::TAU);
+        if settings.pan {
+            self.pan_phase = (self.pan_phase
+                + dt * f64::from(settings.pan_hz.clamp(0.0, 2.0)) * std::f64::consts::TAU)
+                .rem_euclid(std::f64::consts::TAU);
+        }
         self.pan = if settings.pan {
             Vec2::new(
                 settings.pan_horizontal.clamp(0.0, 1.0) * self.pan_phase.sin() as f32,
@@ -307,6 +320,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_effect_clocks_do_not_follow_orbit_changes() {
+        let mut runtime = Runtime::default();
+        let mut settings = Settings {
+            wobble: true,
+            pan: true,
+            ..Default::default()
+        };
+        runtime.advance((0.0, 0.3), &settings, 30.0, false, 0.0, true);
+        runtime.advance((0.0, 0.3), &settings, 30.0, false, 0.1, true);
+        let wobble = runtime.wobble_phase;
+        let pan = runtime.pan_phase;
+        let orbit = runtime.phase;
+        settings.wobble = false;
+        settings.pan = false;
+        for _ in 0..10 {
+            runtime.advance((0.0, 0.3), &settings, 90.0, true, 0.1, true);
+        }
+        assert_eq!(runtime.wobble_phase, wobble);
+        assert_eq!(runtime.pan_phase, pan);
+        assert_ne!(runtime.phase, orbit);
+    }
+
+    #[test]
+    fn editing_disabled_orbit_settings_does_not_move_the_wobble_view() {
+        let base = (-0.35, 0.65);
+        let mut settings = Settings {
+            wobble: true,
+            ..Default::default()
+        };
+        let mut runtime = Runtime::default();
+        runtime.advance(base, &settings, 30.0, false, 0.0, true);
+        runtime.advance(base, &settings, 30.0, false, 0.1, true);
+        let pose = runtime.angles;
+        let phase = runtime.phase;
+        settings.axis = Axis::Frequency;
+        settings.path = Path::Swing;
+        settings.swing_degrees = 120.0;
+        runtime.advance(base, &settings, 200.0, true, 0.0, false);
+        assert_eq!(runtime.angles, pose);
+        assert_eq!(runtime.phase, phase);
+        runtime.advance(base, &settings, 200.0, true, 0.1, false);
+        assert_ne!(runtime.angles, pose, "wobble keeps moving");
+        assert_eq!(runtime.phase, phase, "orbit remains paused");
+    }
+
+    #[test]
     fn every_axis_is_a_fixed_world_axis_and_motion_matches_at_all_frame_rates() {
         let base = (-0.35, 0.65);
         for axis in [Axis::Level, Axis::Frequency, Axis::Time, Axis::Custom] {
@@ -324,10 +383,10 @@ mod tests {
             let mut poses = Vec::new();
             for fps in [15, 30, 60, 120] {
                 let mut runtime = Runtime::default();
-                runtime.advance(base, &settings, 60.0, false, 0.0);
+                runtime.advance(base, &settings, 60.0, false, 0.0, true);
                 let mut previous = runtime.angles;
                 for _ in 0..fps * 12 {
-                    runtime.advance(base, &settings, 60.0, false, 1.0 / fps as f32);
+                    runtime.advance(base, &settings, 60.0, false, 1.0 / fps as f32, true);
                     assert!((dot(direction(runtime.angles)) - initial).abs() < 1.0e-4);
                     assert!(wrap_angle(runtime.angles.0 - previous.0).abs() < 0.6);
                     assert!(wrap_angle(runtime.angles.1 - previous.1).abs() < 0.6);
@@ -354,14 +413,14 @@ mod tests {
         };
         let mut runtime = Runtime::default();
         let base = (0.0, 0.4);
-        runtime.advance(base, &settings, 60.0, false, 0.0);
+        runtime.advance(base, &settings, 60.0, false, 0.0, true);
         for _ in 0..60 {
-            runtime.advance(base, &settings, 60.0, false, 1.0 / 120.0);
+            runtime.advance(base, &settings, 60.0, false, 1.0 / 120.0, true);
         }
         let before = runtime.angles;
         let start_phase = runtime.phase;
         for _ in 0..60 {
-            runtime.advance(base, &settings, 60.0, true, 1.0 / 120.0);
+            runtime.advance(base, &settings, 60.0, true, 1.0 / 120.0, true);
         }
         assert!(runtime.angles.0.abs() < 1.0e-5);
         assert!(before.0 > 0.4);
@@ -369,16 +428,16 @@ mod tests {
         let mut max = 0.0_f32;
         let mut min = 0.0_f32;
         for _ in 0..120 * 10 {
-            runtime.advance(base, &settings, 60.0, false, 1.0 / 120.0);
+            runtime.advance(base, &settings, 60.0, false, 1.0 / 120.0, true);
             max = max.max(runtime.angles.0);
             min = min.min(runtime.angles.0);
         }
         assert!((max - 30.0_f32.to_radians()).abs() < 1.0e-4);
         assert!((min + 30.0_f32.to_radians()).abs() < 1.0e-4);
         runtime.phase = std::f64::consts::FRAC_PI_2;
-        runtime.advance(base, &settings, 0.0, false, 0.0);
+        runtime.advance(base, &settings, 0.0, false, 0.0, true);
         let end = runtime.angles.0;
-        runtime.advance(base, &settings, 60.0, false, 1.0 / 120.0);
+        runtime.advance(base, &settings, 60.0, false, 1.0 / 120.0, true);
         assert!(
             (runtime.angles.0 - end).abs() < 0.0001,
             "sweep eases at its end"
@@ -394,9 +453,9 @@ mod tests {
             ..Default::default()
         };
         let mut runtime = Runtime::default();
-        runtime.advance(base, &settings, 0.0, false, 0.0);
+        runtime.advance(base, &settings, 0.0, false, 0.0, true);
         for _ in 0..120 {
-            runtime.advance(base, &settings, 0.0, false, 1.0 / 120.0);
+            runtime.advance(base, &settings, 0.0, false, 1.0 / 120.0, true);
             assert!(
                 wrap_angle(runtime.angles.0 - base.0).abs()
                     <= settings.wobble_horizontal.to_radians() + 1.0e-5
@@ -408,7 +467,7 @@ mod tests {
         }
         assert!((wrap_angle(runtime.angles.0 - base.0) - 8.0_f32.to_radians()).abs() < 1.0e-4);
         let previous = runtime.angles;
-        runtime.advance(base, &settings, 240.0, true, 0.0);
+        runtime.advance(base, &settings, 240.0, true, 0.0, true);
         assert_eq!(runtime.angles, previous, "a speed edit preserves phase");
         let zero = Settings {
             axis: Axis::Custom,
@@ -417,7 +476,7 @@ mod tests {
             custom_z: 0.0,
             ..Default::default()
         };
-        runtime.advance(base, &zero, 1.0, false, 0.01);
+        runtime.advance(base, &zero, 1.0, false, 0.01, true);
         assert!(runtime.angles.0.is_finite() && runtime.angles.1.is_finite());
     }
 
@@ -429,10 +488,10 @@ mod tests {
         };
         let base = (0.0, 0.0);
         let mut runtime = Runtime::default();
-        runtime.advance(base, &settings, 90.0, false, 0.0);
+        runtime.advance(base, &settings, 90.0, false, 0.0, true);
         for _ in 0..120 * 8 {
             let previous = runtime.angles;
-            runtime.advance(base, &settings, 90.0, false, 1.0 / 120.0);
+            runtime.advance(base, &settings, 90.0, false, 1.0 / 120.0, true);
             assert!(wrap_angle(runtime.angles.0 - previous.0).abs() < 0.03);
             assert!(wrap_angle(runtime.angles.1 - previous.1).abs() < 0.03);
         }

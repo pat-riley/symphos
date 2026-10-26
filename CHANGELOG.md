@@ -5,6 +5,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Make auto-orbit, wobble and auto-pan independent across 3D cameras, including
+  Waterfall. Enabling orbit no longer wakes another motion through a shared
+  master switch. Keep disabled effect clocks paused, preserve motion settings
+  when toggling another effect, and stop all motion for manual camera navigation.
+
 - Separate Signals audio and modulation outputs with independent previews,
   level/value readouts and destination labels. List connected visualizers apart
   from mapped macros/parameters in the inspector. Clarify audio-only and control-only

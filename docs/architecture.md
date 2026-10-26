@@ -128,8 +128,12 @@ Milkdrop retains the opaque output authored by its preset.
 
 All 3D visualizers share the camera motion math in `modules/camera_motion.rs`:
 world/custom axes, continuous or eased sweeps, reversal, wobble and independent
-framing pan. Waterfall preserves its existing serialized `motion` recipe; other
-visualizers save a defaulted `camera_motion` recipe with their existing camera
+framing pan. Orbit, wobble and auto-pan have separate enable switches: orbit
+is not a master switch, and wobble/pan can run with orbit off. Disabled wobble
+and pan clocks pause without affecting the orbit clock. Turning off the last
+motion holds the displayed view; manual navigation or a named view stops all
+three motions without changing their speed/amplitude settings. Waterfall preserves
+its existing serialized `motion` recipe; other visualizers save a defaulted `camera_motion` recipe with their existing camera
 fields. `modules/camera.rs` adapts radians/degrees and Y-up/Z-up conventions,
 applies transient render poses, and restores the exact saved values after drawing.
 Manual navigation cancels motion and commits the displayed pose; pause holds the

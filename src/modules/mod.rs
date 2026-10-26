@@ -1195,7 +1195,16 @@ impl ModulePane {
                     {
                         camera::views(camera, ui);
                     }
+                    let camera_before = self.controlled_camera().map(|m| m.camera().raw());
                     self.section_controls(ui, frame);
+                    if let Some(before) = camera_before
+                        && let Some(module) = self.controlled_camera()
+                    {
+                        let mut camera = module.camera();
+                        if camera.raw() != before {
+                            camera.stop_motion();
+                        }
+                    }
                     if section == SettingsSection::Camera
                         && self
                             .controlled_camera()

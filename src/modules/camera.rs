@@ -31,6 +31,7 @@ pub(super) struct Camera<'a> {
     pub pan_y: &'a mut f32,
     pub degrees: bool,
     pub y_up: bool,
+    /// Orbit only; wobble and pan have their own enable flags in `motion`.
     pub enabled: &'a mut bool,
     pub speed: &'a mut f32,
     pub speed_radians: bool,
@@ -42,7 +43,12 @@ pub(super) struct Camera<'a> {
     pub gizmo: &'a mut bool,
 }
 impl Camera<'_> {
-    fn raw(&self) -> [f32; 6] {
+    pub(super) fn stop_motion(&mut self) {
+        *self.enabled = false;
+        self.motion.wobble = false;
+        self.motion.pan = false;
+    }
+    pub(super) fn raw(&self) -> [f32; 6] {
         [
             *self.yaw,
             *self.elevation,
@@ -147,7 +153,7 @@ pub(super) fn views(module: &mut (impl Controlled + ?Sized), ui: &mut Ui) {
                             (pose.yaw, pose.elevation) = angles;
                             pose.roll = 0.0;
                             c.apply(pose);
-                            *c.enabled = false;
+                            c.stop_motion();
                         }
                     }
                 });
@@ -163,7 +169,9 @@ pub(super) fn controls(module: &mut (impl Controlled + ?Sized), ui: &mut Ui) -> 
 fn controls_inner(module: &mut (impl Controlled + ?Sized), ui: &mut Ui, restart: &mut bool) {
     let c = module.camera();
     settings_group(ui, "Automatic motion", |ui| {
-        ui.checkbox(c.enabled, "Enable auto-orbit").help_text("Animate the camera independently of the audio and simulation. Manual navigation stops at the visible view. Pausing this visualizer also pauses camera motion.");
+        ui.push_id("auto-orbit-enabled", |ui| {
+            ui.checkbox(c.enabled, "Enable auto-orbit").help_text("Rotate the camera around the chosen axis. Wobble and auto-pan have independent switches. Manual navigation stops all camera motion at the visible view; pausing the visualizer freezes motion.");
+        });
         let mut degrees = if c.speed_radians {
             c.speed.to_degrees()
         } else {
@@ -255,14 +263,16 @@ pub(super) fn draw<M: Controlled + ?Sized>(
         .time
         .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
     runtime.time = Some(now);
+    let active = enabled || recipe.wobble || recipe.pan;
     let mut shown = base;
-    if enabled {
+    if active {
         runtime.motion.advance(
             (base.yaw, base.elevation),
             &recipe,
             speed.abs(),
             reverse ^ (speed < 0.0),
             dt,
+            enabled,
         );
         (shown.yaw, shown.elevation) = runtime.motion.angles;
         shown.pan = base.pan + runtime.motion.pan;
@@ -330,18 +340,18 @@ pub(super) fn draw<M: Controlled + ?Sized>(
     if shared_gizmo || presentation {
         *c.gizmo = gizmo;
     }
-    if navigated || !enabled {
+    if navigated || !active {
         if navigated || !shown.close(base) {
             c.apply(after);
         } else {
             c.restore(raw);
         }
-        *c.enabled = false;
+        c.stop_motion();
         runtime.motion = Default::default();
         runtime.base = Some(after);
     } else {
         c.restore(raw);
-        *c.enabled = true;
+        *c.enabled = enabled;
         runtime.base = Some(base);
     }
 }
@@ -485,8 +495,11 @@ mod tests {
                 });
                 out.textures_delta.clear();
                 assert!(shown.close(paused), "{kind:?}: pause must freeze the view");
-                // Turning animation off retains the last displayed view.
-                *module.camera().enabled = false;
+                // Turning all motion off retains the last displayed view.
+                {
+                    let mut c = module.camera();
+                    c.stop_motion();
+                }
                 let mut out = ctx.run_ui(Default::default(), |ui| {
                     draw(
                         module,
@@ -505,6 +518,8 @@ mod tests {
                 );
                 // A manual drag commits its new view and cancels animation.
                 *module.camera().enabled = true;
+                module.camera().motion.wobble = true;
+                module.camera().motion.pan = true;
                 let mut expected = module.camera().pose();
                 let mut out = ctx.run_ui(Default::default(), |ui| {
                     draw(
@@ -525,6 +540,7 @@ mod tests {
                 });
                 out.textures_delta.clear();
                 assert!(!*module.camera().enabled);
+                assert!(!module.camera().motion.wobble && !module.camera().motion.pan);
                 assert!(module.camera().pose().close(expected));
             }
             for result in results.iter().skip(1) {
@@ -532,6 +548,186 @@ mod tests {
                     result.close(results[0]),
                     "{kind:?}: FPS must not change motion"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn orbit_and_wobble_switches_edit_only_their_own_setting_in_every_camera_inspector() {
+        fn render(
+            pane: &mut ModulePane,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 2400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| pane.inspector_controls(ui, &crate::analysis::AnalysisFrame::default()),
+            );
+            out.textures_delta.clear();
+            out
+        }
+        for kind in ModuleKind::ALL {
+            let mut pane = ModulePane::new(kind);
+            let Some(module) = pane.controlled_camera() else {
+                continue;
+            };
+            module.camera().stop_motion();
+            let recipe = module.camera().motion.clone();
+            pane.select_section(super::super::SettingsSection::Camera);
+            let ctx = egui::Context::default();
+            for theme in [egui::Theme::Dark, egui::Theme::Light] {
+                ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+            }
+            render(&mut pane, &ctx, vec![]);
+            for (label, orbit, wobble) in [
+                ("Enable auto-orbit", true, false),
+                ("Enable wobble", true, true),
+                ("Enable auto-orbit", false, true),
+                ("Enable wobble", false, false),
+            ] {
+                let out = render(&mut pane, &ctx, vec![]);
+                let pos = out
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text == label => {
+                            Some(t.pos + t.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{kind:?}: missing {label}"));
+                render(&mut pane, &ctx, vec![egui::Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    render(
+                        &mut pane,
+                        &ctx,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+                let c = pane.controlled_camera().unwrap().camera();
+                assert_eq!(*c.enabled, orbit, "{kind:?}: after {label}");
+                assert_eq!(c.motion.wobble, wobble, "{kind:?}: after {label}");
+                let mut expected = recipe.clone();
+                expected.wobble = wobble;
+                assert_eq!(*c.motion, expected, "{kind:?}: unrelated settings changed");
+            }
+        }
+    }
+
+    #[test]
+    fn wobble_runs_without_orbit_and_orbit_alone_has_no_wobble_for_every_camera() {
+        for kind in ModuleKind::ALL {
+            for (orbit, wobble) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut pane = ModulePane::new(kind);
+                let Some(module) = pane.controlled_camera() else {
+                    continue;
+                };
+                {
+                    let c = module.camera();
+                    *c.enabled = orbit;
+                    *c.speed = if c.speed_radians {
+                        30.0_f32.to_radians()
+                    } else {
+                        30.0
+                    };
+                    *c.motion = if c.y_up {
+                        camera_motion::Settings::y_up_default()
+                    } else {
+                        Default::default()
+                    };
+                    c.motion.wobble = wobble;
+                }
+                let raw = module.camera().raw();
+                let base = module.camera().pose();
+                let mut runtime = Runtime::default();
+                let ctx = egui::Context::default();
+                let now = Instant::now();
+                let mut shown = base;
+                for step in 0..=60 {
+                    let mut out = ctx.run_ui(Default::default(), |ui| {
+                        draw(
+                            module,
+                            &mut runtime,
+                            ui,
+                            ui.max_rect(),
+                            now + Duration::from_secs_f64(step as f64 / 60.0),
+                            false,
+                            |m, _| shown = m.camera().pose(),
+                        );
+                    });
+                    out.textures_delta.clear();
+                }
+                assert_eq!(*module.camera().enabled, orbit, "{kind:?}");
+                assert_eq!(module.camera().motion.wobble, wobble, "{kind:?}");
+                assert_eq!(
+                    module.camera().raw(),
+                    raw,
+                    "{kind:?}: motion edited saved view"
+                );
+                if wobble {
+                    assert!(
+                        (shown.elevation - base.elevation).abs() > 0.01,
+                        "{kind:?}: wobble must run independently"
+                    );
+                } else {
+                    assert!(
+                        (shown.elevation - base.elevation).abs() < 1e-5,
+                        "{kind:?}: orbit alone must not wobble"
+                    );
+                }
+                if !orbit && !wobble {
+                    assert!(shown.close(base), "{kind:?}: disabled motion moved camera");
+                }
+                if orbit && wobble {
+                    let previous = shown;
+                    *module.camera().enabled = false;
+                    let mut out = ctx.run_ui(Default::default(), |ui| {
+                        draw(
+                            module,
+                            &mut runtime,
+                            ui,
+                            ui.max_rect(),
+                            now + Duration::from_secs(1),
+                            false,
+                            |m, _| shown = m.camera().pose(),
+                        );
+                    });
+                    out.textures_delta.clear();
+                    assert!(
+                        shown.close(previous),
+                        "{kind:?}: toggling orbit reset wobble or its phase"
+                    );
+                    assert!(!*module.camera().enabled && module.camera().motion.wobble);
+                    let mut out = ctx.run_ui(Default::default(), |ui| {
+                        draw(
+                            module,
+                            &mut runtime,
+                            ui,
+                            ui.max_rect(),
+                            now + Duration::from_millis(1100),
+                            false,
+                            |m, _| shown = m.camera().pose(),
+                        );
+                    });
+                    out.textures_delta.clear();
+                    assert!(
+                        !shown.close(previous),
+                        "{kind:?}: disabling orbit stopped wobble"
+                    );
+                    assert_eq!(module.camera().raw(), raw);
+                }
             }
         }
     }
