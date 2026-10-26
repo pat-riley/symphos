@@ -6,9 +6,19 @@ Signals open with a guided setup. Right-click the Signals mixer and choose
 untouched waveform/spectrum feed; **LFO** and **MIDI** remain available.
 Channels are created only by an explicit add, duplicate or paste action.
 
-The strip's type dropdown changes what the signal detects. **Edit response…**
-opens its inspector: Source, Detect, Response, Live response and Mapped
-parameters. Audio-only strips show **Set up signal…** until a detector is selected.
+The strip's type dropdown changes what the signal detects. Click its source or
+inspector icon to open Source, Detect, Response and the two separate outputs.
+**Audio output → To visualizers** shows the processed audio spectrum and RMS dB.
+**Modulation output → To macros & parameters** shows the final control curve and
+percentage. An audio-only channel explicitly shows that modulation is off;
+LFO/MIDI channels explicitly show that they have no audio output. The inspector
+lists audio recipients separately from mapped modulation parameters.
+
+The compact footer's **Modulation amount** scales only the control output.
+Audio-only channels instead expose **Input gain**, which changes their audio.
+Mute and solo on audio channels apply to both outputs. Short docks scroll
+vertically rather than compressing previews into the controls; horizontal
+scrolling and the permanent default audio strip remain available.
 The source is the capture configured in Settings; these controls do not change
 speaker playback. Loudness is an RMS-based artistic control, not calibrated LUFS.
 
@@ -18,10 +28,10 @@ speaker playback. Loudness is an RMS-based artistic control, not calibrated LUFS
    waveform/spectrum, or choose an existing audio channel in **Driven by**.
 2. Add **Bass Energy** from the Signals menu. It immediately produces a control
    curve; there is no detector insert to create manually.
-3. Click **Edit response…**. Adjust its frequency range, sensitivity, noise
+3. Click the channel’s inspector icon. Adjust its frequency range, sensitivity, noise
    floor, attack/release and **Auto level** in the inspector.
-4. Compare the gray detected signal and colored final output in **Live response**.
-   The final output includes extra processing and the Visual influence setting.
+4. Compare the gray detected signal and colored final output in **Modulation output**.
+   The final output includes extra processing and the Modulation amount setting.
 5. Assign brightness to a scene macro and choose this signal as its modulation
    source. **Mapped parameters** lists its current parameter destinations.
 
@@ -55,7 +65,10 @@ control processors change modulation values. None changes speaker output.
 
 An audio channel starts with audio. Audio gain, frequency filters, channel
 selection and an audio gate process waveform data. A detector converts that
-branch to a control curve; further inserts shape the curve. The most recent
+into a parallel control curve; further inserts shape that curve without
+replacing the audio output. For example, Stereo Balance can produce 0% while
+stereo audio is still present; Bass Energy detects bass without filtering the
+visualizer's audio. Add an audio frequency filter to limit that feed. The most recent
 audio before the detector remains available as the channel's main visualizer
 feed. An Audio channel without a detector has no modulation curve yet. The
 macro source picker offers it as **<channel name> · add Overall intensity**;

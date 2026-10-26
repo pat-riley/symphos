@@ -19,6 +19,7 @@ mod history;
 mod inserts;
 mod master;
 mod midi_preview;
+mod outputs;
 mod processor;
 /// UI identity for the permanent capture, never serialized as a scene channel.
 pub(crate) const MASTER_ID: u64 = 0;
@@ -38,6 +39,7 @@ pub struct Panel {
     pub inspect_requested: bool,
     pub master_settings_requested: bool,
     pub consumers: BTreeMap<u64, Vec<String>>,
+    pub audio_consumers: BTreeMap<u64, Vec<String>>,
     span: Option<f32>,
     deleted: Option<(Definition, usize)>,
     deleted_audio: Option<(audio::InputBus, usize)>,
@@ -123,6 +125,7 @@ impl Default for Panel {
             inspect_requested: false,
             master_settings_requested: false,
             consumers: BTreeMap::new(),
+            audio_consumers: BTreeMap::new(),
             span: None,
             deleted: None,
             deleted_audio: None,
@@ -271,7 +274,7 @@ impl Panel {
         board.spacing_mut().item_spacing.x = 0.0;
         let slots = self.bank.slots.clone();
         let reveal_selected = std::mem::take(&mut self.reveal_selected);
-        let mut scroll = egui::ScrollArea::horizontal().id_salt("signal-strips");
+        let mut scroll = egui::ScrollArea::both().id_salt("signal-strips");
         if reveal_selected && let Some(index) = slots.iter().position(|id| *id == self.selected) {
             scroll = scroll.horizontal_scroll_offset(workspace_ui::scroll_offset_for_strip(
                 &board,
@@ -281,7 +284,11 @@ impl Panel {
             ));
         }
         let mixer_output = scroll.auto_shrink([false, false]).show(&mut board, |ui| {
-            let height = ui.available_height();
+            let height = ui.available_height().max(if slots.is_empty() {
+                0.0
+            } else {
+                outputs::MIN_STRIP_HEIGHT
+            });
             let viewport_right = ui.max_rect().right();
             let mut insertion_line = None;
             ui.horizontal_top(|ui| {
@@ -478,7 +485,6 @@ impl Panel {
                 }
             }
         });
-        debug_assert!(mixer_output.content_size.y <= mixer_output.inner_rect.height() + 1.0);
         debug_assert!(
             slots.len() as f32 * 156.0 > mixer_output.inner_rect.width()
                 || mixer_output.content_size.x <= mixer_output.inner_rect.width()
@@ -1822,7 +1828,20 @@ fn channel_footer(
     color: egui::Color32,
     dark: egui::Color32,
 ) {
-    let bottom = rect.bottom() - 144.0;
+    channel_footer_impl(ui, rect, d, sample, color, dark, false);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn channel_footer_impl(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    d: &mut Definition,
+    sample: &Sample,
+    color: egui::Color32,
+    dark: egui::Color32,
+    split: bool,
+) {
+    let bottom = rect.bottom() - if split { outputs::FOOTER_HEIGHT } else { 144.0 };
     ui.painter().hline(
         rect.x_range(),
         bottom,
@@ -1831,17 +1850,21 @@ fn channel_footer(
     ui.painter().text(
         egui::pos2(rect.left() + 8.0, bottom + 15.0),
         egui::Align2::LEFT_CENTER,
-        "Visual influence",
+        if split {
+            "Modulation amount"
+        } else {
+            "Visual influence"
+        },
         egui::FontId::proportional(11.0),
         ui.visuals().text_color(),
     );
     let knob = Rect::from_center_size(
-        egui::pos2(rect.left() + 40.0, bottom + 58.0),
-        egui::vec2(54.0, 54.0),
+        egui::pos2(rect.left() + 40.0, bottom + if split { 36.0 } else { 58.0 }),
+        egui::Vec2::splat(if split { 36.0 } else { 54.0 }),
     );
     influence_knob(ui, knob, &mut d.influence, color);
     let value_rect = Rect::from_min_size(
-        egui::pos2(rect.left() + 12.0, bottom + 88.0),
+        egui::pos2(rect.left() + 12.0, bottom + if split { 56.0 } else { 88.0 }),
         egui::vec2(76.0, 22.0),
     );
     let mut value_ui = ui.new_child(
@@ -1862,15 +1885,23 @@ fn channel_footer(
                 .fixed_decimals(0)
                 .suffix("%"),
         )
-        .help_text("Visual influence · 100% is unity · drag or type a value")
+        .help_text("Modulation amount · 100% is unity. Scales macros and parameter mappings, not the audio output.")
         .changed()
     {
         d.influence = percent / 100.0;
     }
-    let meter_height = 65.0;
-    for (i, value, label) in [(0, sample.level, "In"), (1, sample.value.abs(), "Out")] {
+    let meter_height = if split { 54.0 } else { 65.0 };
+    let meters: &[(usize, f32, &str)] = if split {
+        &[(0, sample.value.abs(), "Mod")]
+    } else {
+        &[(0, sample.level, "In"), (1, sample.value.abs(), "Out")]
+    };
+    for &(i, value, label) in meters {
         let meter = Rect::from_min_size(
-            egui::pos2(rect.left() + 98.0 + i as f32 * 23.0, bottom + 35.0),
+            egui::pos2(
+                rect.left() + if split { 113.0 } else { 98.0 + i as f32 * 23.0 },
+                bottom + if split { 22.0 } else { 35.0 },
+            ),
             egui::vec2(9.0, meter_height),
         );
         let bg = ui.visuals().panel_fill;
@@ -1923,7 +1954,11 @@ fn channel_footer(
         } else {
             "Mute this channel's visual modulation output"
         },
-        "Solo this channel's visual modulation output · multiple solos are allowed",
+        if d.inserts.is_some() && d.input == Input::System {
+            "Solo this channel's audio and control outputs · multiple solos are allowed"
+        } else {
+            "Solo this channel's visual modulation output · multiple solos are allowed"
+        },
     );
 }
 
@@ -2015,7 +2050,7 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
             egui::Sense::click_and_drag(),
         )
         .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical)
-        .help_text("Visual influence · drag vertically · Shift: fine · double-click: 100%");
+        .help_text("Modulation amount · drag vertically · Shift: fine · double-click: 100%. Scales the control output, not the audio feed.");
     let speed = if ui.input(|i| i.modifiers.shift) {
         0.002
     } else {
@@ -2042,13 +2077,16 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
         *value = (*value + delta as f32 * speed * 3.0).clamp(0.0, 2.0);
     }
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Visual influence")
+        egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Modulation amount")
     });
     let center = rect.center();
+    let scale = rect.width() / 54.0;
     let painter = ui.painter_at(rect);
     let arc = |end: f32| {
         (0..=40)
-            .map(|i| center + egui::Vec2::angled(2.35 + 4.72 * end * i as f32 / 40.0) * 23.0)
+            .map(|i| {
+                center + egui::Vec2::angled(2.35 + 4.72 * end * i as f32 / 40.0) * (23.0 * scale)
+            })
             .collect()
     };
     painter.add(egui::Shape::line(
@@ -2059,15 +2097,18 @@ fn influence_knob(ui: &mut egui::Ui, rect: Rect, value: &mut f32, color: egui::C
         arc(*value / 2.0),
         egui::Stroke::new(2.5, color),
     ));
-    painter.circle_filled(center, 18.0, ui.visuals().extreme_bg_color);
+    painter.circle_filled(center, 18.0 * scale, ui.visuals().extreme_bg_color);
     painter.circle_stroke(
         center,
-        18.0,
+        18.0 * scale,
         egui::Stroke::new(1.0, ui.visuals().text_color().gamma_multiply(0.4)),
     );
     let direction = egui::Vec2::angled(2.35 + 4.72 * *value / 2.0);
     painter.line_segment(
-        [center + direction * 7.0, center + direction * 15.0],
+        [
+            center + direction * (7.0 * scale),
+            center + direction * (15.0 * scale),
+        ],
         egui::Stroke::new(2.0, ui.visuals().text_color()),
     );
 }
@@ -2382,9 +2423,11 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        assert!(output.shapes.iter().any(
-            |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="AUDIO · SPECTRUM")
-        ));
+        assert!(
+            output.shapes.iter().any(
+                |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="Audio output")
+            )
+        );
         assert!(
             output.shapes.iter().any(
                 |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="System audio")
@@ -3216,7 +3259,7 @@ mod tests {
                             if input == Input::System {
                                 "Detect"
                             } else {
-                                "Live response"
+                                "Modulation output"
                             },
                         ]
                     } {

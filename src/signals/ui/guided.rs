@@ -53,15 +53,48 @@ pub(super) fn response_controls(ui: &mut egui::Ui, d: &mut Definition, snapshot:
 }
 
 impl Panel {
+    pub(super) fn audio_output_preview(&self, ui: &mut egui::Ui, d: &Definition) {
+        audio_channel::inspector_group(ui, "Audio output", |ui| {
+            if d.input != Input::System {
+                ui.weak("No audio output. This source produces modulation only.");
+                return;
+            }
+            ui.add(egui::Label::new("Waveform and spectrum for visualizers. Detection and control processors leave this audio feed available.").wrap());
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), 112.0),
+                egui::Sense::hover(),
+            );
+            outputs::audio(
+                ui,
+                rect,
+                self.snapshot.audio.get(&d.id).map(|f| f.frame.as_ref()),
+                channel_color(d),
+                true,
+            );
+            if let Some(users) = self
+                .audio_consumers
+                .get(&d.id)
+                .filter(|users| !users.is_empty())
+            {
+                for user in users {
+                    ui.label(user);
+                }
+            } else {
+                ui.add(egui::Label::new(egui::RichText::new("No visualizers connected. Select this channel under a visualizer's Driven by menu.").weak()).wrap());
+            }
+        });
+    }
+
     pub(super) fn guided_preview(&self, ui: &mut egui::Ui, d: &Definition) {
-        audio_channel::inspector_group(ui, "Live response", |ui| {
+        audio_channel::inspector_group(ui, "Modulation output", |ui| {
+            ui.weak("Control value for macros & parameter mappings");
             let output = self.snapshot.values.get(&d.id).cloned().unwrap_or_default();
             let color = channel_color(d);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), 112.0),
                 egui::Sense::hover(),
             );
-            response.help_text("Two seconds of detected signal (gray) and final modulation output (color). Output includes Advanced processing and Visual influence. Changes affect connected visuals, not speaker audio.");
+            response.help_text("Two seconds of detected signal (gray) and final modulation output (color). Output includes Advanced control processing and Modulation amount. These control stages do not change the audio output to visualizers.");
             ui.painter()
                 .rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
             let plot = rect.shrink(7.0);
@@ -216,7 +249,7 @@ mod tests {
             "Sensitivity",
             "Attack",
             "Release",
-            "Live response",
+            "Modulation output",
             "Mapped parameters",
             "Advanced · Insert chain",
         ] {
@@ -239,6 +272,28 @@ mod tests {
         assert_eq!(panel.bank, before);
         click(&mut panel, &ctx, id, position(&out, "Back to signal"));
         assert!(panel.selected_insert.is_none());
+    }
+
+    #[test]
+    fn inspector_lists_audio_receivers_separately_from_modulation_destinations() {
+        let ctx = egui::Context::default();
+        let mut panel = Panel::default();
+        panel.act(StripAction::AddGuided(Kind::Balance, 0));
+        let id = panel.selected.unwrap();
+        panel
+            .audio_consumers
+            .insert(id, vec!["3D Cylinder · Pane 2".into()]);
+        panel
+            .consumers
+            .insert(id, vec!["Macro 1 · Brightness".into()]);
+        let before = panel.bank.clone();
+        let out = render(&mut panel, &ctx, id, vec![]);
+        let audio = position(&out, "Audio output");
+        let receiver = position(&out, "3D Cylinder · Pane 2");
+        let modulation = position(&out, "Modulation output");
+        let mapping = position(&out, "Macro 1 · Brightness");
+        assert!(audio.y < receiver.y && receiver.y < modulation.y && modulation.y < mapping.y);
+        assert_eq!(panel.bank, before);
     }
     #[test]
     fn guided_type_picker_changes_detector_without_discarding_mappings_or_extra_controls() {

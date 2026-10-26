@@ -113,19 +113,21 @@ impl SymphosApp {
                 if insert_title.is_some() {
                     return;
                 }
-                audio_channel::inspector_group(ui, "Live spectrum", |ui| {
-                    let output = frame
-                        .signals
-                        .as_ref()
-                        .and_then(|s| s.audio.get(&bus.id))
-                        .map(|f| f.frame.as_ref());
-                    let (plot, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 100.0),
-                        Sense::hover(),
-                    );
-                    let [r, g, b] = bus.color_rgb();
-                    audio_channel::spectrum(ui, plot, output, Color32::from_rgb(r, g, b));
-                });
+                if !chained {
+                    audio_channel::inspector_group(ui, "Live spectrum", |ui| {
+                        let output = frame
+                            .signals
+                            .as_ref()
+                            .and_then(|s| s.audio.get(&bus.id))
+                            .map(|f| f.frame.as_ref());
+                        let (plot, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 100.0),
+                            Sense::hover(),
+                        );
+                        let [r, g, b] = bus.color_rgb();
+                        audio_channel::spectrum(ui, plot, output, Color32::from_rgb(r, g, b));
+                    });
+                }
                 audio_channel::inspector_group(ui, "Connected sketches", |ui| {
                     ui.add(
                         egui::Label::new(

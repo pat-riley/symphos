@@ -2275,6 +2275,17 @@ impl eframe::App for SymphosApp {
             }
             self.scene_macros.reconcile(&self.panes, &panel.bank);
             panel.consumers.clear();
+            panel.audio_consumers.clear();
+            for i in self.open_panes() {
+                let pane = &self.panes[i];
+                if let crate::signals::audio::Connection::Input(id) = pane.audio_input {
+                    panel.audio_consumers.entry(id).or_default().push(format!(
+                        "{} · Pane {}",
+                        settings_kind_name(pane.kind),
+                        i + 1
+                    ));
+                }
+            }
             for (index, slot) in self.scene_macros.slots.iter().enumerate() {
                 if let (Some(id), Some(parameter), Some(target)) =
                     (slot.signal, &slot.parameter, &slot.target)

@@ -5,6 +5,12 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Separate Signals audio and modulation outputs with independent previews,
+  level/value readouts and destination labels. List connected visualizers apart
+  from mapped macros/parameters in the inspector. Clarify audio-only and control-only
+  channels, rename Visual influence to Modulation amount in the guided strip,
+  and protect preview heights with compact controls and vertical dock scrolling.
+
 - Add a generic Media tool beneath + for project images, GIF/video file entries
   and embedded textures. Include the starter image in every project, show image
   previews and scene usage, and open the browser from inspector Choose image

@@ -198,7 +198,7 @@ pub(super) fn strip(
     selected: bool,
     _selected_insert: Option<(u64, u64)>,
     history: Option<&history::History>,
-    midi: (&crate::midi::Snapshot, Option<&midi_preview::History>),
+    _midi: (&crate::midi::Snapshot, Option<&midi_preview::History>),
 ) -> StripOutput {
     let color = channel_color(d);
     let [r, g, b] = d.color_rgb();
@@ -251,7 +251,22 @@ pub(super) fn strip(
     source.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
     source.spacing_mut().item_spacing.y = 3.0;
     source.spacing_mut().interact_size.y = 21.0;
-    source.small("Source");
+    source.horizontal(|ui| {
+        ui.small("Source");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if icons::toolbar_toggle(
+                ui,
+                Icon::Inspector,
+                false,
+                16.0,
+                "Edit signal response and outputs…",
+            )
+            .clicked()
+            {
+                action = Some(StripAction::Processor(d.id));
+            }
+        });
+    });
     if source
         .add_sized(
             [source.available_width(), 21.0],
@@ -265,16 +280,13 @@ pub(super) fn strip(
     {
         action = Some(StripAction::Select(d.id));
     }
-    let bottom = rect.bottom() - 144.0;
+    let bottom = rect.bottom() - outputs::FOOTER_HEIGHT;
     let list_rect = Rect::from_min_size(
         egui::pos2(
             rect.left() + INSERT_GAP,
             source.min_rect().bottom() + INSERT_GAP,
         ),
-        egui::vec2(
-            rect.width() - 2.0 * INSERT_GAP,
-            if d.input == Input::System { 55.0 } else { 22.0 },
-        ),
+        egui::vec2(rect.width() - 2.0 * INSERT_GAP, 22.0),
     );
     let mut list = ui.new_child(
         egui::UiBuilder::new()
@@ -289,87 +301,50 @@ pub(super) fn strip(
     if d.input == Input::System {
         super::guided::type_picker(&mut list, d);
     }
-    if insert_button(
-        &mut list,
-        match d.input {
-            Input::System if d.has_control_output() => "Edit response…",
-            Input::System => "Set up signal…",
-            Input::Lfo => "Edit LFO…",
-            _ => "Edit MIDI…",
-        },
-        false,
-        egui::Sense::click(),
-    )
-    .clicked()
+    if d.input != Input::System
+        && insert_button(
+            &mut list,
+            if d.input == Input::Lfo {
+                "Edit LFO…"
+            } else {
+                "Edit MIDI…"
+            },
+            false,
+            egui::Sense::click(),
+        )
+        .clicked()
     {
         action = Some(StripAction::Processor(d.id));
     }
     let graph = Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, list_rect.bottom() + INSERT_GAP),
-        egui::pos2(
-            rect.right() - 8.0,
-            (bottom - 8.0).max(list_rect.bottom() + 23.0),
-        ),
+        egui::pos2(rect.right() - 8.0, bottom - 8.0),
     );
-    let audio_only = d.input == Input::System
-        && d.inserts.as_ref().unwrap().data_at(d.input, usize::MAX) == Data::Audio;
+    let audio_only = d.input == Input::System && !d.has_control_output();
     let frame = snapshot.audio.get(&d.id).map(|f| f.frame.as_ref());
-    if d.input == Input::Midi && d.inserts.as_ref().unwrap().stages.is_empty() {
-        midi_preview::draw(ui, graph, &d.midi, midi.0, midi.1, snapshot.time, color);
-    } else if audio_only {
-        audio_channel::spectrum(ui, graph, frame, color);
-    } else {
-        ui.painter()
-            .rect_filled(graph, 4.0, ui.visuals().extreme_bg_color);
-        let signed = d.kind() == OutputKind::Bipolar;
-        let high = history
-            .into_iter()
-            .flat_map(|h| h.points())
-            .map(|p| p[1].abs())
-            .fold(1.0_f32, f32::max);
-        for level in 1..4 {
-            ui.painter().hline(
-                graph.x_range(),
-                graph.top() + graph.height() * level as f32 / 4.0,
-                egui::Stroke::new(0.5, ui.visuals().weak_text_color().gamma_multiply(0.15)),
-            );
-        }
-        if let Some(history) = history {
-            let points: Vec<_> = history
-                .points()
-                .map(|[x, y]| {
-                    egui::pos2(
-                        graph.left() + x * graph.width(),
-                        graph.bottom()
-                            - (if signed {
-                                (y / high + 1.0) * 0.5
-                            } else {
-                                y / high
-                            })
-                            .clamp(0.0, 1.0)
-                                * graph.height(),
-                    )
-                })
-                .collect();
-            if points.len() > 1 {
-                ui.painter_at(graph)
-                    .add(egui::Shape::line(points, egui::Stroke::new(1.7, color)));
-            }
-        }
-        ui.painter().text(
-            graph.left_top() + egui::vec2(5.0, 4.0),
-            egui::Align2::LEFT_TOP,
-            if d.input == Input::Midi {
-                "MIDI · CONTROL"
-            } else if d.input == Input::Lfo {
-                "LFO · CONTROL"
-            } else {
-                "AUDIO / CONTROL"
-            },
-            egui::FontId::monospace(9.0),
-            ui.visuals().weak_text_color(),
+    let (audio_rect, modulation_rect) =
+        outputs::layout(graph, d.input == Input::System, d.has_control_output());
+    #[cfg(test)]
+    ui.data_mut(|data| {
+        data.insert_temp(egui::Id::new(("signal-audio-output", d.id)), audio_rect);
+        data.insert_temp(
+            egui::Id::new(("signal-modulation-output", d.id)),
+            modulation_rect,
         );
-    }
+        data.insert_temp(
+            egui::Id::new(("signal-output-footer", d.id)),
+            Rect::from_min_max(egui::pos2(rect.left(), bottom), rect.max),
+        );
+    });
+    outputs::audio(ui, audio_rect, frame, color, d.input == Input::System);
+    outputs::modulation(
+        ui,
+        modulation_rect,
+        d,
+        &snapshot.values.get(&d.id).cloned().unwrap_or_default(),
+        history,
+        color,
+    );
     if audio_only && let Some(bus) = bus {
         bus.enabled = d.enabled;
         bus.solo = d.solo;
@@ -377,13 +352,14 @@ pub(super) fn strip(
         d.enabled = bus.enabled;
         d.solo = bus.solo;
     } else {
-        channel_footer(
+        channel_footer_impl(
             ui,
             rect,
             d,
             &snapshot.values.get(&d.id).cloned().unwrap_or_default(),
             color,
             ink,
+            true,
         );
     }
     StripOutput {
@@ -530,15 +506,33 @@ impl Panel {
                         &mut learn,
                     );
                     self.midi_learning = learn.map(|serial| (id, serial));
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 112.0),
+                        egui::Sense::hover(),
+                    );
+                    midi_preview::draw(
+                        ui,
+                        rect,
+                        &d.midi,
+                        &self.midi_snapshot,
+                        self.midi_history.get(&id),
+                        self.snapshot.time,
+                        channel_color(&d),
+                    );
                 }
             });
             super::guided::response_controls(ui, &mut d, &self.snapshot);
+            self.audio_output_preview(ui, &d);
             if d.has_control_output() {
                 self.guided_preview(ui, &d);
+            } else {
+                audio_channel::inspector_group(ui, "Modulation output", |ui| {
+                    ui.weak("No detector selected. Choose a signal type above to drive macros and parameters. The audio output remains available.");
+                });
             }
             egui::CollapsingHeader::new("Advanced · Insert chain")
                 .id_salt(("signal-advanced", id)).default_open(false).show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new("Filters and extra response processors run in order. Detector controls above edit the same chain.").weak()).wrap());
+                ui.add(egui::Label::new(egui::RichText::new("Audio effects feed visualizers and the detector. After detection, control processors only shape modulation. Audio remains available.").weak()).wrap());
                 if let Some(a) = slot_list(ui, &d, self.selected_insert, true) { action = Some(a); }
             });
         }
@@ -586,7 +580,7 @@ impl Panel {
             Icon::AudioMappings,
             &title,
             &subtitle,
-            "Source > detection > response",
+            "Separate audio and modulation outputs",
             "Close signal inspector",
         )
         .clicked();
@@ -891,7 +885,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(700.0, 600.0),
+                        egui::vec2(700.0, 1200.0),
                     )),
                     events,
                     ..Default::default()
@@ -1048,7 +1042,7 @@ mod tests {
     }
     #[test]
     fn new_channel_strips_and_insert_editors_fit_resized_docks_and_compact_inspectors() {
-        for height in [320.0, 450.0, 800.0] {
+        for height in [180.0, 320.0, 450.0, 800.0] {
             let ctx = egui::Context::default();
             let mut panel = Panel::default();
             let id = panel.bank.add_source(Input::System).unwrap();
@@ -1079,12 +1073,89 @@ mod tests {
                 },
             );
             out.textures_delta.clear();
-            for label in ["1 System audio", "Bass Energy", "M", "S"] {
+            for label in [
+                "1 System audio",
+                "Bass Energy",
+                "Audio output",
+                "Modulation output",
+            ] {
+                assert!(
+                    (height < 320.0 && label == "Modulation output")
+                        || out.shapes.iter().any(
+                            |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==label)
+                        ),
+                    "missing {label} at {height}"
+                );
+            }
+            let audio_rect = ctx
+                .data(|data| data.get_temp::<Rect>(egui::Id::new(("signal-audio-output", id))))
+                .unwrap();
+            let modulation_rect = ctx
+                .data(|data| data.get_temp::<Rect>(egui::Id::new(("signal-modulation-output", id))))
+                .unwrap();
+            let footer = ctx
+                .data(|data| data.get_temp::<Rect>(egui::Id::new(("signal-output-footer", id))))
+                .unwrap();
+            assert!(
+                audio_rect.height() >= 60.0 && modulation_rect.height() >= 60.0,
+                "at {height}: audio={audio_rect:?}, modulation={modulation_rect:?}"
+            );
+            assert!(audio_rect.bottom() + 8.0 <= modulation_rect.top());
+            assert!(modulation_rect.bottom() + 8.0 <= footer.top());
+            // A short dock scrolls the intact strip instead of crushing graphs into the footer.
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, height + 20.0),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(egui::pos2(90.0, 100.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -600.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.show(
+                        ui,
+                        ui.available_rect_before_wrap(),
+                        &AnalysisFrame::default(),
+                        false,
+                        &AppTheme::default(),
+                    )
+                },
+            );
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, height + 20.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.show(
+                        ui,
+                        ui.available_rect_before_wrap(),
+                        &AnalysisFrame::default(),
+                        false,
+                        &AppTheme::default(),
+                    )
+                },
+            );
+            out.textures_delta.clear();
+            for label in ["M", "S", "Modulation amount"] {
                 assert!(
                     out.shapes.iter().any(
                         |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==label)
                     ),
-                    "missing {label} at {height}"
+                    "missing scrollable {label} at {height}"
                 );
             }
             for effect in Effect::choices(Data::Audio)
