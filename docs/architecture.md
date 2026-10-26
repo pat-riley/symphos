@@ -166,12 +166,18 @@ values. Silence leaves the resting flower unchanged, and the pane's virtual
 clock holds all response during pause. Renderers precompute band levels by
 layer, row or column rather than repeat spectrum analysis per vertex.
 Filament builds overlapping thread sculptures from procedural closed contours.
-Its three profiles (loops, spindles and folds) share shape, staggered gap and
-palette controls. Each frame samples the existing 96-band frequency display
+Its six profiles (loops, spindles, folds, vortex, gravity well and orbital currents)
+share shape, staggered gap and palette controls. Fine strands scales all stroke
+layers to 45% width; Dense weave doubles contours with a separate 64,000-segment
+budget. Both are opt-in for older projects. Spiral forms use a separate virtual
+circulation clock, with inward-moving breaks and increasing angular density near
+the center, independent of camera motion. The Centripetal flow starting preset
+changes geometry and finish while retaining palette, camera and audio settings. Each frame samples the existing 96-band frequency display
 once, smooths normalized energy on the pane's virtual clock, and uses it for
 local strand bending and overall expansion; silence retains the resting form.
 Capture/source resets clear response history. Depth-sorted shaded segment meshes
-are limited to 24,000 segments, including at maximum form/strand/detail settings.
+are limited to 24,000 segments (64,000 for Dense weave), including at maximum
+form/strand/detail settings.
 Only settings persist; no generated geometry or response buffers enter projects.
 It uses the shared scene background and camera adapter, with the axis navigator
 off by default. Filament is appended to module/macro-bank ordering, and complete

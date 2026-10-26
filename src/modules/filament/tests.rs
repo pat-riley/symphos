@@ -4,7 +4,7 @@ use super::*;
 fn forms_are_distinct_finite_and_audio_deforms_the_resting_sculpture() {
     let mut m = Filament::default();
     let mut forms = Vec::new();
-    for form in [Form::Loops, Form::Spindles, Form::Folds] {
+    for form in Form::ALL {
         m.settings.form = form;
         let quiet = m.point(0, 0.32, 1.2);
         assert!(quiet.iter().all(|v| v.is_finite()));
@@ -121,10 +121,10 @@ fn frequency_response_is_localized_and_disconnect_or_source_changes_clear_energy
                 .unwrap()
                 .0,
         );
-        let frozen = (m.bands, m.phase);
+        let frozen = (m.bands, m.phase, m.flow_time);
         // A frozen pane supplies the same virtual time and analysis frame.
         m.update(&frame, start + Duration::from_millis(100), true);
-        assert_eq!(frozen, (m.bands, m.phase));
+        assert_eq!(frozen, (m.bands, m.phase, m.flow_time));
         let energy = m.energy;
         for tick in 2..20 {
             m.update(&frame, start + Duration::from_millis(tick * 100), false);
@@ -159,4 +159,105 @@ fn source_switch_clears_the_previous_signal_without_resetting_the_form_motion() 
     pane.filament
         .update(&AnalysisFrame::default(), Instant::now(), true);
     assert_eq!(pane.filament.phase, 1.2);
+}
+
+#[test]
+fn fine_and_dense_options_preserve_settings_and_produce_finer_more_numerous_threads() {
+    let mut m = Filament::default();
+    m.settings.breaks = 0.0;
+    m.settings.detail = 64;
+    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.0));
+    let theme = AppTheme::default();
+    let plain = m.build_mesh(rect, &theme);
+    m.settings.fine_strands = true;
+    let fine = m.build_mesh(rect, &theme);
+    assert_eq!(plain.vertices.len(), fine.vertices.len());
+    let edge_width = |mesh: &egui::Mesh| mesh.vertices[0].pos.distance(mesh.vertices[3].pos);
+    assert!((edge_width(&fine) / edge_width(&plain) - 0.45).abs() < 0.001);
+    m.settings.dense_weave = true;
+    let dense = m.build_mesh(rect, &theme);
+    assert_eq!(dense.vertices.len(), plain.vertices.len() * 2);
+    assert_eq!(m.settings.strands, 44);
+    assert_eq!(m.settings.line_width, 1.25);
+    m.settings.shells = 5;
+    m.settings.strands = 96;
+    m.settings.detail = 256;
+    for form in Form::ALL {
+        m.settings.form = form;
+        let mesh = m.build_mesh(rect, &theme);
+        assert!(mesh.is_valid());
+        assert!(mesh.vertices.len() <= 64_000 * 12);
+        assert!(mesh.vertices.iter().all(|v| v.pos.is_finite()));
+    }
+}
+
+#[test]
+fn spiral_motion_flows_inward_and_is_continuous_independent_of_camera_orbit() {
+    use std::time::Duration;
+    let mut m = Filament::default();
+    m.settings.centripetal_preset();
+    m.settings.drift = 0.0;
+    let radius = |p: [f32; 3]| p[0].hypot(p[1]);
+    let rim = m.point(0, 0.3, 0.0);
+    let core = m.point(0, 0.3, TAU);
+    assert!(radius(rim) > radius(core) * 10.0);
+    assert!(core[2] < rim[2]);
+    let start = Instant::now();
+    m.update(&AnalysisFrame::default(), start, false);
+    let before = m.point(0, 0.3, 1.2);
+    m.update(
+        &AnalysisFrame::default(),
+        start + Duration::from_millis(100),
+        false,
+    );
+    assert_ne!(before, m.point(0, 0.3, 1.2));
+    assert!(!m.settings.auto_orbit);
+    m.settings.circulation = 0.0;
+    let stopped = m.point(0, 0.3, 1.2);
+    m.update(
+        &AnalysisFrame::default(),
+        start + Duration::from_millis(200),
+        false,
+    );
+    assert_eq!(stopped, m.point(0, 0.3, 1.2));
+    for form in [Form::Vortex, Form::GravityWell, Form::Orbital] {
+        m.settings.form = form;
+        m.flow_time = 1.0 - 0.000001;
+        let a = m.point(0, 0.3, 1.2);
+        m.flow_time = 1.0 + 0.000001;
+        let b = m.point(0, 0.3, 1.2);
+        assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.0001));
+    }
+}
+
+#[test]
+fn centripetal_preset_and_new_options_roundtrip_and_older_sculptures_keep_their_appearance() {
+    let mut s = Settings {
+        palette: Palette::Ocean,
+        yaw: 1.2,
+        audio_bend: 0.8,
+        ..Default::default()
+    };
+    s.centripetal_preset();
+    assert!(s.fine_strands && s.dense_weave);
+    assert_eq!(s.form, Form::GravityWell);
+    assert_eq!(s.palette, Palette::Ocean);
+    assert_eq!(s.yaw, 1.2);
+    assert_eq!(s.audio_bend, 0.8);
+    assert_eq!(
+        s,
+        serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap()
+    );
+    let mut old = serde_json::to_value(Settings::default()).unwrap();
+    for key in [
+        "fine_strands",
+        "dense_weave",
+        "circulation",
+        "spiral_turns",
+        "central_pull",
+    ] {
+        old.as_object_mut().unwrap().remove(key);
+    }
+    let loaded: Settings = serde_json::from_value(old).unwrap();
+    assert_eq!(loaded, Settings::default());
 }

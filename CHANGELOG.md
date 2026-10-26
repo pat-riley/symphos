@@ -5,6 +5,12 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add optional Fine strands and Dense weave finishes to Filament, plus Spiral
+  vortex, Gravity well and Orbital currents forms. A Centripetal flow starting
+  preset creates fine, dense inward trails, with adjustable circulation speed,
+  turns and central pull independent of the camera. Preserve existing looks
+  and keep dense rendering bounded.
+
 - Add Filament, a 3D thread-sculpture visualizer with sculpted loops, spindles and
   folded ribbons. Shape overlapping forms with strand density, folds, twist,
   taper and staggered breaks; use shared gradient palettes and scene backgrounds.

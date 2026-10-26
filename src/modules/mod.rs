@@ -227,7 +227,7 @@ impl ModuleKind {
     pub fn description(self) -> &'static str {
         match self {
             Self::Filament => {
-                "Layered thread contours form sculpted loops, spindles and folded ribbons. Spectrum energy bends the strands and expands the sculpture. Adjust the weave, gaps, palette and camera in the inspector."
+                "Layered threads form sculpted loops, spindles, folded ribbons and circulating spirals. Spectrum energy bends the strands and expands the sculpture. Try the Centripetal flow preset, or adjust the fine/dense finish, gaps, palette and camera in the inspector."
             }
             Self::SpectralBloom => {
                 "Measured spectrum columns bend into luminous strands and dissolve into particles. Transform lingering light with image feedback; tune shape, color, motion and the 3D camera in the inspector."

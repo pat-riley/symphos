@@ -22,13 +22,30 @@ enum Form {
     Loops,
     Spindles,
     Folds,
+    Vortex,
+    GravityWell,
+    Orbital,
 }
 impl Form {
+    const ALL: [Self; 6] = [
+        Self::Loops,
+        Self::Spindles,
+        Self::Folds,
+        Self::Vortex,
+        Self::GravityWell,
+        Self::Orbital,
+    ];
+    fn spirals(self) -> bool {
+        matches!(self, Self::Vortex | Self::GravityWell | Self::Orbital)
+    }
     fn label(self) -> &'static str {
         match self {
             Self::Loops => "Sculpted loops",
             Self::Spindles => "Spindles",
             Self::Folds => "Folded ribbons",
+            Self::Vortex => "Spiral vortex",
+            Self::GravityWell => "Gravity well",
+            Self::Orbital => "Orbital currents",
         }
     }
 }
@@ -47,6 +64,9 @@ pub(crate) struct Settings {
     twist: f32,
     taper: f32,
     drift: f32,
+    circulation: f32,
+    spiral_turns: f32,
+    central_pull: f32,
     audio_bend: f32,
     audio_expand: f32,
     response_ms: f32,
@@ -54,6 +74,8 @@ pub(crate) struct Settings {
     breaks: f32,
     dash_count: usize,
     line_width: f32,
+    fine_strands: bool,
+    dense_weave: bool,
     highlights: f32,
     opacity: f32,
     brightness: f32,
@@ -84,6 +106,9 @@ impl Default for Settings {
             twist: 1.2,
             taper: 0.75,
             drift: 0.12,
+            circulation: 0.45,
+            spiral_turns: 2.5,
+            central_pull: 0.6,
             audio_bend: 0.32,
             audio_expand: 0.18,
             response_ms: 140.0,
@@ -95,6 +120,8 @@ impl Default for Settings {
             breaks: 0.18,
             dash_count: 7,
             line_width: 1.25,
+            fine_strands: false,
+            dense_weave: false,
             highlights: 0.5,
             opacity: 0.9,
             brightness: 1.15,
@@ -114,6 +141,28 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    fn centripetal_preset(&mut self) {
+        // A geometry/motion starting point: preserve the user's palette, camera,
+        // background and signal response rather than resetting the whole pane.
+        self.form = Form::GravityWell;
+        self.shells = 1;
+        self.strands = 40;
+        self.detail = 192;
+        self.spread = 0.0;
+        self.depth = 1.1;
+        self.fold = 0.12;
+        self.twist = 1.0;
+        self.taper = 0.8;
+        self.drift = 0.1;
+        self.circulation = 0.65;
+        self.spiral_turns = 3.0;
+        self.central_pull = 0.8;
+        self.breaks = 0.32;
+        self.dash_count = 5;
+        self.line_width = 1.25;
+        self.fine_strands = true;
+        self.dense_weave = true;
+    }
     fn sanitize(&mut self) {
         self.shells = self.shells.clamp(1, 5);
         self.strands = self.strands.clamp(8, 96);
@@ -126,6 +175,7 @@ impl Settings {
         )*}; }
         bound! {
             spread: 0.0, 1.5; depth: 0.1, 2.0; fold: 0.0, 0.75; twist: -4.0, 4.0;
+            circulation: 0.0, 2.0; spiral_turns: 0.5, 5.0; central_pull: 0.0, 1.0;
             taper: 0.2, 2.0; drift: 0.0, 1.0; audio_bend: 0.0, 1.0; audio_expand: 0.0, 0.6;
             response_ms: 0.0, 1500.0; breaks: 0.0, 0.85; line_width: 0.3, 4.0;
             highlights: 0.0, 1.0; opacity: 0.0, 1.0; brightness: 0.0, 2.0;
@@ -149,6 +199,7 @@ pub(super) struct Filament {
     bands: [f32; BANDS],
     energy: f32,
     phase: f32,
+    flow_time: f64,
     epoch: Option<u64>,
     last_draw: Option<Instant>,
 }
@@ -160,6 +211,7 @@ impl Default for Filament {
             bands: [0.0; BANDS],
             energy: 0.0,
             phase: 0.0,
+            flow_time: 0.0,
             epoch: None,
             last_draw: None,
         }
@@ -179,6 +231,7 @@ impl Filament {
     pub fn clear(&mut self) {
         self.clear_input_history();
         self.phase = 0.0;
+        self.flow_time = 0.0;
     }
     pub fn clear_input_history(&mut self) {
         self.data.clear();
@@ -198,6 +251,7 @@ impl Filament {
         });
         self.last_draw = Some(now);
         self.phase = (self.phase + dt * self.settings.drift).rem_euclid(TAU);
+        self.flow_time += dt as f64 * self.settings.circulation as f64;
         self.data.settings = self.settings.frequency.clone();
         if live {
             self.data.update(frame, now);
@@ -239,14 +293,39 @@ impl Filament {
         settings_panel(ui, "Geometry", |ui| {
             settings_group(ui, "Sculpture", |ui| {
                 property_row(ui, "Form", |ui| {
-                    properties_combo("filament-form", ui.available_width(), 3)
+                    properties_combo("filament-form", ui.available_width(), Form::ALL.len())
                         .selected_text(s.form.label())
                         .show_ui(ui, |ui| {
-                            for form in [Form::Loops, Form::Spindles, Form::Folds] {
+                            for form in Form::ALL {
                                 ui.selectable_value(&mut s.form, form, form.label());
                             }
                         });
                 });
+                property_row(ui, "Starting preset", |ui| {
+                    properties_combo("filament-preset", ui.available_width(), 1)
+                        .selected_text("Choose a preset…")
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(false, "Centripetal flow").clicked() {
+                                s.centripetal_preset();
+                            }
+                        }).response.help_text("Fine, dense threads spiral inward through a gravity well. Keeps your colors, background, camera and audio response settings.");
+                });
+                if s.form.spirals() {
+                    p!(
+                        ui,
+                        spiral_turns,
+                        0.5..=5.0,
+                        "Spiral turns",
+                        "Number of revolutions along each inward trail, or lobes of an orbital current."
+                    );
+                    p!(
+                        ui,
+                        central_pull,
+                        0.0..=1.0,
+                        "Central pull",
+                        "Concentrate the threads near the center and increase the inner circulation rate. An artistic gravity-like field, not a physical simulation."
+                    );
+                }
                 p!(
                     ui,
                     shells,
@@ -305,6 +384,15 @@ impl Filament {
                 );
             });
             settings_group(ui, "Motion & audio", |ui| {
+                if s.form.spirals() {
+                    p!(
+                        ui,
+                        circulation,
+                        0.0..=2.0,
+                        "Circulation speed",
+                        "Move the threads around the center and carry the broken segments inward. Zero stops circulation independently of camera orbit and fold motion."
+                    );
+                }
                 p!(
                     ui,
                     drift,
@@ -351,6 +439,10 @@ impl Filament {
         });
         settings_panel(ui, "Appearance", |ui| {
             settings_group(ui, "Threads", |ui| {
+                ui.checkbox(&mut s.fine_strands, "Fine strands")
+                    .help_text("Draw threads and their highlights at 45% width for a finer ink-like finish. Preserves your thread width setting.");
+                ui.checkbox(&mut s.dense_weave, "Dense weave")
+                    .help_text("Double the number of contours without changing the sculpture's shape. Uses more rendering detail; combine with Fine strands for a tightly woven finish.");
                 p!(
                     ui,
                     line_width,
