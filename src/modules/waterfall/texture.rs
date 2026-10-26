@@ -14,7 +14,7 @@ const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PNG: usize = 5 * 1024 * 1024;
 
 #[derive(Clone)]
-pub(super) struct Asset(Arc<Data>);
+pub(crate) struct Asset(Arc<Data>);
 struct Data {
     name: String,
     png: String,
@@ -125,7 +125,25 @@ fn unhex(value: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 impl Asset {
-    pub(super) fn starter() -> Self {
+    pub(crate) fn name(&self) -> &str {
+        &self.0.name
+    }
+    pub(crate) fn size(&self) -> [usize; 2] {
+        self.0.pixels.size
+    }
+    pub(crate) fn thumbnail(&self) -> egui::ColorImage {
+        let [width, height] = self.size();
+        let scale = (96.0 / width.max(height) as f32).min(1.0);
+        let w = (width as f32 * scale).round().max(1.0) as usize;
+        let h = (height as f32 * scale).round().max(1.0) as usize;
+        let pixels = (0..h)
+            .flat_map(|y| {
+                (0..w).map(move |x| self.0.pixels.pixels[(y * height / h) * width + x * width / w])
+            })
+            .collect();
+        egui::ColorImage::new([w, h], pixels)
+    }
+    pub(crate) fn starter() -> Self {
         static STARTER: OnceLock<Asset> = OnceLock::new();
         STARTER
             .get_or_init(|| {
@@ -137,7 +155,7 @@ impl Asset {
             })
             .clone()
     }
-    fn from_bytes(name: &str, bytes: &[u8]) -> Result<Self, String> {
+    pub(crate) fn from_bytes(name: &str, bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_FILE {
             return Err("Choose an image smaller than 32 MB.".into());
         }
@@ -178,7 +196,7 @@ impl Asset {
             pixels,
         })))
     }
-    fn import(path: &Path) -> Result<Self, String> {
+    pub(crate) fn import(path: &Path) -> Result<Self, String> {
         let mut bytes = Vec::new();
         std::fs::File::open(path)
             .map_err(|e| e.to_string())?
@@ -318,8 +336,15 @@ impl Runtime {
         }
         ui.add_space(5.0);
         ui.horizontal_wrapped(|ui| {
+            let choose_button = ui.button("Choose image…").help_text("Choose an image from this project's Media browser.");
+            #[cfg(test)]
+            ui.data_mut(|data| data.insert_temp(egui::Id::new("test-choose-project-image"), choose_button.rect));
+            if choose_button.clicked() {
+                self.pending = None;
+                ui.data_mut(|data| data.insert_temp(egui::Id::new(crate::media::CHOOSE_IMAGE_REQUEST), true));
+            }
             if ui
-                .add_enabled(self.pending.is_none(), egui::Button::new(if *removed { "Upload image…" } else { "Replace / upload image…" }))
+                .add_enabled(self.pending.is_none(), egui::Button::new("Upload image…"))
                 .help_text("Choose a PNG, JPEG or BMP from your computer. The image is stored in the scene and presets, so the original file can be moved afterward. Replacing an image keeps the current one until the new file imports successfully.")
                 .clicked()
             {
@@ -328,8 +353,15 @@ impl Runtime {
                         self.error = None;
                         let (send, receive) = mpsc::sync_channel(1);
                         self.pending = Some(receive);
+                        let ctx = ui.ctx().clone();
+                        let scope = ctx.data(|data| data.get_temp::<u64>(egui::Id::new(crate::media::PROJECT_SCOPE))).unwrap_or(0);
                         std::thread::spawn(move || {
-                            let _ = send.send(Asset::import(&path));
+                            let result = Asset::import(&path);
+                            if let Ok(image) = &result {
+                                crate::media::register_import(&ctx, scope, image.clone());
+                            }
+                            let _ = send.send(result);
+                            ctx.request_repaint();
                         });
                     }
                     Ok(None) => {}
@@ -357,7 +389,7 @@ impl Runtime {
     }
 }
 
-fn choose() -> Result<Option<std::path::PathBuf>, String> {
+pub(crate) fn choose() -> Result<Option<std::path::PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
         unsafe extern "C" {
@@ -382,7 +414,7 @@ fn choose() -> Result<Option<std::path::PathBuf>, String> {
         let output = std::process::Command::new("zenity")
             .args([
                 "--file-selection",
-                "--title=Choose Waterfall Image",
+                "--title=Import Image",
                 "--file-filter=Images | *.png *.jpg *.jpeg *.bmp *.PNG *.JPG *.JPEG *.BMP",
             ])
             .output()
@@ -472,6 +504,53 @@ mod tests {
             );
         }
         assert!(Asset::from_bytes("test", b"not an image").is_err());
+    }
+
+    #[test]
+    fn choose_image_requests_project_media_without_changing_the_current_image() {
+        let ctx = egui::Context::default();
+        let original = fixture();
+        let mut selected = Some(original.clone());
+        let mut removed = false;
+        let mut runtime = Runtime::default();
+        let mut frame = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        egui::vec2(500.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| runtime.controls(ui, &mut selected, &mut removed),
+            );
+            output.textures_delta.clear();
+        };
+        frame(vec![]);
+        let pos = ctx
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("test-choose-project-image")))
+            .unwrap()
+            .center();
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        assert_eq!(
+            ctx.data(
+                |data| data.get_temp::<bool>(egui::Id::new(crate::media::CHOOSE_IMAGE_REQUEST))
+            ),
+            Some(true)
+        );
+        assert_eq!(selected, Some(original));
+        assert!(!removed);
     }
 
     #[test]

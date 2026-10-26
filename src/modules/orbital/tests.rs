@@ -51,6 +51,7 @@ fn thirteen_component_projects_upgrade_without_changing_existing_settings() {
             && s.get("Cymatics").is_none()
             && s.get("ParticleWaves").is_none()
             && s.get("SpectralBloom").is_none()
+            && s.get("Filament").is_none()
     });
     value["sections"].as_array_mut().unwrap().truncate(13);
     value["macros"]["banks"]

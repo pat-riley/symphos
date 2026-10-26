@@ -13,6 +13,7 @@ mod help;
 mod icons;
 mod issues;
 mod macros;
+mod media;
 mod midi;
 mod milkdrop;
 mod modulation;

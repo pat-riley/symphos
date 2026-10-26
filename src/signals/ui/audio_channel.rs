@@ -8,39 +8,11 @@ pub(crate) fn spectrum(
 ) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-    for i in 1..4 {
-        painter.hline(
-            rect.x_range(),
-            rect.top() + rect.height() * i as f32 / 4.0,
-            egui::Stroke::new(0.5, ui.visuals().weak_text_color().gamma_multiply(0.15)),
-        );
-    }
     let plot = rect.shrink2(egui::vec2(2.0, 15.0));
     let high = frame.map_or(20000.0, |f| {
         (f.sample_rate as f32 * 0.5).clamp(21.0, 20000.0)
     });
-    if let Some(frame) = frame {
-        for i in 0..48 {
-            let low = 20.0 * (high / 20.0).powf(i as f32 / 48.0);
-            let top = 20.0 * (high / 20.0).powf((i + 1) as f32 / 48.0);
-            let a = frame.bins.partition_point(|b| b.frequency_hz < low);
-            let b = frame.bins.partition_point(|b| b.frequency_hz < top);
-            let magnitude = frame.bins[a..b]
-                .iter()
-                .map(|b| b.magnitude)
-                .fold(0.0_f32, f32::max);
-            let value = ((20.0 * magnitude.max(1e-7).log10() + 90.0) / 90.0).clamp(0.0, 1.0);
-            let x = plot.left() + i as f32 * plot.width() / 48.0;
-            painter.rect_filled(
-                Rect::from_min_max(
-                    egui::pos2(x, plot.bottom() - value * plot.height()),
-                    egui::pos2(x + (plot.width() / 48.0 - 0.6).max(0.3), plot.bottom()),
-                ),
-                0.0,
-                color,
-            );
-        }
-    }
+    spectrum_bars(ui, plot, frame, color);
     painter.text(
         rect.left_top() + egui::vec2(5.0, 4.0),
         egui::Align2::LEFT_TOP,
@@ -63,6 +35,50 @@ pub(crate) fn spectrum(
         ui.visuals().weak_text_color(),
     );
     ui.interact(rect,ui.id().with("audio-spectrum-help"),egui::Sense::hover()).help_text("Audio spectrum · low frequencies on the left, high frequencies on the right. Bar height shows the processed audio level. This channel carries waveform, spectrum and measurements into connected sketches; control signals show a time-history curve instead.");
+}
+
+pub(super) fn spectrum_bars(
+    ui: &egui::Ui,
+    rect: Rect,
+    frame: Option<&AnalysisFrame>,
+    color: egui::Color32,
+) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    for i in 1..4 {
+        painter.hline(
+            rect.x_range(),
+            rect.top() + rect.height() * i as f32 / 4.0,
+            egui::Stroke::new(0.5, ui.visuals().weak_text_color().gamma_multiply(0.15)),
+        );
+    }
+    let high = frame.map_or(20000.0, |f| {
+        (f.sample_rate as f32 * 0.5).clamp(21.0, 20000.0)
+    });
+    if let Some(frame) = frame {
+        for i in 0..48 {
+            let low = 20.0 * (high / 20.0).powf(i as f32 / 48.0);
+            let top = 20.0 * (high / 20.0).powf((i + 1) as f32 / 48.0);
+            let a = frame.bins.partition_point(|b| b.frequency_hz < low);
+            let b = frame.bins.partition_point(|b| b.frequency_hz < top);
+            let magnitude = frame.bins[a..b]
+                .iter()
+                .map(|b| b.magnitude)
+                .fold(0.0_f32, f32::max);
+            let value = ((20.0 * magnitude.max(1e-7).log10() + 90.0) / 90.0).clamp(0.0, 1.0);
+            let x = rect.left() + i as f32 * rect.width() / 48.0;
+            painter.rect_filled(
+                Rect::from_min_max(
+                    egui::pos2(x, rect.bottom() - value * rect.height()),
+                    egui::pos2(x + (rect.width() / 48.0 - 0.6).max(0.3), rect.bottom()),
+                ),
+                0.0,
+                color,
+            );
+        }
+    }
 }
 
 pub(super) fn strip(
@@ -151,7 +167,12 @@ pub(super) fn footer(
     dark: egui::Color32,
     combined: bool,
 ) {
-    let bottom = rect.bottom() - 144.0;
+    let bottom = rect.bottom()
+        - if combined {
+            outputs::FOOTER_HEIGHT
+        } else {
+            144.0
+        };
     ui.painter().hline(
         rect.x_range(),
         bottom,
@@ -165,8 +186,11 @@ pub(super) fn footer(
         ui.visuals().text_color(),
     );
     let knob = Rect::from_center_size(
-        egui::pos2(rect.left() + 40.0, bottom + 58.0),
-        egui::vec2(54.0, 54.0),
+        egui::pos2(
+            rect.left() + 40.0,
+            bottom + if combined { 60.0 } else { 58.0 },
+        ),
+        egui::Vec2::splat(54.0),
     );
     let response=ui.interact(knob,ui.id().with("audio-gain"),egui::Sense::click_and_drag()).on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical).help_text("Audio input gain · drag vertically · Shift: fine · double-click: 0 dB. Applies to this channel's waveform, spectrum and measurements.");
     if response.dragged() {
@@ -205,7 +229,10 @@ pub(super) fn footer(
         egui::Stroke::new(1.5, ui.visuals().text_color()),
     );
     let value_rect = Rect::from_min_size(
-        egui::pos2(rect.left() + 12.0, bottom + 88.0),
+        egui::pos2(
+            rect.left() + 12.0,
+            bottom + if combined { 92.0 } else { 88.0 },
+        ),
         egui::vec2(76.0, 22.0),
     );
     let mut value = ui.new_child(egui::UiBuilder::new().max_rect(value_rect));
@@ -224,7 +251,10 @@ pub(super) fn footer(
         ((20.0 * f.mix_rms.max(1e-7).log10() + 90.0) / 90.0).clamp(0.0, 1.0)
     });
     let meter = Rect::from_min_size(
-        egui::pos2(rect.left() + 113.0, bottom + 35.0),
+        egui::pos2(
+            rect.left() + if combined { rect.width() - 36.0 } else { 113.0 },
+            bottom + 35.0,
+        ),
         egui::vec2(9.0, 65.0),
     );
     ui.painter()
@@ -240,7 +270,7 @@ pub(super) fn footer(
     ui.painter().text(
         meter.center_bottom() + egui::vec2(0.0, 4.0),
         egui::Align2::CENTER_TOP,
-        "Out",
+        if combined { "Audio" } else { "Out" },
         egui::FontId::proportional(10.0),
         ui.visuals().weak_text_color(),
     );

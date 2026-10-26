@@ -5,6 +5,58 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add optional Fine strands and Dense weave finishes to Filament, plus Spiral
+  vortex, Gravity well and Orbital currents forms. A Centripetal flow starting
+  preset creates fine, dense inward trails, with adjustable circulation speed,
+  turns and central pull independent of the camera. Preserve existing looks
+  and keep dense rendering bounded.
+
+- Add Filament, a 3D thread-sculpture visualizer with sculpted loops, spindles and
+  folded ribbons. Shape overlapping forms with strand density, folds, twist,
+  taper and staggered breaks; use shared gradient palettes and scene backgrounds.
+  Spectrum energy bends individual contours and expands the sculpture with
+  adjustable smoothing. Support routed audio, macros, freeze, shared camera
+  controls and older project migration with a bounded rendering budget.
+
+- Give Signals wider strips, larger knobs and meters, and more separation between
+  labels and controls. Keep audio/modulation readouts distinct, bound preview
+  growth in tall docks, and scroll comfortably sized controls in short docks.
+
+- Make auto-orbit, wobble and auto-pan independent across 3D cameras, including
+  Waterfall. Enabling orbit no longer wakes another motion through a shared
+  master switch. Keep disabled effect clocks paused, preserve motion settings
+  when toggling another effect, and stop all motion for manual camera navigation.
+
+- Separate Signals audio and modulation outputs with independent previews,
+  level/value readouts and destination labels. List connected visualizers apart
+  from mapped macros/parameters in the inspector. Clarify audio-only and control-only
+  channels, rename Visual influence to Modulation amount in the guided strip,
+  and protect preview heights with compact controls and vertical dock scrolling.
+
+- Add a generic Media tool beneath + for project images, GIF/video file entries
+  and embedded textures. Include the starter image in every project, show image
+  previews and scene usage, and open the browser from inspector Choose image
+  controls. Preserve unused uploads across saves and undo, without duplicating
+  referenced images in the catalog or carrying imports into another project.
+
+- Make visualizer browser categories collapsible and replace individual row
+  dividers with section dividers for a cleaner list.
+
+- Add a persistent left tool rail with a + button for the visualizer drawer and
+  a separate top-left drawer icon. Group the browser into Primitives, 3D
+  Visualizations, Particles & Flow, Surfaces & Patterns and Shader Visuals;
+  preserve click-to-add, drag placement, drawer resizing and fullscreen behavior.
+
+- Make Signals purpose-first: add Loudness, Bass Energy, Bass Hits and other
+  ready-to-use detection types, then adjust their response with a live preview
+  and connected-visual readout. Keep custom insert chains under Advanced and
+  preserve existing signal IDs, routes and additional processors when changing
+  detector type. Scale signal previews to show a useful full-range response.
+
+- Extend Show Panel Gaps to the viewport's outer edges, including the toolbar,
+  window sides, drawers, Info View, and visible Signals/Macros dock boundary.
+  Keep drawer resize handles available along the touching edges.
+
 - Add View → Show Panel Gaps (Cmd/Ctrl+Shift+G), with a remembered local
   preference. Hidden gaps join pane edges with square corners while preserving
   resize cursors, dragging, and double-click balancing along shared edges.

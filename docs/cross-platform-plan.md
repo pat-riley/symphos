@@ -2,9 +2,17 @@
 
 Planning baseline: 14 October 2026, commit `cf18412e9381ce30bee047f37e7c3168788f8ba4`.
 
+Priority update — 25 October 2026: Symphos is standalone first. VST3 and other
+DAW integration remain future possibilities, but plugin prototypes, framework
+selection and implementation are deferred. The active work is improved audio
+responsiveness, clearer per-signal controls and sustained performance/reliability
+validation. An Export workspace is planned for discussion after that milestone.
+See the [current roadmap priorities](roadmap.md#current-priorities--25-october-2026).
+The plugin investigation below is retained research for a later decision.
+
 Keep the Rust analyzer and egui/wgpu interface. Add native macOS audio capture
-behind a platform boundary, retain PipeWire on Linux, and then build a plugin
-shell around the shared analyzer and views. This preserves Symphos's appearance
+behind a platform boundary and retain PipeWire on Linux. A future plugin could
+reuse the shared analyzer and views. This preserves Symphos's appearance
 across platforms without requiring a SwiftUI redesign or a full C++ rewrite.
 
 The first milestone should be a Mac app that visualizes ordinary computer
@@ -26,7 +34,7 @@ proposed. The inventory below records the original planning baseline.
 | Mac architectures | Apple Silicon first; Intel after hardware and dependency validation | Whether Intel is needed for the first public download |
 | Mac minimum | Provisionally macOS 14.2 or later for Core Audio taps | Raise if the selected dependencies or packaged-app tests require it |
 | Linux | Preserve Omarchy, PipeWire, Wayland, and Asahi behavior | Confirm the actual Omarchy test machine and audio devices |
-| Plugins | VST3 first, with Ableton Live as the primary host | Ableton version, other hosts, and distribution model |
+| Plugins | Deferred; VST3/Ableton Live remain candidates for a future milestone | Whether to build an embedded plugin or standalone sender, host coverage, and distribution model |
 | Distribution | Direct downloads first, signed/notarized on Mac | Free/open-source versus paid packaging; Apple signing account |
 | Website | Separate static landing page, backed by verified release metadata | Domain and launch timing |
 
@@ -179,6 +187,9 @@ views must delegate window management to their host.
 
 ## Plugin investigation
 
+Status: deferred. The acceptance criteria and framework comparison below apply
+only when this workstream is explicitly resumed; they are not current tasks.
+
 A useful first plugin is a mono/stereo analyzer inserted on a track, group or
 master bus. It passes samples through unchanged with zero added audio latency,
 copies a bounded amount for visualization, and saves its visual settings in the
@@ -214,7 +225,7 @@ separate decisions.
 [VST3 license](https://github.com/steinbergmedia/vst3sdk/blob/master/LICENSE.txt),
 [JUCE license](https://github.com/juce-framework/JUCE/blob/master/LICENSE.md).
 
-Recommendation: timebox a Rust VST3 editor prototype first if VST3 is sufficient.
+When plugin work resumes, timebox a Rust VST3 editor prototype if VST3 is sufficient.
 If AU/Logic is a first-release requirement, evaluate a JUCE shell at the same
 decision gate. Select based on a working host-loaded editor and distribution
 requirements, rather than rewriting the standalone app around a framework.
@@ -247,8 +258,10 @@ needed, move IPC to a worker and keep the DAW callback bounded and nonblocking.
 
 ## Delivery stages and completion criteria
 
-Each stage should be a focused change with its evidence attached. Estimates
-should follow the two highest-risk prototypes: Mac capture and plugin embedding.
+Each stage should be a focused change with its evidence attached. The stages
+below retain the original portability sequence; plugin stages 4 and 5 are
+deferred behind the standalone priorities in the roadmap. Estimate plugin work
+only after that workstream resumes and embedding has been proven.
 
 | Stage | Work | Completion evidence |
 | --- | --- | --- |

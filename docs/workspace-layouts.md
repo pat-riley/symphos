@@ -53,6 +53,8 @@ Settings and histories travel with the moved component. Escape cancels a drag.
 
 Use **View → Show Panel Gaps** (**Cmd+Shift+G** on macOS, **Ctrl+Shift+G**
 on Linux/Windows) to switch between spaced panes and touching square edges.
+Hiding gaps also removes the viewport's outer margins against the toolbar,
+window edges, component browser, inspector, Info View, and visible bottom docks.
 The preference is remembered locally and does not alter scenes or presets.
 Shared edges remain draggable when gaps are hidden; double-click an edge to
 balance its split.
@@ -74,15 +76,32 @@ and the drag grip first, keeping fullscreen and close accessible; Inspect is alw
 
 ## Add components
 
-**Add New** in the top-left navigation opens a dropdown of every component, grouped
-under Instruments and Visualizers. Selecting one adds a pane beside the selected
-pane. New empty workspaces also offer a component browser for dragging components
-to pane edges or centers.
-The browser docks flush on the left with a compact header and one list of components.
-Each single-line row shows an icon, name, and six-dot drag grip, with full-width
-dividers. Descriptions remain available on hover; search and category tabs are
-currently omitted. Small **Scientific instruments** and **Visualizers** headings
-separate measurement components from artistic ones.
+A slim tool rail stays along the left edge of the editor. Its **+** button opens
+or closes the visualizer browser beside it; the separate left-drawer icon in the
+top-left navigation opens or closes the current drawer. Beneath **+**, the
+picture icon opens **Media** for the current project. The tools share the same
+resizable drawer; selecting another tool switches its contents. Signals and
+Macros remain in the footer.
+The rail is hidden during pane fullscreen, and returns with the editor.
+
+The browser slides out beside the rail and retains its remembered resize width.
+Its header X closes the drawer while leaving the rail available. Every component
+is organized into one of these groups:
+
+- **Primitives:** Frequency spectrum, Waveform, Spectrogram, Stereometer and
+  Oscilloscope.
+- **3D Visualizations:** 3D Waterfall, 3D Sphere, 3D Cylinder, 3D Rings, Lotus Flower
+  and Strata.
+- **Particles & Flow:** Flux, Orbital, Particle Waves and Spectral Bloom.
+- **Surfaces & Patterns:** Veroni and Cymatics.
+- **Shader Visuals:** MilkDrop.
+
+Each category header can be collapsed or expanded and remembers its state while
+using the editor. Dividers separate categories; individual visualizer rows have
+no divider lines. Each single-line row shows an icon, name and six-dot drag grip,
+with the same surfaces as the inspector. Descriptions remain available on
+hover. Categories organize the browser without changing saved component IDs,
+settings or layout order.
 
 Veroni, Strata, and Flux share the [Audio mappings inspector](audio-modulation.md)
 for selecting frequency bands, routing them to specific movements or appearance,
@@ -97,6 +116,30 @@ rearranging components never starts another audio capture device; each open
 component uses the existing shared analysis stream. Components hidden temporarily
 by pane expansion keep ingesting capture. Closed components release their
 histories.
+
+## Project media
+
+**Media** is a generic project asset browser. It starts with the bundled starter
+image in every project and lists uploaded images with thumbnails, filenames,
+dimensions and the scenes referencing them. Embedded texture files and other
+registered project files are listed with their names, types and sizes, including
+GIFs and videos. Browsing never assigns media to a visualization.
+
+In an inspector, **Choose image…** opens Media in image-picking mode. Click an
+image to assign it to the inspector that requested it; the browser itself does
+not name the visualizer. Press **Esc**, close the drawer or click a rail tool to
+cancel picking. **Upload image…** remains the inspector's route for importing a
+new file from the computer. Image selection uses the formats supported by that
+inspector; listing GIF/video files does not add playback to a visualizer.
+
+The starter stays available without embedding another copy in the project.
+Uploaded images remain available when replaced, disconnected or undone, and
+across scene switches. Unreferenced imports are stored in the project catalog;
+referenced images retain their existing scene storage, avoiding another catalog
+copy. New/Open Project resets the browser and scopes pending imports to their
+original project. Thumbnail textures are small, cached and generated only for
+visible images. Existing projects default to an empty import catalog and recover
+their images from scene settings. Project document size limits still apply.
 
 ## Veroni visualizer
 

@@ -14,7 +14,7 @@ use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
 mod guides;
 mod motion;
-mod texture;
+pub(super) mod texture;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ColorSource {
@@ -277,6 +277,9 @@ impl Default for Waterfall {
 }
 
 impl WaterfallSettings {
+    pub(crate) fn imported_image(&self) -> Option<&texture::Asset> {
+        self.image.as_ref()
+    }
     pub(super) fn without_image(&self) -> Self {
         let mut settings = self.clone();
         settings.image = None;
@@ -290,20 +293,31 @@ impl WaterfallSettings {
 }
 
 impl Waterfall {
+    pub(super) fn imported_image(&self) -> Option<&texture::Asset> {
+        self.image.as_ref()
+    }
+    pub(super) fn use_image(&mut self, image: texture::Asset) {
+        self.image = (image != texture::Asset::starter()).then_some(image);
+        self.image_removed = false;
+        self.color_source = ColorSource::Image;
+        self.image_runtime = Default::default();
+    }
     pub(super) fn camera_angles(&self) -> (f32, f32) {
-        if self.auto_orbit && self.motion_runtime.active {
+        if self.motion_runtime.active {
             self.motion_runtime.angles
         } else {
             (self.yaw, self.elevation)
         }
     }
 
-    fn stop_auto_orbit(&mut self) {
+    fn stop_camera_motion(&mut self) {
         (self.yaw, self.elevation) = self.camera_angles();
-        if self.auto_orbit && self.motion_runtime.active {
+        if self.motion_runtime.active {
             self.pan += self.motion_runtime.pan;
         }
         self.auto_orbit = false;
+        self.motion.wobble = false;
+        self.motion.pan = false;
         self.motion_runtime = Default::default();
     }
     fn image_uv(&self, frequency: f32, age: f32, level: f32) -> Pos2 {
@@ -359,7 +373,7 @@ impl Waterfall {
     }
 
     fn reset_camera(&mut self) {
-        self.stop_auto_orbit();
+        self.stop_camera_motion();
         self.yaw = -0.35;
         self.elevation = 0.65;
         self.zoom = 1.0;
@@ -367,14 +381,14 @@ impl Waterfall {
     }
 
     fn orbit(&mut self, delta: Vec2) {
-        self.stop_auto_orbit();
+        self.stop_camera_motion();
         self.yaw = wrap_angle(self.yaw + delta.x * 0.008);
         self.elevation = wrap_angle(self.elevation + delta.y * 0.006);
     }
 
     fn zoom_by_scroll(&mut self, scroll: f32) {
         if scroll != 0.0 {
-            self.stop_auto_orbit();
+            self.stop_camera_motion();
         }
         self.zoom = (self.zoom * (scroll * 0.002).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
     }
@@ -389,7 +403,7 @@ impl Waterfall {
             Vec2::new(self.length_x, self.length_y),
         );
         camera.center += (self.pan
-            + if self.auto_orbit && self.motion_runtime.active {
+            + if self.motion_runtime.active {
                 self.motion_runtime.pan
             } else {
                 Vec2::ZERO
@@ -472,7 +486,7 @@ impl Waterfall {
     }
 
     fn snap_view(&mut self, angles: (f32, f32)) {
-        self.stop_auto_orbit();
+        self.stop_camera_motion();
         (self.yaw, self.elevation) = angles;
     }
 
@@ -492,16 +506,17 @@ impl Waterfall {
             })
             .min(0.1);
         self.last_draw = Some(now);
-        if self.auto_orbit {
+        if self.auto_orbit || self.motion.wobble || self.motion.pan {
             self.motion_runtime.advance(
                 (self.yaw, self.elevation),
                 &self.motion,
                 self.orbit_speed,
                 self.orbit_reverse,
                 dt,
+                self.auto_orbit,
             );
-        } else {
-            self.motion_runtime = Default::default();
+        } else if self.motion_runtime.active {
+            self.stop_camera_motion();
         }
     }
 
@@ -588,22 +603,22 @@ impl Waterfall {
                         .key(if label=="Rotation °" {"yaw"} else {"elevation"}).raw_scale(std::f64::consts::PI/180.0).bounds(-3600.0..=3600.0).text(label))
                         .help_text("Set the camera's starting view in degrees. Auto-rotation and wobble animate around this saved view without changing it. Editing an angle stops the animation; full rotation is supported.")
                         .changed() {
-                        self.stop_auto_orbit();
+                        self.stop_camera_motion();
                         if label == "Rotation °" { self.yaw = wrap_angle(degrees.to_radians()); }
                         else { self.elevation = wrap_angle(degrees.to_radians()); }
                     }
                 }
                 if ui.add(crate::parameter::Parameter::new(&mut self.zoom, MIN_ZOOM..=MAX_ZOOM, 1.0).key("zoom").logarithmic(true).text("Zoom"))
                     .help_text("Magnify the view from 0.5× to 10× without changing history or geometry. Scroll over the waterfall to zoom; right-drag or Shift-drag to pan around a close-up.").changed() {
-                    self.stop_auto_orbit();
+                    self.stop_camera_motion();
                 }
                 ui.add_space(4.0);
                 let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
                 ui.horizontal(|ui| {
                     if ui.add_sized([width, 24.0], egui::Button::new("Center view"))
                         .help_text("Center the floor grid in the viewport; keep rotation and zoom").clicked() {
+                        self.stop_camera_motion();
                         self.pan = Vec2::ZERO;
-                        self.stop_auto_orbit();
                     }
                     if ui.add_sized([width, 24.0], egui::Button::new("Reset camera"))
                         .help_text("Restore the default rotation, zoom, and pan. Audio history and geometry are unchanged.").clicked() {
@@ -613,22 +628,25 @@ impl Waterfall {
             });
             super::settings_group(ui, "Auto-orbit", |ui| {
                 let mut enabled = self.auto_orbit;
-                if ui.checkbox(&mut enabled, "Enable auto-rotation").help_text("Animate the camera around the waterfall's center. Choose an axis and motion below. Manual camera movement or a named view stops the animation at the current angle. Zoom, pan, audio and history stay independent.").changed() {
-                    if enabled { self.auto_orbit = true; self.motion_runtime = Default::default(); }
-                    else { self.stop_auto_orbit(); }
+                if ui.push_id("auto-orbit-enabled", |ui| ui.checkbox(&mut enabled, "Enable auto-rotation").help_text("Rotate around the waterfall's center. Wobble and auto-pan have independent switches. Manual navigation stops all camera motion at the visible view.")).inner.changed() {
+                    if !enabled && !self.motion.wobble && !self.motion.pan {
+                        self.stop_camera_motion();
+                    } else {
+                        self.auto_orbit = enabled;
+                    }
                 }
                 ui.add_enabled_ui(self.auto_orbit, |ui| {
                 self.motion.orbit_controls(ui);
-                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 0.0..=90.0, 10.0).key("orbit_speed").bounds(0.0..=360.0).text("Speed °/s")).help_text("Degrees per second for continuous rotation, or the fastest speed at the middle of a back-and-forth sweep. Zero holds the orbit so wobble can move on its own. Changing speed does not reset the motion phase.");
+                ui.add(crate::parameter::Parameter::new(&mut self.orbit_speed, 0.0..=90.0, 10.0).key("orbit_speed").bounds(0.0..=360.0).text("Speed °/s")).help_text("Degrees per second for rotation, or the fastest speed at the middle of a sweep. Wobble has its own enable switch and rate. Changing speed does not reset the motion phase.");
                 ui.checkbox(&mut self.orbit_reverse, "Reverse direction").help_text("Orbit in the opposite direction at the same speed.");
                 if ui.button("Restart motion").help_text("Return to the saved starting angle and restart the orbit and wobble phases. Keeps all motion settings, zoom, pan and audio history.").clicked() { self.motion_runtime = Default::default(); }
             });
             });
             super::settings_group(ui, "Wobble", |ui| {
-                ui.add_enabled_ui(self.auto_orbit, |ui| self.motion.wobble_controls(ui));
+                self.motion.wobble_controls(ui);
             });
             super::settings_group(ui, "Auto-pan", |ui| {
-                ui.add_enabled_ui(self.auto_orbit, |ui| self.motion.pan_controls(ui, "motion"));
+                self.motion.pan_controls(ui, "motion");
             });
         });
         settings_panel(ui, "Geometry", |ui| {
@@ -1097,7 +1115,7 @@ impl Waterfall {
             || response.dragged_by(egui::PointerButton::Middle)
             || (shift && response.dragged_by(egui::PointerButton::Primary));
         if panning {
-            self.stop_auto_orbit();
+            self.stop_camera_motion();
             self.pan += response.drag_delta() / plot.size().max(Vec2::splat(1.0));
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else if response.dragged_by(egui::PointerButton::Primary) {
@@ -2898,7 +2916,7 @@ mod tests {
         );
         assert_eq!(history, waterfall.history_len());
         let visible = waterfall.camera_angles();
-        waterfall.stop_auto_orbit();
+        waterfall.stop_camera_motion();
         assert_eq!(
             waterfall.camera_angles(),
             visible,
@@ -2938,8 +2956,58 @@ mod tests {
         let next = waterfall.cached_mesh(&moved, rect, now, &theme);
         assert!(!std::sync::Arc::ptr_eq(&first, &next));
         assert_eq!(waterfall.settings_snapshot(), saved);
-        waterfall.stop_auto_orbit();
+        waterfall.stop_camera_motion();
         assert!((waterfall.camera(rect).center - moved.center).length() < 0.001);
+    }
+
+    #[test]
+    fn waterfall_orbit_and_wobble_are_independent_in_controls_and_rendering() {
+        use super::super::SettingsSection;
+        let ctx = egui::Context::default();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        let mut waterfall = Waterfall::default();
+        let section = SettingsSection::Camera;
+        controls_frame(&mut waterfall, &ctx, section, vec![]);
+        for (label, orbit, wobble) in [
+            ("Enable auto-rotation", true, false),
+            ("Enable wobble", true, true),
+            ("Enable auto-rotation", false, true),
+            ("Enable wobble", false, false),
+        ] {
+            let out = controls_frame(&mut waterfall, &ctx, section, vec![]);
+            click_control(&mut waterfall, &ctx, section, text_position(&out, label));
+            assert_eq!(waterfall.auto_orbit, orbit);
+            assert_eq!(waterfall.motion.wobble, wobble);
+        }
+        for (orbit, wobble) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut waterfall = Waterfall {
+                auto_orbit: orbit,
+                ..Default::default()
+            };
+            waterfall.motion.wobble = wobble;
+            let saved = waterfall.settings_snapshot();
+            let base = waterfall.camera_angles();
+            let now = Instant::now();
+            for step in 0..=60 {
+                waterfall.advance_camera(now + Duration::from_secs_f64(step as f64 / 60.0));
+            }
+            let shown = waterfall.camera_angles();
+            assert_eq!(waterfall.settings_snapshot(), saved);
+            if wobble {
+                assert!((shown.1 - base.1).abs() > 0.01);
+            } else {
+                assert!((shown.1 - base.1).abs() < 1e-5);
+            }
+            if !orbit && !wobble {
+                assert_eq!(shown, base);
+            }
+            waterfall.snap_view((0.2, 0.4));
+            assert!(!waterfall.auto_orbit && !waterfall.motion.wobble && !waterfall.motion.pan);
+            waterfall.advance_camera(now + Duration::from_secs(2));
+            assert_eq!(waterfall.camera_angles(), (0.2, 0.4));
+        }
     }
 
     #[test]

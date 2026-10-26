@@ -588,6 +588,7 @@ mod tests {
             v.get("Cymatics").is_none()
                 && v.get("ParticleWaves").is_none()
                 && v.get("SpectralBloom").is_none()
+                && v.get("Filament").is_none()
         });
         let upgraded: PaneState = serde_json::from_value(json).unwrap();
         assert_eq!(old, upgraded);

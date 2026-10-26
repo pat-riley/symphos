@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) fn layout(content: Rect) -> (Rect, Rect) {
-    let split = (content.right() - 156.0).max(content.left());
+    let split = (content.right() - outputs::STRIP_WIDTH).max(content.left());
     (
         Rect::from_min_max(content.min, egui::pos2(split, content.bottom())),
         Rect::from_min_max(egui::pos2(split, content.top()), content.max),
@@ -89,31 +89,36 @@ pub(super) fn strip(
                 inner.max - egui::vec2(0.0, 8.0),
             )),
     );
-    body.label(egui::RichText::new("Always available").weak().size(10.0));
-    body.label(
-        egui::RichText::new(format!(
-            "Stereo · {:.0} kHz",
-            frame.sample_rate as f32 / 1000.0
-        ))
-        .weak()
-        .size(10.0),
-    );
-    body.add_space(8.0);
-    let plot_height = (body.available_height() - 100.0).max(36.0);
-    let (plot, _) = body.allocate_exact_size(
-        egui::vec2(body.available_width(), plot_height),
-        egui::Sense::hover(),
-    );
-    audio_channel::spectrum(&mut body, plot, Some(frame), color);
-    body.add_space(8.0);
-    levels(&mut body, frame, color);
-    body.add_space(6.0);
-    let settings = body
-        .add_sized(
-            [body.available_width(), 22.0],
-            egui::Button::new(egui::RichText::new("Audio settings…").size(11.0)),
-        )
-        .clicked();
+    let settings = egui::ScrollArea::vertical()
+        .id_salt("master-audio-body")
+        .auto_shrink([false, false])
+        .show(&mut body, |body| {
+            body.label(egui::RichText::new("Always available").weak().size(10.0));
+            body.label(
+                egui::RichText::new(format!(
+                    "Stereo · {:.0} kHz",
+                    frame.sample_rate as f32 / 1000.0
+                ))
+                .weak()
+                .size(10.0),
+            );
+            body.add_space(8.0);
+            let plot_height = (body.available_height() - 100.0).clamp(64.0, 240.0);
+            let (plot, _) = body.allocate_exact_size(
+                egui::vec2(body.available_width(), plot_height),
+                egui::Sense::hover(),
+            );
+            outputs::audio(body, plot, Some(frame), color, true);
+            body.add_space(8.0);
+            levels(body, frame, color);
+            body.add_space(6.0);
+            body.add_sized(
+                [body.available_width(), 22.0],
+                egui::Button::new(egui::RichText::new("Audio settings…").size(11.0)),
+            )
+            .clicked()
+        })
+        .inner;
     (response.clicked() || settings, settings)
 }
 
@@ -234,8 +239,8 @@ mod tests {
             let mut panel = Panel::default();
             let out = render(&ctx, &mut panel, width, vec![]);
             let title = text_rect(&out, "Studio capture");
-            assert!(title.left() > width - 156.0 && title.right() <= width);
-            assert!(text_rect(&out, "Always available").left() > width - 156.0);
+            assert!(title.left() > width - outputs::STRIP_WIDTH && title.right() <= width);
+            assert!(text_rect(&out, "Always available").left() > width - outputs::STRIP_WIDTH);
             click(&ctx, &mut panel, width, title.center());
             assert_eq!(panel.selected, Some(MASTER_ID));
             assert!(panel.inspect_requested);

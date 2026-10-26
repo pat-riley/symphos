@@ -27,7 +27,7 @@ fn initial_palette_applies_to_shared_palettes_and_saved_overrides_survive_restor
             );
         }
     }
-    assert_eq!(supported, 16);
+    assert_eq!(supported, 17);
 }
 
 #[test]
@@ -314,7 +314,7 @@ fn every_axis_navigator_defaults_off_and_explicit_saved_choices_survive_restore(
             "{kind:?} reset also disables the navigator"
         );
     }
-    assert_eq!(camera_count, 11);
+    assert_eq!(camera_count, 12);
 }
 
 #[test]
@@ -366,4 +366,50 @@ fn lotus_motion_and_lighting_controls_are_in_the_visual_inspector() {
         settings.get("Resonance").is_some(),
         "Display rename preserves existing project and preset identifiers"
     );
+}
+
+#[test]
+fn filament_keeps_visual_controls_in_tabs_and_signal_response_in_input_settings() {
+    let collect = |section, input| {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.set_everything_is_visible(true));
+        let mut pane = ModulePane::new(ModuleKind::Filament);
+        pane.select_inspector_section(section);
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(440.0, 12000.0))),
+                ..Default::default()
+            },
+            |ui| {
+                if input {
+                    pane.input_controls(ui, &AnalysisFrame::default());
+                } else {
+                    pane.inspector_controls(ui, &AnalysisFrame::default());
+                }
+            },
+        );
+        out.textures_delta.clear();
+        ctx.data(|d| {
+            d.get_temp::<std::collections::BTreeSet<String>>(egui::Id::new(
+                "test-rendered-parameter-keys",
+            ))
+        })
+        .unwrap()
+    };
+    let geometry = collect(SettingsSection::Geometry, false);
+    let appearance = collect(SettingsSection::Appearance, false);
+    let input = collect(SettingsSection::Geometry, true);
+    assert!(geometry.contains("audio_bend") && geometry.contains("strands"));
+    assert!(!appearance.contains("strands"));
+    assert!(appearance.contains("breaks") && appearance.contains("line_width"));
+    for field in ["frequency.min_hz", "frequency.gain", "frequency.floor"] {
+        assert!(
+            input.contains(field),
+            "{field} must be reachable from Signals"
+        );
+        assert!(
+            !geometry.contains(field),
+            "{field} should not crowd the visual controls"
+        );
+    }
 }

@@ -128,8 +128,12 @@ Milkdrop retains the opaque output authored by its preset.
 
 All 3D visualizers share the camera motion math in `modules/camera_motion.rs`:
 world/custom axes, continuous or eased sweeps, reversal, wobble and independent
-framing pan. Waterfall preserves its existing serialized `motion` recipe; other
-visualizers save a defaulted `camera_motion` recipe with their existing camera
+framing pan. Orbit, wobble and auto-pan have separate enable switches: orbit
+is not a master switch, and wobble/pan can run with orbit off. Disabled wobble
+and pan clocks pause without affecting the orbit clock. Turning off the last
+motion holds the displayed view; manual navigation or a named view stops all
+three motions without changing their speed/amplitude settings. Waterfall preserves
+its existing serialized `motion` recipe; other visualizers save a defaulted `camera_motion` recipe with their existing camera
 fields. `modules/camera.rs` adapts radians/degrees and Y-up/Z-up conventions,
 applies transient render poses, and restores the exact saved values after drawing.
 Manual navigation cancels motion and commits the displayed pose; pause holds the
@@ -161,6 +165,24 @@ fields default safely in existing presets, retaining their geometry/camera
 values. Silence leaves the resting flower unchanged, and the pane's virtual
 clock holds all response during pause. Renderers precompute band levels by
 layer, row or column rather than repeat spectrum analysis per vertex.
+Filament builds overlapping thread sculptures from procedural closed contours.
+Its six profiles (loops, spindles, folds, vortex, gravity well and orbital currents)
+share shape, staggered gap and palette controls. Fine strands scales all stroke
+layers to 45% width; Dense weave doubles contours with a separate 64,000-segment
+budget. Both are opt-in for older projects. Spiral forms use a separate virtual
+circulation clock, with inward-moving breaks and increasing angular density near
+the center, independent of camera motion. The Centripetal flow starting preset
+changes geometry and finish while retaining palette, camera and audio settings. Each frame samples the existing 96-band frequency display
+once, smooths normalized energy on the pane's virtual clock, and uses it for
+local strand bending and overall expansion; silence retains the resting form.
+Capture/source resets clear response history. Depth-sorted shaded segment meshes
+are limited to 24,000 segments (64,000 for Dense weave), including at maximum
+form/strand/detail settings.
+Only settings persist; no generated geometry or response buffers enter projects.
+It uses the shared scene background and camera adapter, with the axis navigator
+off by default. Filament is appended to module/macro-bank ordering, and complete
+legacy component sets gain its default settings without disturbing existing ones.
+
 3D Rings wraps signed time-domain samples around each orbit. Geometry → Trace
 source selects Waveform (a fixed time window) or Oscilloscope (1–8 pitch-locked
 cycles, using the standalone scope’s normalized autocorrelation and rising zero

@@ -42,6 +42,7 @@ pub struct SymphosApp {
     scenes: crate::scenes::Book,
     saved_project: Option<Vec<u8>>,
     scene_browser: crate::scenes::Browser,
+    media_browser: crate::media::Browser,
     scene_library: crate::scenes::library::Library,
     pending_scene: Option<crate::scenes::Action>,
     engine: AudioEngine,
@@ -121,6 +122,7 @@ impl SymphosApp {
             #[cfg(feature = "development")]
             design_system: Default::default(),
             scene_browser: Default::default(),
+            media_browser: Default::default(),
             scene_library: Default::default(),
             pending_scene: None,
             engine,
@@ -464,6 +466,7 @@ impl SymphosApp {
             analysis: Default::default(),
         };
         self.scene_library.reset_project();
+        self.media_browser = Default::default();
         self.scenes = crate::scenes::Book::new(state.clone());
         self.apply_scene(state);
         self.project_dialog = Default::default();
@@ -596,6 +599,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.history = Default::default();
                 self.saved_project = serde_json::to_vec(&project).ok();
                 self.scene_library.reset_project();
+                self.media_browser = Default::default();
                 self.scenes = project.scenes;
                 let state = self
                     .scenes
@@ -986,6 +990,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             return;
         }
         // Always provide an exit even if a hidden inspector or dialog held focus.
+        if self.panel_fullscreen.is_none()
+            && self.media_browser.picking_for.is_some()
+            && ctx.input_mut(|input| {
+                input.focused && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            self.media_browser.picking_for = None;
+            return;
+        }
         if self.panel_fullscreen.is_some()
             && ctx.input_mut(|input| {
                 input.focused && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
@@ -1583,6 +1596,25 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         _now: Instant,
     ) {
+        ui.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(crate::media::PROJECT_SCOPE),
+                self.media_browser.scope,
+            )
+        });
+        for image in crate::media::take_imports(ui.ctx(), self.media_browser.scope) {
+            crate::media::remember(&mut self.scenes.media, image);
+        }
+        if self
+            .media_browser
+            .picking_for
+            .as_ref()
+            .is_some_and(|target| !self.panes.iter().any(|pane| pane.instance_id() == target))
+        {
+            self.media_browser.picking_for = None;
+        }
+        self.media_browser
+            .retain_uploads(&mut self.scenes.media, &self.panes);
         let source_label = self
             .sources
             .iter()
@@ -1631,6 +1663,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     &mut self.macros_height,
                     DockKind::Macros,
                     &self.theme,
+                    self.appearance.show_panel_gaps,
                 );
                 panel_rect = layout.dashboard;
                 self.scene_macro_bar(ui, bar_rect);
@@ -1674,6 +1707,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
     }
     fn normal_workspace(&mut self, ui: &mut egui::Ui, rect: Rect, snapshot: &AnalysisFrame) {
+        let show_gaps = self.appearance.show_panel_gaps;
         let navigation = Rect::from_min_max(
             rect.min,
             Pos2::new(rect.right(), rect.top() + workspace_ui::NAV_HEIGHT),
@@ -1702,21 +1736,26 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             #[cfg(not(target_os = "macos"))]
             ui.menu_button("Menu", |ui| {
                 let ctx = ui.ctx().clone();
-                menu_action = crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
+                menu_action =
+                    crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
             });
-            let toggle = icons::library_toggle(
+            let toggle = icons::browser_toggle(
                 ui,
                 self.manager.library_open,
                 workspace_ui::NAV_CONTROL_HEIGHT,
                 if self.manager.library_open {
-                    "Hide component browser"
+                    "Hide browser"
                 } else {
-                    "Show component browser\nClick an instrument or visualizer to add it, or drag it into the workspace."
+                    "Show browser\nBrowse visualizers and project media."
                 },
             );
-            toggle.widget_info(|| egui::WidgetInfo::labeled(
-                egui::WidgetType::Button, true, "Toggle component browser",
-            ));
+            toggle.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    "Toggle component browser",
+                )
+            });
             #[cfg(test)]
             ui.data_mut(|data| {
                 data.insert_temp(egui::Id::new("test-component-browser-toggle"), toggle.rect);
@@ -1814,11 +1853,43 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         let inspector_open = self.sidebar_open
             && (self.tiles.is_some() || self.inspecting_signal || self.inspecting_macro.is_some());
+        let rail = Rect::from_min_max(
+            Pos2::new(rect.left(), navigation.bottom()),
+            Pos2::new(rect.left() + workspace_ui::TOOL_RAIL_WIDTH, rect.bottom()),
+        );
+        let tools = workspace_ui::tool_rail(
+            ui,
+            rail,
+            self.manager.library_open,
+            self.manager.browser_tab,
+            &self.theme,
+        );
+        #[cfg(test)]
+        ui.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("test-visualizer-tool"),
+                tools.visualizers.rect,
+            );
+            data.insert_temp(egui::Id::new("test-media-tool"), tools.media.rect)
+        });
+        if tools.visualizers.clicked() {
+            self.media_browser.picking_for = None;
+            self.manager
+                .toggle_browser(workspace_ui::BrowserTab::Visualizers);
+        }
+        if tools.media.clicked() {
+            self.media_browser.picking_for = None;
+            self.manager.toggle_browser(workspace_ui::BrowserTab::Media);
+        }
+        if !self.manager.library_open || self.manager.browser_tab != workspace_ui::BrowserTab::Media
+        {
+            self.media_browser.picking_for = None;
+        }
         let browser_openness =
             drawer_openness(ui.ctx(), "component-browser", self.manager.library_open);
         let inspector_openness = drawer_openness(ui.ctx(), "inspector", inspector_open);
         let browser_bounds =
-            Rect::from_min_max(Pos2::new(rect.left(), navigation.bottom()), rect.max);
+            Rect::from_min_max(Pos2::new(rail.right(), navigation.bottom()), rect.max);
         let browser_width = egui::lerp(
             library_width(browser_bounds, false, self.library_width)
                 ..=library_width(browser_bounds, true, self.library_width),
@@ -1837,21 +1908,44 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     .max_rect(library),
             );
             drawer.set_clip_rect(browser_bounds.intersect(ui.clip_rect()));
-            let actions = self.manager.library(
-                &mut drawer,
-                library,
-                &self.theme,
-                self.open_panes().len() < MAX_PANES,
-            );
-            self.manager_actions(actions);
-            // Register the boundary after the list/scrollbar so it owns edge gestures.
-            if self.manager.library_open && browser_openness == 1.0 {
-                resize_library(ui, browser_bounds, inspector_open, &mut self.library_width);
+            match self.manager.browser_tab {
+                workspace_ui::BrowserTab::Visualizers => {
+                    let actions = self.manager.library(
+                        &mut drawer,
+                        library,
+                        &self.theme,
+                        self.open_panes().len() < MAX_PANES,
+                    );
+                    self.manager_actions(actions);
+                }
+                workspace_ui::BrowserTab::Media => {
+                    let catalog = crate::media::catalog(&self.scenes, &self.panes);
+                    let response =
+                        self.media_browser
+                            .show(&mut drawer, library, &self.theme, &catalog);
+                    if response.close {
+                        self.manager.library_open = false;
+                        self.media_browser.picking_for = None;
+                    }
+                    if let Some(image) = response.apply
+                        && let Some(target) = self.media_browser.picking_for.take()
+                        && let Some(index) = self
+                            .panes
+                            .iter()
+                            .position(|pane| pane.instance_id() == target)
+                    {
+                        self.begin_edit(true);
+                        self.panes[index].use_image(image);
+                        self.finish_edit();
+                    }
+                }
             }
         }
         let content_bounds = Rect::from_min_max(
             Pos2::new(
-                rect.left() + 12.0 + browser_width * browser_openness,
+                browser_bounds.left()
+                    + if show_gaps { 12.0 } else { 0.0 }
+                    + browser_width * browser_openness,
                 rect.top() + workspace_ui::NAV_HEIGHT,
             ),
             rect.max,
@@ -1859,7 +1953,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         let footer = Rect::from_min_max(
             Pos2::new(content_bounds.left(), rect.bottom() - 50.0),
             Pos2::new(
-                drawer_dashboard_right(content_bounds, self.sidebar_width, inspector_openness),
+                drawer_dashboard_right(
+                    content_bounds,
+                    self.sidebar_width,
+                    inspector_openness,
+                    show_gaps,
+                ),
                 rect.bottom(),
             ),
         );
@@ -1927,18 +2026,12 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             .unwrap_or_else(|e| e.into_inner())
             .show_signals;
         let content = content_bounds;
-        resize_settings(
-            ui,
-            content,
-            inspector_open && inspector_openness == 1.0,
-            self.help_open,
-            &mut self.sidebar_width,
-        );
         let mut layout = workspace_layout_animated(
             content,
             inspector_openness,
             self.help_open,
             self.sidebar_width,
+            show_gaps,
         );
         if signals_open {
             let dock = resize_performance_dock(
@@ -1947,6 +2040,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 &mut self.signals_height,
                 DockKind::Signals,
                 &self.theme,
+                show_gaps,
             );
             self.signals_dock(ui, dock, snapshot);
         } else if self.scene_macros.open {
@@ -1956,6 +2050,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 &mut self.macros_height,
                 DockKind::Macros,
                 &self.theme,
+                show_gaps,
             );
             self.scene_macro_bar(ui, dock);
         }
@@ -2007,8 +2102,38 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.sidebar(&mut sidebar, snapshot);
             }
         }
+        if ui
+            .data_mut(|data| {
+                data.remove_temp::<bool>(egui::Id::new(crate::media::CHOOSE_IMAGE_REQUEST))
+            })
+            .unwrap_or(false)
+        {
+            self.manager.browser_tab = workspace_ui::BrowserTab::Media;
+            self.manager.library_open = true;
+            self.media_browser.picking_for =
+                Some(self.panes[self.selected_pane].instance_id().to_owned());
+        }
         self.scene_library.canvas = Some(layout.dashboard);
         self.dashboard(ui, layout.dashboard, snapshot);
+        // Shared edges overlap pane hitboxes in the gapless layout. Register the
+        // drawer handles last so resizing still owns those narrow edge gestures.
+        resize_settings(
+            ui,
+            content,
+            inspector_open && inspector_openness == 1.0,
+            self.help_open,
+            &mut self.sidebar_width,
+            show_gaps,
+        );
+        if self.manager.library_open && browser_openness == 1.0 {
+            resize_library(
+                ui,
+                browser_bounds,
+                inspector_open,
+                &mut self.library_width,
+                show_gaps,
+            );
+        }
         if self.show_inspector {
             egui::Window::new("FFT inspector / diagnostics")
                 .open(&mut self.show_inspector)
@@ -2150,6 +2275,17 @@ impl eframe::App for SymphosApp {
             }
             self.scene_macros.reconcile(&self.panes, &panel.bank);
             panel.consumers.clear();
+            panel.audio_consumers.clear();
+            for i in self.open_panes() {
+                let pane = &self.panes[i];
+                if let crate::signals::audio::Connection::Input(id) = pane.audio_input {
+                    panel.audio_consumers.entry(id).or_default().push(format!(
+                        "{} · Pane {}",
+                        settings_kind_name(pane.kind),
+                        i + 1
+                    ));
+                }
+            }
             for (index, slot) in self.scene_macros.slots.iter().enumerate() {
                 if let (Some(id), Some(parameter), Some(target)) =
                     (slot.signal, &slot.parameter, &slot.target)
@@ -2461,6 +2597,7 @@ mod workspace_interaction_tests {
             #[cfg(feature = "development")]
             design_system: Default::default(),
             scene_browser: Default::default(),
+            media_browser: Default::default(),
             scene_library: Default::default(),
             pending_scene: None,
             engine: AudioEngine::development_mode(true),
@@ -3302,6 +3439,175 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn visualizer_tool_and_top_drawer_toggle_share_one_browser_without_affecting_docks() {
+        let mut app = app();
+        app.manager.library_open = false;
+        app.scene_macros.open = true;
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        settle_drawers(&mut app, &ctx, now);
+        let before = app.capture_scene().creative_fingerprint();
+        let plus = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-visualizer-tool")))
+            .unwrap();
+        let top = component_browser_toggle(&ctx);
+        assert!(plus.left() >= 0.0 && plus.right() <= workspace_ui::TOOL_RAIL_WIDTH);
+        assert!(plus.top() >= workspace_ui::NAV_HEIGHT);
+        assert!(top.y < plus.top());
+        assert!(app.scene_library.canvas.unwrap().left() >= workspace_ui::TOOL_RAIL_WIDTH);
+        for (pos, open) in [(plus.center(), true), (top, false), (plus.center(), true)] {
+            workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, true)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, false)]);
+            assert_eq!(app.manager.library_open, open);
+            assert!(app.scene_macros.open);
+            assert!(!app.signal_ui.lock().unwrap().show_signals);
+        }
+        settle_drawers(&mut app, &ctx, now);
+        assert_eq!(app.capture_scene().creative_fingerprint(), before);
+        app.toggle_panel_fullscreen(0, now);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert_eq!(app.scene_library.canvas.unwrap(), ctx.content_rect());
+        assert!(!out.shapes.iter().any(
+            |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Primitives")
+        ));
+        app.toggle_panel_fullscreen(0, now);
+        settle_drawers(&mut app, &ctx, now);
+        assert!(app.manager.library_open);
+        assert!(app.scene_library.canvas.unwrap().left() > workspace_ui::TOOL_RAIL_WIDTH);
+    }
+
+    #[test]
+    fn media_tool_switches_the_shared_drawer_and_keeps_project_images_through_undo() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.manager.library_open = false;
+        settle_drawers(&mut app, &ctx, now);
+        let before = app.capture_scene().creative_fingerprint();
+        let media = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-media-tool")))
+            .unwrap();
+        let visualizers = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-visualizer-tool")))
+            .unwrap();
+        assert!(media.top() > visualizers.bottom());
+        let click = |app: &mut SymphosApp, pos| {
+            workspace_frame(app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            workspace_frame(app, &ctx, now, vec![button(pos, true)]);
+            workspace_frame(app, &ctx, now, vec![button(pos, false)]);
+            settle_drawers(app, &ctx, now);
+        };
+        click(&mut app, media.center());
+        assert!(app.manager.library_open);
+        assert!(app.manager.browser_tab == workspace_ui::BrowserTab::Media);
+        let output = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(output.shapes.iter().any(
+            |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Starter landscape")
+        ));
+        assert_eq!(app.capture_scene().creative_fingerprint(), before);
+        click(&mut app, visualizers.center());
+        assert!(app.manager.library_open);
+        assert!(app.manager.browser_tab == workspace_ui::BrowserTab::Visualizers);
+        click(&mut app, media.center());
+        let image = crate::media::tests::image("Project upload.png");
+        crate::media::remember(&mut app.scenes.media, image.clone());
+        app.begin_edit(true);
+        assert!(app.panes[0].use_image(image.clone()));
+        app.finish_edit();
+        app.undo_edit(false);
+        assert!(app.panes[0].imported_image().is_none());
+        assert!(
+            crate::media::entries(&app.scenes, &app.panes)
+                .iter()
+                .any(|entry| entry.image == image)
+        );
+        app.undo_edit(true);
+        assert_eq!(app.panes[0].imported_image(), Some(&image));
+        app.new_project(&ctx);
+        assert!(
+            crate::media::entries(&app.scenes, &app.panes)
+                .iter()
+                .all(|entry| entry.placeholder)
+        );
+    }
+
+    #[test]
+    fn inspector_image_choice_opens_generic_media_and_applies_only_to_the_requesting_pane() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let first = crate::media::tests::image("First.png");
+        let second = crate::media::tests::image("Second.png");
+        app.panes[0].use_image(first.clone());
+        crate::media::remember(&mut app.scenes.media, second.clone());
+        // Same request produced by the inspector's Choose image button.
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new(crate::media::CHOOSE_IMAGE_REQUEST), true)
+        });
+        app.selected_pane = 0;
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(app.manager.library_open);
+        assert!(app.manager.browser_tab == workspace_ui::BrowserTab::Media);
+        assert_eq!(
+            app.media_browser.picking_for.as_deref(),
+            Some(app.panes[0].instance_id())
+        );
+        settle_drawers(&mut app, &ctx, now);
+        let row = ctx
+            .data(|data| data.get_temp::<Rect>(egui::Id::new(("test-media-image", 2_usize))))
+            .unwrap();
+        app.selected_pane = 1; // Changing selection must not redirect the image request.
+        for pressed in [true, false] {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![
+                    egui::Event::PointerMoved(row.center()),
+                    button(row.center(), pressed),
+                ],
+            );
+        }
+        assert_eq!(app.panes[0].imported_image(), Some(&second));
+        assert!(app.panes[1].imported_image().is_none());
+        assert!(app.media_browser.picking_for.is_none());
+        app.undo_edit(false);
+        assert_eq!(app.panes[0].imported_image(), Some(&first));
+        app.media_browser.picking_for = Some(app.panes[0].instance_id().to_owned());
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(app.media_browser.picking_for.is_none());
+        assert_eq!(app.panes[0].imported_image(), Some(&first));
+        // Browsing media through the tool alone must never change a pane.
+        let row = ctx
+            .data(|data| data.get_temp::<Rect>(egui::Id::new(("test-media-image", 0_usize))))
+            .unwrap();
+        for pressed in [true, false] {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![
+                    egui::Event::PointerMoved(row.center()),
+                    button(row.center(), pressed),
+                ],
+            );
+        }
+        assert_eq!(app.panes[0].imported_image(), Some(&first));
+    }
+
+    #[test]
     fn component_browser_resize_keeps_panes_and_inspector_and_resets_on_double_click() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -3313,15 +3619,18 @@ mod workspace_interaction_tests {
         frame(&mut app, vec![]);
         frame(&mut app, vec![]);
         // Real browser edge, alongside the rows: resizing must not drag/add a component.
-        let start = Pos2::new(workspace_ui::LIBRARY_WIDTH + 2.0, 180.0);
+        let start = Pos2::new(
+            workspace_ui::TOOL_RAIL_WIDTH + workspace_ui::LIBRARY_WIDTH + 2.0,
+            180.0,
+        );
         frame(
             &mut app,
             vec![egui::Event::PointerMoved(start), button(start, true)],
         );
-        let end = Pos2::new(382.0, 180.0);
+        let end = Pos2::new(workspace_ui::TOOL_RAIL_WIDTH + 322.0, 180.0);
         frame(&mut app, vec![egui::Event::PointerMoved(end)]);
         frame(&mut app, vec![button(end, false)]);
-        assert_eq!(app.library_width, 380.0);
+        assert_eq!(app.library_width, 320.0);
         assert_eq!(app.open_panes(), panes);
         assert!(app.sidebar_open);
         assert!(!egui::DragAndDrop::has_any_payload(&ctx));
@@ -3330,7 +3639,7 @@ mod workspace_interaction_tests {
             Session::decode(&serde_json::to_vec(&saved).unwrap())
                 .unwrap()
                 .library_width,
-            380.0
+            320.0
         );
         let toggle = component_browser_toggle(&ctx);
         for expected in [false, true] {
@@ -3340,14 +3649,17 @@ mod workspace_interaction_tests {
             );
             frame(&mut app, vec![button(toggle, false)]);
             assert_eq!(app.manager.library_open, expected);
-            assert_eq!(app.library_width, 380.0);
+            assert_eq!(app.library_width, 320.0);
         }
         // Separate the resize gesture from the rapid hide/show clicks so egui
         // does not classify this sequence as a triple click.
         for _ in 0..40 {
             frame(&mut app, vec![]);
         }
-        let end = Pos2::new(app.library_width + 6.0, 180.0);
+        let end = Pos2::new(
+            workspace_ui::TOOL_RAIL_WIDTH + app.library_width + 6.0,
+            180.0,
+        );
         for _ in 0..2 {
             frame(
                 &mut app,
@@ -4092,7 +4404,7 @@ mod workspace_interaction_tests {
         let output = workspace_frame(&mut app, &ctx, now, vec![]);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(shape)
             if shape.fill == app.background.sample([0.5; 2]) && shape.rect == Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0)))));
-        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Components")));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Visualizers")));
         app.show_shortcuts = true; // A hidden modal must never trap fullscreen.
         workspace_frame(
             &mut app,
@@ -4858,6 +5170,137 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn hidden_panel_gaps_fill_outer_viewport_edges_with_drawers_help_and_docks() {
+        for browser in [false, true] {
+            for inspector in [false, true] {
+                for help in [false, true] {
+                    for dock in [None, Some(DockKind::Signals), Some(DockKind::Macros)] {
+                        let mut app = app();
+                        app.appearance.show_panel_gaps = false;
+                        app.manager.library_open = browser;
+                        app.sidebar_open = inspector;
+                        app.help_open = help;
+                        app.scene_macros.open = matches!(dock, Some(DockKind::Macros));
+                        app.signal_ui.lock().unwrap().show_signals =
+                            matches!(dock, Some(DockKind::Signals));
+                        let ctx = egui::Context::default();
+                        let now = Instant::now();
+                        settle_drawers(&mut app, &ctx, now);
+                        let bounds = ctx.content_rect();
+                        let canvas = app.scene_library.canvas.unwrap();
+                        let browser_bounds = Rect::from_min_max(
+                            bounds.min
+                                + Vec2::new(
+                                    workspace_ui::TOOL_RAIL_WIDTH,
+                                    workspace_ui::NAV_HEIGHT,
+                                ),
+                            bounds.max,
+                        );
+                        let left = browser_bounds.left()
+                            + if browser {
+                                library_width(browser_bounds, inspector, app.library_width)
+                            } else {
+                                0.0
+                            };
+                        let content =
+                            Rect::from_min_max(Pos2::new(left, browser_bounds.top()), bounds.max);
+                        let mut expected = workspace_layout_animated(
+                            content,
+                            if inspector { 1.0 } else { 0.0 },
+                            help,
+                            app.sidebar_width,
+                            false,
+                        );
+                        assert_eq!(canvas.left(), left);
+                        assert_eq!(canvas.top(), bounds.top() + workspace_ui::NAV_HEIGHT);
+                        assert_eq!(
+                            canvas.right(),
+                            expected.sidebar.map_or(bounds.right(), |r| r.left())
+                        );
+                        if let Some(kind) = dock {
+                            let height = match kind {
+                                DockKind::Signals => app.signals_height,
+                                DockKind::Macros => app.macros_height,
+                            };
+                            let dock = dock_performance(&mut expected, height, false);
+                            assert_eq!(
+                                canvas.bottom(),
+                                dock.top() + 8.0,
+                                "viewport meets the visible dock frame"
+                            );
+                        } else {
+                            assert_eq!(
+                                canvas.bottom(),
+                                expected.help.map_or(bounds.bottom() - 50.0, |r| r.top())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hidden_panel_gaps_keep_outer_drawer_and_dock_resize_targets() {
+        for target in ["browser", "inspector", "signals", "macros"] {
+            let mut app = app();
+            app.appearance.show_panel_gaps = false;
+            app.manager.library_open = target == "browser";
+            app.sidebar_open = target == "inspector";
+            app.signal_ui.lock().unwrap().show_signals = target == "signals";
+            app.scene_macros.open = target == "macros";
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            settle_drawers(&mut app, &ctx, now);
+            let canvas = app.scene_library.canvas.unwrap();
+            let (pos, delta, cursor) = match target {
+                "browser" => (
+                    canvas.left_center(),
+                    Vec2::new(24.0, 0.0),
+                    egui::CursorIcon::ResizeHorizontal,
+                ),
+                "inspector" => (
+                    canvas.right_center(),
+                    Vec2::new(-24.0, 0.0),
+                    egui::CursorIcon::ResizeHorizontal,
+                ),
+                _ => (
+                    canvas.center_bottom(),
+                    Vec2::new(0.0, -24.0),
+                    egui::CursorIcon::ResizeVertical,
+                ),
+            };
+            let before = match target {
+                "browser" => app.library_width,
+                "inspector" => app.sidebar_width,
+                "signals" => app.signals_height,
+                _ => app.macros_height,
+            };
+            let out = workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            assert_eq!(out.platform_output.cursor_icon, cursor, "hover {target}");
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, true)]);
+            let out = workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![egui::Event::PointerMoved(pos + delta)],
+            );
+            assert_eq!(out.platform_output.cursor_icon, cursor, "drag {target}");
+            let after = match target {
+                "browser" => app.library_width,
+                "inspector" => app.sidebar_width,
+                "signals" => app.signals_height,
+                _ => app.macros_height,
+            };
+            assert!(
+                after > before,
+                "drag must resize {target}: {before} -> {after}"
+            );
+            workspace_frame(&mut app, &ctx, now, vec![button(pos + delta, false)]);
+        }
+    }
+
+    #[test]
     fn hidden_panel_gaps_keep_resize_cursors_and_dragging() {
         for axis in [Axis::Horizontal, Axis::Vertical] {
             let mut app = app();
@@ -5217,11 +5660,18 @@ fn library_width(bounds: Rect, inspector_open: bool, requested: f32) -> f32 {
     requested.clamp(workspace_ui::LIBRARY_WIDTH, maximum)
 }
 
-fn resize_library(ui: &mut egui::Ui, bounds: Rect, inspector_open: bool, width: &mut f32) {
+fn resize_library(
+    ui: &mut egui::Ui,
+    bounds: Rect,
+    inspector_open: bool,
+    width: &mut f32,
+    show_gaps: bool,
+) {
     let edge = bounds.left() + library_width(bounds, inspector_open, *width);
+    let center = edge + if show_gaps { 6.0 } else { 0.0 };
     let handle = Rect::from_min_max(
-        Pos2::new(edge + 2.0, bounds.top()),
-        Pos2::new(edge + 10.0, bounds.bottom()),
+        Pos2::new(center - 4.0, bounds.top()),
+        Pos2::new(center + 4.0, bounds.bottom()),
     );
     let response = ui
         .interact(
@@ -5253,14 +5703,28 @@ fn settings_width(content: Rect, requested: f32) -> f32 {
     requested.clamp(DEFAULT_SETTINGS_WIDTH, maximum)
 }
 
-fn resize_settings(ui: &mut egui::Ui, content: Rect, open: bool, help_open: bool, width: &mut f32) {
-    let layout = workspace_layout(content, open, help_open, *width);
+fn resize_settings(
+    ui: &mut egui::Ui,
+    content: Rect,
+    open: bool,
+    help_open: bool,
+    width: &mut f32,
+    show_gaps: bool,
+) {
+    let layout = workspace_layout_animated(
+        content,
+        if open { 1.0 } else { 0.0 },
+        help_open,
+        *width,
+        show_gaps,
+    );
     let Some(sidebar) = layout.sidebar else {
         return;
     };
+    let center = sidebar.left() - if show_gaps { 5.0 } else { 0.0 };
     let handle = Rect::from_min_max(
-        Pos2::new(sidebar.left() - 9.0, sidebar.top()),
-        Pos2::new(sidebar.left() - 1.0, sidebar.bottom()),
+        Pos2::new(center - 4.0, sidebar.top()),
+        Pos2::new(center + 4.0, sidebar.bottom()),
     );
     let response = ui
         .interact(
@@ -5294,14 +5758,22 @@ fn drawer_openness(ctx: &egui::Context, name: &str, open: bool) -> f32 {
     )
 }
 
-fn drawer_dashboard_right(content: Rect, requested_width: f32, openness: f32) -> f32 {
+fn drawer_dashboard_right(
+    content: Rect,
+    requested_width: f32,
+    openness: f32,
+    show_gaps: bool,
+) -> f32 {
     egui::lerp(
-        (content.right() - 12.0)
-            ..=(content.right() - settings_width(content, requested_width) - 10.0),
+        (content.right() - if show_gaps { 12.0 } else { 0.0 })
+            ..=(content.right()
+                - settings_width(content, requested_width)
+                - if show_gaps { 10.0 } else { 0.0 }),
         openness,
     )
 }
 
+#[cfg(test)]
 fn workspace_layout(
     content: Rect,
     sidebar_open: bool,
@@ -5313,6 +5785,7 @@ fn workspace_layout(
         if sidebar_open { 1.0 } else { 0.0 },
         help_open,
         requested_width,
+        true,
     )
 }
 
@@ -5321,6 +5794,7 @@ fn workspace_layout_animated(
     inspector_openness: f32,
     help_open: bool,
     requested_width: f32,
+    show_gaps: bool,
 ) -> WorkspaceLayout {
     let settings_width = settings_width(content, requested_width);
     let sidebar = (inspector_openness > 0.0).then(|| {
@@ -5331,9 +5805,9 @@ fn workspace_layout_animated(
         .translate(Vec2::new(settings_width * (1.0 - inspector_openness), 0.0))
     });
     let mut dashboard = Rect::from_min_max(
-        content.min + Vec2::new(0.0, 12.0),
+        content.min + Vec2::new(0.0, if show_gaps { 12.0 } else { 0.0 }),
         Pos2::new(
-            drawer_dashboard_right(content, requested_width, inspector_openness),
+            drawer_dashboard_right(content, requested_width, inspector_openness, show_gaps),
             content.bottom() - 50.0,
         ),
     );
@@ -5344,7 +5818,7 @@ fn workspace_layout_animated(
         )
     });
     if let Some(help) = help {
-        dashboard.max.y = help.top() - 10.0;
+        dashboard.max.y = help.top() - if show_gaps { 10.0 } else { 0.0 };
     }
     WorkspaceLayout {
         dashboard,
@@ -5393,6 +5867,7 @@ fn resize_performance_dock(
     requested: &mut f32,
     kind: DockKind,
     theme: &AppTheme,
+    show_gaps: bool,
 ) -> Rect {
     let bottom = layout
         .help
@@ -5400,7 +5875,7 @@ fn resize_performance_dock(
     let maximum = (bottom - layout.dashboard.top() - 106.0).clamp(30.0, 1000.0);
     let minimum = kind.minimum().min(maximum);
     let height = requested.clamp(minimum, maximum);
-    let center = bottom - height + 1.0;
+    let center = bottom - height + if show_gaps { 1.0 } else { 8.0 };
     let grip = Rect::from_min_max(
         Pos2::new(layout.dashboard.left(), center - 4.0),
         Pos2::new(layout.dashboard.right(), center + 4.0),
@@ -5419,7 +5894,7 @@ fn resize_performance_dock(
             .clamp(minimum, maximum)
             .max(180.0);
     }
-    let dock = dock_performance(layout, requested.clamp(minimum, maximum));
+    let dock = dock_performance(layout, requested.clamp(minimum, maximum), show_gaps);
     if response.hovered() || response.dragged() {
         let gap = Rect::from_min_max(
             Pos2::new(layout.dashboard.left(), layout.dashboard.bottom()),
@@ -5443,7 +5918,7 @@ fn paint_resize_divider(ui: &egui::Ui, gap: Rect, axis: Axis, color: Color32) {
     }
 }
 
-fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect {
+fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32, show_gaps: bool) -> Rect {
     let bottom = layout
         .help
         .map_or(layout.dashboard.bottom(), |r| r.bottom());
@@ -5452,7 +5927,9 @@ fn dock_performance(layout: &mut WorkspaceLayout, requested_height: f32) -> Rect
         Pos2::new(layout.dashboard.left(), bottom - height),
         Pos2::new(layout.dashboard.right(), bottom),
     );
-    layout.dashboard.max.y = rect.top() - 6.0;
+    // Docks draw their visible frame eight points below their allocation.
+    // Fill all the way to that visible edge when viewport gaps are hidden.
+    layout.dashboard.max.y = rect.top() + if show_gaps { -6.0 } else { 8.0 };
     if let Some(help) = &mut layout.help {
         // Both docks inset their visible frame by eight points vertically.
         // Info View shares that baseline and grows with the selected dock.
@@ -5879,7 +6356,7 @@ mod layout_tests {
                     events,
                     ..Default::default()
                 },
-                |ui| resize_settings(ui, content, true, false, width),
+                |ui| resize_settings(ui, content, true, false, width, true),
             );
             output.textures_delta.clear();
         };
@@ -6018,6 +6495,7 @@ mod layout_tests {
                                 &mut requested,
                                 kind,
                                 &theme,
+                                true,
                             );
                             gap = Rect::from_min_max(
                                 layout.dashboard.left_bottom(),
@@ -6068,7 +6546,7 @@ mod layout_tests {
                     if let Some(help) = layout.help {
                         assert_eq!(help.x_range(), layout.dashboard.x_range());
                     }
-                    let bar = dock_performance(&mut layout, height);
+                    let bar = dock_performance(&mut layout, height, true);
                     assert!(layout.dashboard.height() >= 90.0);
                     assert!(!bar.intersects(layout.dashboard));
                     assert!(!bar.intersects(layout.sidebar.unwrap()));
@@ -6116,7 +6594,7 @@ mod layout_tests {
                     p > previous && p < 1.0,
                     "opening must slide over several frames"
                 );
-                let layout = workspace_layout_animated(content, p, true, width);
+                let layout = workspace_layout_animated(content, p, true, width, true);
                 let drawer = layout.sidebar.unwrap();
                 assert!(
                     (drawer.width() - width).abs() < 0.001,
@@ -6141,7 +6619,7 @@ mod layout_tests {
             }
             assert_eq!(step(false), 0.0);
             assert!(
-                workspace_layout_animated(content, 0.0, false, width)
+                workspace_layout_animated(content, 0.0, false, width, true)
                     .sidebar
                     .is_none()
             );
@@ -6150,7 +6628,7 @@ mod layout_tests {
             }
             assert_eq!(step(true), 1.0);
             assert_eq!(
-                workspace_layout_animated(content, 1.0, false, width)
+                workspace_layout_animated(content, 1.0, false, width, true)
                     .sidebar
                     .unwrap()
                     .right(),

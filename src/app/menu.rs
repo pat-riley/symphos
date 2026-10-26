@@ -79,7 +79,9 @@ impl SymphosApp {
             RenameScene => self.scenes.current().is_some(),
             DeleteScene | PreviousScene | NextScene => self.scenes.scenes.len() > 1,
             Components => {
-                checked = self.manager.library_open && !panel_fullscreen;
+                checked = self.manager.library_open
+                    && self.manager.browser_tab == workspace_ui::BrowserTab::Visualizers
+                    && !panel_fullscreen;
                 !panel_fullscreen
             }
             Inspector => {
@@ -227,7 +229,9 @@ impl SymphosApp {
             PasteSettings => self.paste_module_settings(),
             ResetComponent => self.panes[self.selected_pane].reset_settings(),
             CloseComponent => self.close_pane(self.selected_pane),
-            Components => self.manager.library_open = !self.manager.library_open,
+            Components => self
+                .manager
+                .toggle_browser(workspace_ui::BrowserTab::Visualizers),
             Inspector => self.sidebar_open = !self.sidebar_open,
             Macros => self.toggle_macros(),
             Signals => self.toggle_signals(),

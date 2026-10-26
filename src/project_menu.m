@@ -139,7 +139,7 @@ void symphos_project_path_free(char *path) { free(path); }
 
 char *symphos_image_choose(void) {
     NSOpenPanel *panel = [NSOpenPanel openPanel];
-    panel.title = @"Choose Waterfall Image";
+    panel.title = @"Import Image";
     panel.allowedContentTypes = @[UTTypePNG, UTTypeJPEG, UTTypeBMP];
     panel.canChooseDirectories = NO;
     panel.canChooseFiles = YES;
