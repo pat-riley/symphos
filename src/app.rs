@@ -1706,7 +1706,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 let ctx = ui.ctx().clone();
                 menu_action = crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
             });
-            let toggle = icons::library_toggle(
+            let toggle = icons::browser_toggle(
                 ui,
                 self.manager.library_open,
                 workspace_ui::NAV_CONTROL_HEIGHT,
@@ -1816,11 +1816,24 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         let inspector_open = self.sidebar_open
             && (self.tiles.is_some() || self.inspecting_signal || self.inspecting_macro.is_some());
+        let rail = Rect::from_min_max(
+            Pos2::new(rect.left(), navigation.bottom()),
+            Pos2::new(rect.left() + workspace_ui::TOOL_RAIL_WIDTH, rect.bottom()),
+        );
+        let add_visualizer =
+            workspace_ui::tool_rail(ui, rail, self.manager.library_open, &self.theme);
+        #[cfg(test)]
+        ui.data_mut(|data| {
+            data.insert_temp(egui::Id::new("test-visualizer-tool"), add_visualizer.rect)
+        });
+        if add_visualizer.clicked() {
+            self.manager.library_open = !self.manager.library_open;
+        }
         let browser_openness =
             drawer_openness(ui.ctx(), "component-browser", self.manager.library_open);
         let inspector_openness = drawer_openness(ui.ctx(), "inspector", inspector_open);
         let browser_bounds =
-            Rect::from_min_max(Pos2::new(rect.left(), navigation.bottom()), rect.max);
+            Rect::from_min_max(Pos2::new(rail.right(), navigation.bottom()), rect.max);
         let browser_width = egui::lerp(
             library_width(browser_bounds, false, self.library_width)
                 ..=library_width(browser_bounds, true, self.library_width),
@@ -1849,7 +1862,9 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         }
         let content_bounds = Rect::from_min_max(
             Pos2::new(
-                rect.left() + if show_gaps { 12.0 } else { 0.0 } + browser_width * browser_openness,
+                browser_bounds.left()
+                    + if show_gaps { 12.0 } else { 0.0 }
+                    + browser_width * browser_openness,
                 rect.top() + workspace_ui::NAV_HEIGHT,
             ),
             rect.max,
@@ -3320,6 +3335,45 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn visualizer_tool_and_top_drawer_toggle_share_one_browser_without_affecting_docks() {
+        let mut app = app();
+        app.manager.library_open = false;
+        app.scene_macros.open = true;
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        settle_drawers(&mut app, &ctx, now);
+        let before = app.capture_scene().creative_fingerprint();
+        let plus = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-visualizer-tool")))
+            .unwrap();
+        let top = component_browser_toggle(&ctx);
+        assert!(plus.left() >= 0.0 && plus.right() <= workspace_ui::TOOL_RAIL_WIDTH);
+        assert!(plus.top() >= workspace_ui::NAV_HEIGHT);
+        assert!(top.y < plus.top());
+        assert!(app.scene_library.canvas.unwrap().left() >= workspace_ui::TOOL_RAIL_WIDTH);
+        for (pos, open) in [(plus.center(), true), (top, false), (plus.center(), true)] {
+            workspace_frame(&mut app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, true)]);
+            workspace_frame(&mut app, &ctx, now, vec![button(pos, false)]);
+            assert_eq!(app.manager.library_open, open);
+            assert!(app.scene_macros.open);
+            assert!(!app.signal_ui.lock().unwrap().show_signals);
+        }
+        settle_drawers(&mut app, &ctx, now);
+        assert_eq!(app.capture_scene().creative_fingerprint(), before);
+        app.toggle_panel_fullscreen(0, now);
+        let out = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert_eq!(app.scene_library.canvas.unwrap(), ctx.content_rect());
+        assert!(!out.shapes.iter().any(
+            |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Primitives")
+        ));
+        app.toggle_panel_fullscreen(0, now);
+        settle_drawers(&mut app, &ctx, now);
+        assert!(app.manager.library_open);
+        assert!(app.scene_library.canvas.unwrap().left() > workspace_ui::TOOL_RAIL_WIDTH);
+    }
+
+    #[test]
     fn component_browser_resize_keeps_panes_and_inspector_and_resets_on_double_click() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -3331,15 +3385,18 @@ mod workspace_interaction_tests {
         frame(&mut app, vec![]);
         frame(&mut app, vec![]);
         // Real browser edge, alongside the rows: resizing must not drag/add a component.
-        let start = Pos2::new(workspace_ui::LIBRARY_WIDTH + 2.0, 180.0);
+        let start = Pos2::new(
+            workspace_ui::TOOL_RAIL_WIDTH + workspace_ui::LIBRARY_WIDTH + 2.0,
+            180.0,
+        );
         frame(
             &mut app,
             vec![egui::Event::PointerMoved(start), button(start, true)],
         );
-        let end = Pos2::new(382.0, 180.0);
+        let end = Pos2::new(workspace_ui::TOOL_RAIL_WIDTH + 322.0, 180.0);
         frame(&mut app, vec![egui::Event::PointerMoved(end)]);
         frame(&mut app, vec![button(end, false)]);
-        assert_eq!(app.library_width, 380.0);
+        assert_eq!(app.library_width, 320.0);
         assert_eq!(app.open_panes(), panes);
         assert!(app.sidebar_open);
         assert!(!egui::DragAndDrop::has_any_payload(&ctx));
@@ -3348,7 +3405,7 @@ mod workspace_interaction_tests {
             Session::decode(&serde_json::to_vec(&saved).unwrap())
                 .unwrap()
                 .library_width,
-            380.0
+            320.0
         );
         let toggle = component_browser_toggle(&ctx);
         for expected in [false, true] {
@@ -3358,14 +3415,17 @@ mod workspace_interaction_tests {
             );
             frame(&mut app, vec![button(toggle, false)]);
             assert_eq!(app.manager.library_open, expected);
-            assert_eq!(app.library_width, 380.0);
+            assert_eq!(app.library_width, 320.0);
         }
         // Separate the resize gesture from the rapid hide/show clicks so egui
         // does not classify this sequence as a triple click.
         for _ in 0..40 {
             frame(&mut app, vec![]);
         }
-        let end = Pos2::new(app.library_width + 6.0, 180.0);
+        let end = Pos2::new(
+            workspace_ui::TOOL_RAIL_WIDTH + app.library_width + 6.0,
+            180.0,
+        );
         for _ in 0..2 {
             frame(
                 &mut app,
@@ -4110,7 +4170,7 @@ mod workspace_interaction_tests {
         let output = workspace_frame(&mut app, &ctx, now, vec![]);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(shape)
             if shape.fill == app.background.sample([0.5; 2]) && shape.rect == Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0)))));
-        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Components")));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Visualizers")));
         app.show_shortcuts = true; // A hidden modal must never trap fullscreen.
         workspace_frame(
             &mut app,
@@ -4895,10 +4955,14 @@ mod workspace_interaction_tests {
                         let bounds = ctx.content_rect();
                         let canvas = app.scene_library.canvas.unwrap();
                         let browser_bounds = Rect::from_min_max(
-                            bounds.min + Vec2::new(0.0, workspace_ui::NAV_HEIGHT),
+                            bounds.min
+                                + Vec2::new(
+                                    workspace_ui::TOOL_RAIL_WIDTH,
+                                    workspace_ui::NAV_HEIGHT,
+                                ),
                             bounds.max,
                         );
-                        let left = bounds.left()
+                        let left = browser_bounds.left()
                             + if browser {
                                 library_width(browser_bounds, inspector, app.library_width)
                             } else {

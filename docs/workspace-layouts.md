@@ -76,15 +76,28 @@ and the drag grip first, keeping fullscreen and close accessible; Inspect is alw
 
 ## Add components
 
-**Add New** in the top-left navigation opens a dropdown of every component, grouped
-under Instruments and Visualizers. Selecting one adds a pane beside the selected
-pane. New empty workspaces also offer a component browser for dragging components
-to pane edges or centers.
-The browser docks flush on the left with a compact header and one list of components.
-Each single-line row shows an icon, name, and six-dot drag grip, with full-width
-dividers. Descriptions remain available on hover; search and category tabs are
-currently omitted. Small **Scientific instruments** and **Visualizers** headings
-separate measurement components from artistic ones.
+A slim tool rail stays along the left edge of the editor. Its **+** button opens
+or closes the visualizer browser beside it; the separate left-drawer icon in the
+top-left navigation controls the same drawer. The rail currently contains just
+**+**, leaving room for future tools. Signals and Macros remain in the footer.
+The rail is hidden during pane fullscreen, and returns with the editor.
+
+The browser slides out beside the rail and retains its remembered resize width.
+Its header X closes the drawer while leaving the rail available. Every component
+is organized into one of these groups:
+
+- **Primitives:** Frequency spectrum, Waveform, Spectrogram, Stereometer and
+  Oscilloscope.
+- **3D Visualizations:** 3D Waterfall, 3D Sphere, 3D Cylinder, 3D Rings, Lotus Flower
+  and Strata.
+- **Particles & Flow:** Flux, Orbital, Particle Waves and Spectral Bloom.
+- **Surfaces & Patterns:** Veroni and Cymatics.
+- **Shader Visuals:** MilkDrop.
+
+Each single-line row shows an icon, name and six-dot drag grip, with the same
+section rules and surfaces as the inspector. Descriptions remain available on
+hover. Categories organize the browser without changing saved component IDs,
+settings or layout order.
 
 Veroni, Strata, and Flux share the [Audio mappings inspector](audio-modulation.md)
 for selecting frequency bands, routing them to specific movements or appearance,

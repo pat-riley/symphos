@@ -17,6 +17,7 @@ pub enum Icon {
     Strata,
     Flux,
     Inspector,
+    Browser,
     Plus,
     Save,
     GridView,
@@ -66,6 +67,10 @@ pub fn sized_button(
 /// A monochrome, borderless toolbar control matching a native sidebar toggle.
 pub fn sidebar_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
     toolbar_toggle(ui, Icon::Inspector, open, size, description)
+}
+
+pub fn browser_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
+    toolbar_toggle(ui, Icon::Browser, open, size, description)
 }
 
 pub fn library_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
@@ -200,14 +205,19 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
             line(&[(10.0, 3.0), (10.0, 17.0)]);
             line(&[(3.0, 10.0), (17.0, 10.0)]);
         }
-        Icon::Inspector => {
+        Icon::Inspector | Icon::Browser => {
             painter.rect_stroke(
                 Rect::from_min_max(p(1.0, 3.0), p(19.0, 17.0)),
                 2.0,
                 stroke,
                 egui::StrokeKind::Inside,
             );
-            line(&[(12.0, 3.0), (12.0, 17.0)]);
+            let divider = if matches!(icon, Icon::Browser) {
+                7.0
+            } else {
+                12.0
+            };
+            line(&[(divider, 3.0), (divider, 17.0)]);
         }
         Icon::Resonance => {
             for radius in [4.5, 6.5, 9.0] {

@@ -12,6 +12,48 @@ pub const NAV_CONTROL_HEIGHT: f32 = 26.0;
 pub const NAV_PADDING: f32 = 8.0;
 pub const NAV_HEIGHT: f32 = NAV_CONTROL_HEIGHT + 2.0 * NAV_PADDING;
 
+pub const TOOL_RAIL_WIDTH: f32 = 44.0;
+const TOOL_SIZE: f32 = 32.0;
+
+// Presentation-only groups: serialized component identities and order are unchanged.
+const COMPONENT_GROUPS: &[(&str, &[ModuleKind])] = &[
+    (
+        "Primitives",
+        &[
+            ModuleKind::Spectrum,
+            ModuleKind::Waveform,
+            ModuleKind::Spectrogram,
+            ModuleKind::Stereometer,
+            ModuleKind::Oscilloscope,
+        ],
+    ),
+    (
+        "3D Visualizations",
+        &[
+            ModuleKind::Waterfall,
+            ModuleKind::Sphere,
+            ModuleKind::Cylinder,
+            ModuleKind::Rings,
+            ModuleKind::Resonance,
+            ModuleKind::Strata,
+        ],
+    ),
+    (
+        "Particles & Flow",
+        &[
+            ModuleKind::Flux,
+            ModuleKind::Orbital,
+            ModuleKind::ParticleWaves,
+            ModuleKind::SpectralBloom,
+        ],
+    ),
+    (
+        "Surfaces & Patterns",
+        &[ModuleKind::Veroni, ModuleKind::Cymatics],
+    ),
+    ("Shader Visuals", &[ModuleKind::Milkdrop]),
+];
+
 pub const LIBRARY_WIDTH: f32 = workspace::default_library_width();
 
 fn sidebar_blend(a: Color32, b: Color32, amount: f32) -> Color32 {
@@ -374,6 +416,45 @@ pub fn navigation_surface(ui: &egui::Ui, rect: Rect, theme: &AppTheme) {
     );
 }
 
+/// Persistent tool rail; the visualizer drawer slides beside it.
+pub fn tool_rail(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    browser_open: bool,
+    theme: &AppTheme,
+) -> egui::Response {
+    ui.painter().rect_filled(rect, 0.0, navigation_color(theme));
+    ui.painter().vline(
+        rect.right(),
+        rect.y_range(),
+        Stroke::new(1.0, theme.foreground.gamma_multiply(0.14)),
+    );
+    let control = Rect::from_min_size(
+        rect.min + Vec2::new((TOOL_RAIL_WIDTH - TOOL_SIZE) * 0.5, NAV_PADDING),
+        Vec2::splat(TOOL_SIZE),
+    );
+    if browser_open {
+        ui.painter()
+            .rect_filled(control, 5.0, theme.foreground.gamma_multiply(0.07));
+    }
+    let mut tools = navigation_region(ui, control, "left-tool-rail", theme);
+    tools.set_clip_rect(rect.intersect(ui.clip_rect()));
+    let response = icons::library_toggle(
+        &mut tools,
+        browser_open,
+        TOOL_SIZE,
+        if browser_open {
+            "Hide visualizers · Cmd/Ctrl+Shift+A"
+        } else {
+            "Add a visualizer · Cmd/Ctrl+Shift+A"
+        },
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Add a visualizer")
+    });
+    response
+}
+
 pub fn navigation_region(ui: &mut egui::Ui, rect: Rect, id: &str, theme: &AppTheme) -> egui::Ui {
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(rect));
     let field = if theme.dark_mode {
@@ -608,7 +689,7 @@ impl Manager {
             .inner_margin(8)
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Components").size(13.0).strong());
+                    ui.label(RichText::new("Visualizers").size(13.0).strong());
                     ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                         ui.visuals_mut().button_frame = false;
                         icons::sized_button(
@@ -630,36 +711,34 @@ impl Manager {
         sidebar_rule(&mut child, rect);
         egui::ScrollArea::vertical().id_salt("component-results").auto_shrink([false, false]).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            // Keep spatial instruments first, then include every registered component.
-            let spatial = [ModuleKind::Waterfall, ModuleKind::Sphere, ModuleKind::Cylinder, ModuleKind::Rings];
-            for kind in spatial.into_iter().chain(ModuleKind::ALL.into_iter().filter(|kind| !spatial.contains(kind))) {
-                if matches!(kind, ModuleKind::Waterfall | ModuleKind::Veroni) {
-                    egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
-                        ui.label(RichText::new(if kind == ModuleKind::Waterfall { "Scientific instruments" } else { "Visualizers" }).strong());
+            for &(category, kinds) in COMPONENT_GROUPS {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
+                    ui.label(RichText::new(category).strong());
+                });
+                for &kind in kinds {
+                    ui.push_id(kind.label(), |ui| {
+                        sidebar_rule(ui, rect);
+                        let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click_and_drag());
+                        let response = drag_cursor(response);
+                        if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, ui.visuals().widgets.noninteractive.bg_fill); }
+                        let badge = Rect::from_center_size(egui::pos2(row.left() + 20.0, row.center().y), Vec2::splat(20.0));
+                        icons::paint(ui, badge, kind.icon(), theme.foreground);
+                        let labels = Rect::from_min_max(egui::pos2(badge.right() + 9.0, row.top()),
+                            egui::pos2(row.right() - 32.0, row.bottom()));
+                        // Paint labels without child widgets so the whole row keeps
+                        // its click/drag interaction, including directly over text.
+                        let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(12.0), theme.foreground, labels.width());
+                        job.wrap.max_rows = 1;
+                        let galley = ui.painter().layout_job(job);
+                        let position = egui::pos2(labels.left(), labels.center().y - galley.size().y * 0.5);
+                        ui.painter_at(labels).galley(position, galley, theme.foreground);
+                        paint_drag_grip(ui, Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), Vec2::splat(16.0)), theme.muted);
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Add {}", kind.label())));
+                        response.dnd_set_drag_payload(DragPayload::Component(kind));
+                        if response.clicked() && can_add { actions.push(Action::Add(kind)); }
+                        response.help_text(format!("{} Drag to a pane edge to add, or its center to replace. Click to add beside the selected pane.", kind.description()));
                     });
                 }
-                ui.push_id(kind.label(), |ui| {
-                    sidebar_rule(ui, rect);
-                    let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click_and_drag());
-                    let response = drag_cursor(response);
-                    if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, ui.visuals().widgets.noninteractive.bg_fill); }
-                    let badge = Rect::from_center_size(egui::pos2(row.left() + 20.0, row.center().y), Vec2::splat(20.0));
-                    icons::paint(ui, badge, kind.icon(), theme.foreground);
-                    let labels = Rect::from_min_max(egui::pos2(badge.right() + 9.0, row.top()),
-                        egui::pos2(row.right() - 32.0, row.bottom()));
-                    // Paint labels without child widgets so the whole row keeps
-                    // its click/drag interaction, including directly over text.
-                    let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(12.0), theme.foreground, labels.width());
-                    job.wrap.max_rows = 1;
-                    let galley = ui.painter().layout_job(job);
-                    let position = egui::pos2(labels.left(), labels.center().y - galley.size().y * 0.5);
-                    ui.painter_at(labels).galley(position, galley, theme.foreground);
-                    paint_drag_grip(ui, Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), Vec2::splat(16.0)), theme.muted);
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Add {}", kind.label())));
-                    response.dnd_set_drag_payload(DragPayload::Component(kind));
-                    if response.clicked() && can_add { actions.push(Action::Add(kind)); }
-                    response.help_text(format!("{} Drag to a pane edge to add, or its center to replace. Click to add beside the selected pane.", kind.description()));
-                });
             }
             sidebar_rule(ui, rect);
             egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
@@ -886,6 +965,33 @@ pub fn drop_hint(ui: &egui::Ui, rect: Rect, message: &str, accent: Color32) {
 mod tests {
     use super::*;
     use eframe::egui::Pos2;
+    #[test]
+    fn browser_categories_keep_the_five_analyzers_as_primitives_and_cover_all_modules() {
+        let primitives = COMPONENT_GROUPS
+            .iter()
+            .find(|(name, _)| *name == "Primitives")
+            .unwrap()
+            .1;
+        assert_eq!(primitives.len(), 5);
+        for kind in [
+            ModuleKind::Spectrum,
+            ModuleKind::Waveform,
+            ModuleKind::Spectrogram,
+            ModuleKind::Stereometer,
+            ModuleKind::Oscilloscope,
+        ] {
+            assert!(primitives.contains(&kind));
+        }
+        let all: Vec<_> = COMPONENT_GROUPS
+            .iter()
+            .flat_map(|(_, kinds)| kinds.iter().copied())
+            .collect();
+        assert_eq!(all.len(), ModuleKind::ALL.len());
+        for kind in ModuleKind::ALL {
+            assert_eq!(all.iter().filter(|k| **k == kind).count(), 1);
+        }
+    }
+
     #[test]
     fn component_drawer_exposes_every_registered_visualizer() {
         let ctx = egui::Context::default();

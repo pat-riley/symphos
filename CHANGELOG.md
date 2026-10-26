@@ -5,6 +5,11 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add a persistent left tool rail with a + button for the visualizer drawer and
+  a separate top-left drawer icon. Group the browser into Primitives, 3D
+  Visualizations, Particles & Flow, Surfaces & Patterns and Shader Visuals;
+  preserve click-to-add, drag placement, drawer resizing and fullscreen behavior.
+
 - Make Signals purpose-first: add Loudness, Bass Energy, Bass Hits and other
   ready-to-use detection types, then adjust their response with a live preview
   and connected-visual readout. Keep custom insert chains under Advanced and
