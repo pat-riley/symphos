@@ -7,15 +7,89 @@ the response, and perform or share the result.
 Live progress is tracked in the
 [GitHub roadmap issue](https://github.com/pat-riley/symphos/issues/19).
 
-The [desktop and plugin plan](cross-platform-plan.md) brings macOS portability
-and plugin feasibility forward as a parallel workstream, while retaining
-Omarchy compatibility. It does not depend on completing the scene editor.
+Symphos is a standalone application first. The
+[desktop and plugin plan](cross-platform-plan.md) retains future VST3/DAW
+integration research, but plugin implementation and framework prototypes are
+deferred while standalone audio responsiveness and usability improve.
 The [landing page brief](landing-page-brief.md) covers the separate public site.
+
+## Current priorities — 25 October 2026
+
+Projects/scenes, scene and component presets, Undo/Redo, macros, signal insert
+chains, editable color libraries, a local macOS build, and Linux/macOS CI already
+exist. Their presence does not establish release readiness or completion of the
+full layered scene-composition model described below. The longer-term areas
+should be read against this inventory rather than as a list of unstarted work.
+
+### 1. Audio responsiveness and understandable Signals
+
+- Improve transient, envelope, level and beat response before adding more
+  visualizers or starting plugin development.
+- Share capture and reusable fast/detailed analysis between consumers. Keep
+  FFT resolution and device choices in application settings; do not require
+  users to tune an FFT to create a responsive signal.
+- Give each signal its own relevant frequency range, sensitivity, threshold,
+  normalization and attack/release controls. Expose controls appropriate to
+  that signal's purpose instead of showing every processor option at once.
+- Make signal setup explain what is being detected, how the response is shaped,
+  and which visual parameters it controls. Review the current insert-first
+  interaction before expanding it; its purpose and audible/visual behavior are
+  not sufficiently clear to users.
+- Make input, detected value, final response and connected visual destination
+  easy to compare live. Existing insert input/output monitors should make
+  changes perceptible without requiring users to understand the chain first.
+- Keep advanced processing available, preserve existing chains, stable signal
+  identities and mappings, and avoid silently rewriting saved custom chains.
+- Separate a signal's detection/response from the amount and range applied at
+  each visual mapping. One shared signal can drive multiple destinations with
+  different strengths.
+- Clearly explain that processing affects visualization inputs/control values;
+  it does not change the sound played through the speakers.
+- Establish deterministic test audio for impulses, bass hits, sustained tones,
+  varied-level music and silence. Measure response timing, false triggers,
+  silence recovery and consistency across render rates. Distinguish FFT-window
+  duration from measured capture-to-visible-response latency.
+
+Exit condition: create a bass-driven visual response through understandable
+signal controls, see the result of each adjustment, and retain useful behavior
+across quiet/loud recordings without reconstructing an insert chain manually.
+Existing projects and custom insert chains retain their behavior.
+
+### 2. Performance and reliability alongside audio work
+
+- Track capture drops, analysis cost, slow frames and sustained memory growth
+  with representative scenes and repeatable workloads.
+- Exercise device/source changes, silence, sleep/wake, recording and scene
+  switching in sustained sessions; preserve the independent capture lane.
+- Validate realistic 60/120 FPS workloads and report tail latency and overruns
+  alongside average FPS. Publish measured limits before promising budgets.
+
+### 3. Export workspace after the audio-response milestone
+
+- Explore an **Export** dock tab beside **Signals** and **Macros**.
+- Put canvas/output size, aspect ratio and export controls in that workspace;
+  keep output resolution independent of the editor window size.
+- Begin from the existing live single-component recording implementation,
+  then define full-scene/workspace framing and export behavior explicitly.
+- Decide live recording versus offline audio-file rendering, audio routing,
+  frame rate, format, progress and cancellation behavior before implementation.
+
+Export is a follow-up design direction, not part of the initial responsiveness
+work. Existing recording remains available while the workspace is designed.
+
+### 4. VST3 and other DAW integration — deferred
+
+Keep VST3 on the roadmap as a future way to use Symphos inside a DAW. Do not
+start a plugin shell, framework migration or embedded-editor prototype in the
+current milestone. Revisit the embedded-plugin versus standalone-sender choice
+after the standalone workflow and audio response are reliable. Preserve the
+existing independent audio/analysis/render boundaries in the meantime.
 
 The complete [analyzer feature backlog](analyzer-feature-backlog.md) records
 the current parity inventory, shipped waveform work, proposed metering modules,
-capture workflows, workspace features, and platform integrations. The roadmap
-phases below determine their delivery order:
+capture workflows, workspace features, and platform integrations. The
+longer-term areas below describe the broader direction; the current priorities
+above determine near-term delivery order:
 
 - **Analyzer foundation:** independent component sources, Mid/Side routing,
   reference spectra, measurement cursors, Mel/piano views, and sharper
@@ -59,8 +133,9 @@ multiple components can use different sources without blocking one another.
 
 ## 2. Build the modulation engine
 
-Create a renderer-independent signal system that converts raw analysis data
-into values useful for visuals.
+A renderer-independent signal system, typed insert chains and signal mappings
+are implemented. Improve their responsiveness and interaction model as described
+in the current priorities, then expand the available musical information.
 
 Signal sources:
 
@@ -178,8 +253,8 @@ gracefully when shader compilation fails.
 - Add scene thumbnails, metadata, and exportable bundles.
 - Add bounded source recording and retrospective 10/60-second audio clips
   without moving file I/O onto the realtime capture path.
-- Evaluate DAW sender and transport bridges before committing to VST3, CLAP,
-  or Audio Unit versions of individual components.
+- Deferred: evaluate DAW sender/transport bridges and VST3, CLAP or Audio Unit
+  integration after the standalone audio-response and usability milestones.
 - Produce reproducible Arch Linux packages and signed GitHub releases.
 - Separate audio capture and theme integration behind platform interfaces, then
   add macOS Core Audio and Windows WASAPI backends, including supported forms
