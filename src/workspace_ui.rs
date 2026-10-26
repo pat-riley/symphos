@@ -35,6 +35,7 @@ const COMPONENT_GROUPS: &[(&str, &[ModuleKind])] = &[
             ModuleKind::Cylinder,
             ModuleKind::Rings,
             ModuleKind::Resonance,
+            ModuleKind::Filament,
             ModuleKind::Strata,
         ],
     ),

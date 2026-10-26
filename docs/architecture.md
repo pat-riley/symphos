@@ -165,6 +165,18 @@ fields default safely in existing presets, retaining their geometry/camera
 values. Silence leaves the resting flower unchanged, and the pane's virtual
 clock holds all response during pause. Renderers precompute band levels by
 layer, row or column rather than repeat spectrum analysis per vertex.
+Filament builds overlapping thread sculptures from procedural closed contours.
+Its three profiles (loops, spindles and folds) share shape, staggered gap and
+palette controls. Each frame samples the existing 96-band frequency display
+once, smooths normalized energy on the pane's virtual clock, and uses it for
+local strand bending and overall expansion; silence retains the resting form.
+Capture/source resets clear response history. Depth-sorted shaded segment meshes
+are limited to 24,000 segments, including at maximum form/strand/detail settings.
+Only settings persist; no generated geometry or response buffers enter projects.
+It uses the shared scene background and camera adapter, with the axis navigator
+off by default. Filament is appended to module/macro-bank ordering, and complete
+legacy component sets gain its default settings without disturbing existing ones.
+
 3D Rings wraps signed time-domain samples around each orbit. Geometry → Trace
 source selects Waveform (a fixed time window) or Oscilloscope (1–8 pitch-locked
 cycles, using the standalone scope’s normalized autocorrelation and rising zero

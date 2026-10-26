@@ -34,6 +34,7 @@ mod camera;
 mod camera_gizmo;
 mod camera_motion;
 mod cymatics;
+mod filament;
 mod flux;
 mod frequency;
 #[cfg(test)]
@@ -81,6 +82,7 @@ use crate::help::HoverHelp;
 use crate::icons::Icon;
 use crate::{analysis::AnalysisFrame, theme::AppTheme};
 use cymatics::Cymatics;
+use filament::Filament;
 use flux::Flux;
 use milkdrop::Milkdrop;
 use orbital::Orbital;
@@ -124,10 +126,11 @@ pub enum ModuleKind {
     Cymatics,
     ParticleWaves,
     SpectralBloom,
+    Filament,
 }
 
 impl ModuleKind {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Waterfall,
         Self::Spectrum,
         Self::Waveform,
@@ -146,10 +149,12 @@ impl ModuleKind {
         Self::Cymatics,
         Self::ParticleWaves,
         Self::SpectralBloom,
+        Self::Filament,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Filament => "Filament",
             Self::SpectralBloom => "Spectral Bloom",
             Self::ParticleWaves => "Particle Waves",
             Self::Cymatics => "Cymatics",
@@ -173,6 +178,7 @@ impl ModuleKind {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Filament => Icon::Strata,
             Self::SpectralBloom => Icon::Bars,
             Self::ParticleWaves => Icon::Strata,
             Self::Cymatics => Icon::Resonance,
@@ -196,6 +202,7 @@ impl ModuleKind {
 
     pub fn subtitle(self) -> &'static str {
         match self {
+            Self::Filament => "Woven 3D thread sculptures",
             Self::SpectralBloom => "Sculptural spectrum, strands and feedback",
             Self::ParticleWaves => "Layered spectral particle ribbons",
             Self::Cymatics => "Audio-driven vibrating plates",
@@ -219,6 +226,9 @@ impl ModuleKind {
 
     pub fn description(self) -> &'static str {
         match self {
+            Self::Filament => {
+                "Layered thread contours form sculpted loops, spindles and folded ribbons. Spectrum energy bends the strands and expands the sculpture. Adjust the weave, gaps, palette and camera in the inspector."
+            }
             Self::SpectralBloom => {
                 "Measured spectrum columns bend into luminous strands and dissolve into particles. Transform lingering light with image feedback; tune shape, color, motion and the 3D camera in the inspector."
             }
@@ -292,6 +302,7 @@ pub struct ModulePane {
     cylinder: SpectralSurface,
     rings: Rings,
     resonance: Resonance,
+    filament: Filament,
     orbital: Orbital,
     milkdrop: Milkdrop,
     cymatics: Cymatics,
@@ -305,8 +316,8 @@ pub struct ModulePane {
     veroni: Veroni,
     strata: Strata,
     flux: Flux,
-    active_sections: [usize; 18],
-    camera_runtime: [camera::Runtime; 18],
+    active_sections: [usize; 19],
+    camera_runtime: [camera::Runtime; 19],
     inspector_focus: Option<SettingsSection>,
     frozen: Option<FrozenFrame>,
     paused_duration: Duration,
@@ -320,6 +331,7 @@ pub enum ModuleSettings {
     Cylinder(spectral_surface::SurfaceSettings),
     Rings(rings::RingsSettings),
     Resonance(resonance::ResonanceSettings),
+    Filament(filament::Settings),
     Orbital(Box<orbital::OrbitalSettings>),
     Milkdrop(Box<milkdrop::MilkdropSettings>),
     Cymatics(Box<cymatics::Settings>),
@@ -373,6 +385,7 @@ impl ModuleSettings {
             Self::Cymatics(_) => ModuleKind::Cymatics,
             Self::ParticleWaves(_) => ModuleKind::ParticleWaves,
             Self::SpectralBloom(_) => ModuleKind::SpectralBloom,
+            Self::Filament(_) => ModuleKind::Filament,
             Self::Resonance(_) => ModuleKind::Resonance,
             Self::Rings(_) => ModuleKind::Rings,
             Self::Cylinder(_) => ModuleKind::Cylinder,
@@ -400,7 +413,7 @@ pub struct PaneState {
     pub instance_id: String,
     pub kind: ModuleKind,
     #[serde(deserialize_with = "decode_sections")]
-    pub sections: [usize; 18],
+    pub sections: [usize; 19],
     #[serde(default)]
     pub orbital_inspector_version: u8,
     #[serde(default)]
@@ -413,14 +426,14 @@ pub struct PaneState {
 // Only complete known legacy sets are upgraded; malformed sets still fail validation.
 fn decode_sections<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<[usize; 18], D::Error> {
+) -> Result<[usize; 19], D::Error> {
     let values = <Vec<usize> as serde::Deserialize>::deserialize(deserializer)?;
-    if !(6..=18).contains(&values.len()) {
+    if !(6..=19).contains(&values.len()) {
         return Err(serde::de::Error::custom(
-            "expected six to eighteen module sections",
+            "expected six to nineteen module sections",
         ));
     }
-    let mut sections = [0; 18];
+    let mut sections = [0; 19];
     sections[..values.len()].copy_from_slice(&values);
     Ok(sections)
 }
@@ -429,7 +442,7 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Vec<ModuleSettings>, D::Error> {
     let mut settings = <Vec<ModuleSettings> as serde::Deserialize>::deserialize(deserializer)?;
     let legacy_len = settings.len();
-    if (6..=17).contains(&legacy_len)
+    if (6..=18).contains(&legacy_len)
         && ModuleKind::ALL[..legacy_len].iter().all(|kind| {
             settings
                 .iter()
@@ -483,9 +496,14 @@ fn decode_module_settings<'de, D: serde::Deserializer<'de>>(
         if legacy_len <= 16 {
             settings.push(ModuleSettings::ParticleWaves(Box::default()));
         }
-        settings.push(ModuleSettings::SpectralBloom(Box::new(
-            particle_waves::Settings::spectral_bloom(),
-        )));
+        if legacy_len <= 17 {
+            settings.push(ModuleSettings::SpectralBloom(Box::new(
+                particle_waves::Settings::spectral_bloom(),
+            )));
+        }
+        settings.push(ModuleSettings::Filament(
+            Filament::default().settings_snapshot(),
+        ));
     }
     Ok(settings)
 }
@@ -624,6 +642,7 @@ impl ModulePane {
             ModuleKind::Orbital => {
                 ModuleSettings::Orbital(Box::new(self.orbital.settings_snapshot()))
             }
+            ModuleKind::Filament => ModuleSettings::Filament(self.filament.settings_snapshot()),
             ModuleKind::Resonance => ModuleSettings::Resonance(self.resonance.settings_snapshot()),
             ModuleKind::Rings => ModuleSettings::Rings(self.rings.settings_snapshot()),
             ModuleKind::Cylinder => ModuleSettings::Cylinder(self.cylinder.settings_snapshot()),
@@ -656,6 +675,7 @@ impl ModulePane {
             ModuleSettings::ParticleWaves(settings) => self.particle_waves.apply_settings(settings),
             ModuleSettings::Orbital(settings) => self.orbital.apply_settings(settings),
             ModuleSettings::Milkdrop(settings) => self.milkdrop.apply_settings(settings),
+            ModuleSettings::Filament(settings) => self.filament.apply_settings(settings),
             ModuleSettings::Resonance(settings) => self.resonance.apply_settings(settings),
             ModuleSettings::Rings(settings) => self.rings.apply_settings(settings),
             ModuleSettings::Cylinder(settings) => self.cylinder.apply_settings(settings),
@@ -698,6 +718,7 @@ impl ModulePane {
                 ModuleSettings::Cymatics(Box::new(self.cymatics.settings_snapshot())),
                 ModuleSettings::ParticleWaves(Box::new(self.particle_waves.settings_snapshot())),
                 ModuleSettings::SpectralBloom(Box::new(self.spectral_bloom.settings_snapshot())),
+                ModuleSettings::Filament(self.filament.settings_snapshot()),
             ],
         }
     }
@@ -768,6 +789,7 @@ impl ModulePane {
             ModuleKind::Cylinder => self.cylinder.set_palette(palette),
             ModuleKind::Rings => self.rings.set_palette(palette),
             ModuleKind::Resonance => self.resonance.set_palette(palette),
+            ModuleKind::Filament => self.filament.set_palette(palette),
             ModuleKind::Spectrum => self.spectrum.set_palette(palette),
             ModuleKind::Waveform => self.waveform.set_palette(palette),
             ModuleKind::Spectrogram => self.spectrogram.set_palette(palette),
@@ -800,6 +822,7 @@ impl ModulePane {
             cylinder: SpectralSurface::cylinder(),
             rings: Rings::default(),
             resonance: Resonance::default(),
+            filament: Filament::default(),
             orbital: Orbital::default(),
             milkdrop: Milkdrop::default(),
             cymatics: Cymatics::default(),
@@ -813,7 +836,7 @@ impl ModulePane {
             veroni: Veroni::default(),
             strata: Strata::default(),
             flux: Flux::default(),
-            active_sections: [0; 18],
+            active_sections: [0; 19],
             camera_runtime: std::array::from_fn(|_| Default::default()),
             inspector_focus: None,
             frozen: None,
@@ -829,6 +852,7 @@ impl ModulePane {
         self.cylinder.clear();
         self.rings.clear();
         self.resonance.clear();
+        self.filament.clear();
         self.cymatics.clear();
         self.particle_waves.clear();
         self.spectral_bloom.clear();
@@ -847,6 +871,7 @@ impl ModulePane {
         self.cylinder.clear();
         self.rings.clear();
         self.resonance.clear();
+        self.filament.clear();
         self.cymatics.clear();
         self.particle_waves.clear();
         self.spectral_bloom.clear();
@@ -890,6 +915,7 @@ impl ModulePane {
             ModuleKind::Orbital => self.orbital.reset_settings(),
             ModuleKind::Milkdrop => self.milkdrop.reset_settings(),
             ModuleKind::Resonance => self.resonance.reset_settings(),
+            ModuleKind::Filament => self.filament.reset_settings(),
             ModuleKind::Rings => self.rings.reset_settings(),
             ModuleKind::Cylinder => self.cylinder.reset_settings(),
             ModuleKind::Sphere => self.sphere.reset_settings(),
@@ -1145,6 +1171,7 @@ impl ModulePane {
             ModuleKind::Orbital => self.orbital.controls(ui),
             ModuleKind::Milkdrop => self.milkdrop.controls(ui),
             ModuleKind::Resonance => self.resonance.controls(ui),
+            ModuleKind::Filament => self.filament.controls(ui),
             ModuleKind::Rings => self.rings.controls(ui),
             ModuleKind::Cylinder => self.cylinder.controls(ui),
             ModuleKind::Sphere => self.sphere.controls(ui),
@@ -1226,6 +1253,7 @@ impl ModulePane {
             ModuleKind::Cylinder => &mut self.cylinder,
             ModuleKind::Rings => &mut self.rings,
             ModuleKind::Resonance => &mut self.resonance,
+            ModuleKind::Filament => &mut self.filament,
             ModuleKind::Orbital => &mut self.orbital,
             ModuleKind::Cymatics => &mut self.cymatics,
             ModuleKind::ParticleWaves => &mut self.particle_waves,
@@ -1275,6 +1303,7 @@ impl ModulePane {
             ModuleKind::Orbital => &[Particles, Orbs, Response, Camera, Rendering],
             ModuleKind::Milkdrop => &[Presets, Flow, Appearance, Response, Rendering],
             ModuleKind::Resonance => &[Geometry, Flow, Frequency, Response, Appearance, Camera],
+            ModuleKind::Filament => &[Geometry, Frequency, Response, Appearance, Camera],
             ModuleKind::Rings => &[Geometry, Channels, TimeWindow, Response, Appearance, Camera],
             ModuleKind::Spectrum => &[Frequency, Response, Appearance],
             ModuleKind::Spectrogram => &[History, Frequency, Response, Appearance],
@@ -1372,6 +1401,7 @@ impl ModulePane {
         self.spectrum.clear();
         self.particle_waves.clear_input_history();
         self.spectral_bloom.clear_input_history();
+        self.filament.clear_input_history();
     }
 
     pub fn routed_frame(&mut self, main: &AnalysisFrame) -> AnalysisFrame {
@@ -1532,6 +1562,15 @@ impl ModulePane {
                 true,
                 |m, ui| m.draw(ui, rect, frame, theme, now, live),
             ),
+            ModuleKind::Filament => camera::draw(
+                &mut self.filament,
+                &mut self.camera_runtime[self.kind as usize],
+                ui,
+                rect,
+                now,
+                false,
+                |m, ui| m.draw(ui, rect, frame, theme, now, live),
+            ),
             ModuleKind::Resonance => camera::draw(
                 &mut self.resonance,
                 &mut self.camera_runtime[self.kind as usize],
@@ -1629,7 +1668,8 @@ impl ModulePane {
         if !live
             && !matches!(
                 self.kind,
-                ModuleKind::Orbital
+                ModuleKind::Filament
+                    | ModuleKind::Orbital
                     | ModuleKind::Milkdrop
                     | ModuleKind::Cymatics
                     | ModuleKind::ParticleWaves

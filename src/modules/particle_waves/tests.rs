@@ -147,10 +147,11 @@ fn sixteen_component_projects_upgrade_without_changing_existing_settings() {
     let mut json = serde_json::to_value(&original).unwrap();
     json["sections"].as_array_mut().unwrap().truncate(16);
     json["macros"]["banks"].as_array_mut().unwrap().truncate(16);
-    json["settings"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|v| v.get("ParticleWaves").is_none() && v.get("SpectralBloom").is_none());
+    json["settings"].as_array_mut().unwrap().retain(|v| {
+        v.get("ParticleWaves").is_none()
+            && v.get("SpectralBloom").is_none()
+            && v.get("Filament").is_none()
+    });
     let restored: PaneState = serde_json::from_value(json).unwrap();
     assert_eq!(original, restored);
 }
@@ -259,7 +260,7 @@ fn seventeen_component_projects_gain_bloom_without_changing_saved_settings() {
     json["settings"]
         .as_array_mut()
         .unwrap()
-        .retain(|v| v.get("SpectralBloom").is_none());
+        .retain(|v| v.get("SpectralBloom").is_none() && v.get("Filament").is_none());
     let restored: PaneState = serde_json::from_value(json).unwrap();
     assert_eq!(original, restored);
 }

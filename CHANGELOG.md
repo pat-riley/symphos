@@ -5,6 +5,13 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add Filament, a 3D thread-sculpture visualizer with sculpted loops, spindles and
+  folded ribbons. Shape overlapping forms with strand density, folds, twist,
+  taper and staggered breaks; use shared gradient palettes and scene backgrounds.
+  Spectrum energy bends individual contours and expands the sculpture with
+  adjustable smoothing. Support routed audio, macros, freeze, shared camera
+  controls and older project migration with a bounded rendering budget.
+
 - Give Signals wider strips, larger knobs and meters, and more separation between
   labels and controls. Keep audio/modulation readouts distinct, bound preview
   growth in tall docks, and scroll comfortably sized controls in short docks.
