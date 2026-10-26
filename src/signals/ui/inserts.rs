@@ -33,7 +33,7 @@ fn insert_menu(ui: &mut egui::Ui, d: &Definition, index: usize) -> Option<StripA
 }
 
 const INSERT_HEIGHT: f32 = 22.0;
-const INSERT_GAP: f32 = 8.0;
+const INSERT_GAP: f32 = 10.0;
 
 fn insert_button(
     ui: &mut egui::Ui,
@@ -208,6 +208,11 @@ pub(super) fn strip(
         egui::Color32::from_rgb(12, 18, 26)
     };
     workspace_ui::strip_surface(ui, rect, color, selected);
+    // Keep full-height selection/drag surfaces, but do not stretch graphs indefinitely.
+    let rect = Rect::from_min_size(
+        rect.min,
+        egui::vec2(rect.width(), rect.height().min(outputs::MAX_CONTENT_HEIGHT)),
+    );
     let title = Rect::from_min_max(rect.min, egui::pos2(rect.right() - 24.0, rect.top() + 28.0));
     workspace_ui::strip_title(
         ui,
@@ -240,7 +245,7 @@ pub(super) fn strip(
         action = Some(StripAction::Delete(d.id));
     }
     let controls_rect = Rect::from_min_max(
-        rect.min + egui::vec2(INSERT_GAP, 34.0),
+        rect.min + egui::vec2(INSERT_GAP, 38.0),
         egui::pos2(rect.right() - INSERT_GAP, rect.top() + 82.0),
     );
     let mut source = ui.new_child(
@@ -249,8 +254,8 @@ pub(super) fn strip(
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     source.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    source.spacing_mut().item_spacing.y = 3.0;
-    source.spacing_mut().interact_size.y = 21.0;
+    source.spacing_mut().item_spacing.y = 6.0;
+    source.spacing_mut().interact_size.y = 24.0;
     source.horizontal(|ui| {
         ui.small("Source");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -269,7 +274,7 @@ pub(super) fn strip(
     });
     if source
         .add_sized(
-            [source.available_width(), 21.0],
+            [source.available_width(), 24.0],
             egui::Button::new(match d.input {
                 Input::System => audio::default_source_label(source.ctx()),
                 Input::Lfo => "LFO".into(),
@@ -286,7 +291,7 @@ pub(super) fn strip(
             rect.left() + INSERT_GAP,
             source.min_rect().bottom() + INSERT_GAP,
         ),
-        egui::vec2(rect.width() - 2.0 * INSERT_GAP, 22.0),
+        egui::vec2(rect.width() - 2.0 * INSERT_GAP, 24.0),
     );
     let mut list = ui.new_child(
         egui::UiBuilder::new()
@@ -296,7 +301,7 @@ pub(super) fn strip(
     );
     list.set_clip_rect(list_rect.intersect(ui.clip_rect()));
     list.spacing_mut().item_spacing.y = 6.0;
-    list.spacing_mut().interact_size.y = 22.0;
+    list.spacing_mut().interact_size.y = 24.0;
     list.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
     if d.input == Input::System {
         super::guided::type_picker(&mut list, d);
@@ -317,8 +322,8 @@ pub(super) fn strip(
         action = Some(StripAction::Processor(d.id));
     }
     let graph = Rect::from_min_max(
-        egui::pos2(rect.left() + 8.0, list_rect.bottom() + INSERT_GAP),
-        egui::pos2(rect.right() - 8.0, bottom - 8.0),
+        egui::pos2(rect.left() + INSERT_GAP, list_rect.bottom() + INSERT_GAP),
+        egui::pos2(rect.right() - INSERT_GAP, bottom - 12.0),
     );
     let audio_only = d.input == Input::System && !d.has_control_output();
     let frame = snapshot.audio.get(&d.id).map(|f| f.frame.as_ref());
@@ -1101,7 +1106,15 @@ mod tests {
                 "at {height}: audio={audio_rect:?}, modulation={modulation_rect:?}"
             );
             assert!(audio_rect.bottom() + 8.0 <= modulation_rect.top());
-            assert!(modulation_rect.bottom() + 8.0 <= footer.top());
+            assert!(modulation_rect.bottom() + 12.0 <= footer.top());
+            assert!(
+                footer.height() >= 150.0,
+                "labels and knobs need their own space"
+            );
+            assert!(
+                audio_rect.height() <= 260.0 && modulation_rect.height() <= 260.0,
+                "tall docks must not stretch previews without limit"
+            );
             // A short dock scrolls the intact strip instead of crushing graphs into the footer.
             let mut out = ctx.run_ui(
                 egui::RawInput {
@@ -1131,25 +1144,29 @@ mod tests {
                 },
             );
             out.textures_delta.clear();
-            let mut out = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(900.0, height + 20.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| {
-                    panel.show(
-                        ui,
-                        ui.available_rect_before_wrap(),
-                        &AnalysisFrame::default(),
-                        false,
-                        &AppTheme::default(),
-                    )
-                },
-            );
-            out.textures_delta.clear();
+            // Let the smooth wheel scroll settle before checking footer visibility.
+            for _ in 0..30 {
+                out = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(ctx.input(|i| i.time) + 1.0 / 30.0),
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, height + 20.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel.show(
+                            ui,
+                            ui.available_rect_before_wrap(),
+                            &AnalysisFrame::default(),
+                            false,
+                            &AppTheme::default(),
+                        )
+                    },
+                );
+                out.textures_delta.clear();
+            }
             for label in ["M", "S", "Modulation amount"] {
                 assert!(
                     out.shapes.iter().any(

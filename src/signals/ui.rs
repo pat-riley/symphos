@@ -280,7 +280,7 @@ impl Panel {
                 &board,
                 "signal-strips",
                 index,
-                156.0,
+                outputs::STRIP_WIDTH,
             ));
         }
         let mixer_output = scroll.auto_shrink([false, false]).show(&mut board, |ui| {
@@ -295,8 +295,10 @@ impl Panel {
                 for (slot, id) in slots.iter().copied().enumerate() {
                     ui.push_id(("channel-slot", slot), |ui| {
                         let mut over_inserts = false;
-                        let (strip, _) =
-                            ui.allocate_exact_size(egui::vec2(156.0, height), egui::Sense::hover());
+                        let (strip, _) = ui.allocate_exact_size(
+                            egui::vec2(outputs::STRIP_WIDTH, height),
+                            egui::Sense::hover(),
+                        );
                         if let Some(id) = id
                             && self
                                 .bank
@@ -486,7 +488,7 @@ impl Panel {
             }
         });
         debug_assert!(
-            slots.len() as f32 * 156.0 > mixer_output.inner_rect.width()
+            slots.len() as f32 * outputs::STRIP_WIDTH > mixer_output.inner_rect.width()
                 || mixer_output.content_size.x <= mixer_output.inner_rect.width()
         );
         let (selected, settings) = master::strip(
@@ -1859,12 +1861,12 @@ fn channel_footer_impl(
         ui.visuals().text_color(),
     );
     let knob = Rect::from_center_size(
-        egui::pos2(rect.left() + 40.0, bottom + if split { 36.0 } else { 58.0 }),
-        egui::Vec2::splat(if split { 36.0 } else { 54.0 }),
+        egui::pos2(rect.left() + 40.0, bottom + if split { 60.0 } else { 58.0 }),
+        egui::Vec2::splat(54.0),
     );
     influence_knob(ui, knob, &mut d.influence, color);
     let value_rect = Rect::from_min_size(
-        egui::pos2(rect.left() + 12.0, bottom + if split { 56.0 } else { 88.0 }),
+        egui::pos2(rect.left() + 12.0, bottom + if split { 92.0 } else { 88.0 }),
         egui::vec2(76.0, 22.0),
     );
     let mut value_ui = ui.new_child(
@@ -1890,7 +1892,7 @@ fn channel_footer_impl(
     {
         d.influence = percent / 100.0;
     }
-    let meter_height = if split { 54.0 } else { 65.0 };
+    let meter_height = 65.0;
     let meters: &[(usize, f32, &str)] = if split {
         &[(0, sample.value.abs(), "Mod")]
     } else {
@@ -1899,8 +1901,13 @@ fn channel_footer_impl(
     for &(i, value, label) in meters {
         let meter = Rect::from_min_size(
             egui::pos2(
-                rect.left() + if split { 113.0 } else { 98.0 + i as f32 * 23.0 },
-                bottom + if split { 22.0 } else { 35.0 },
+                rect.left()
+                    + if split {
+                        rect.width() - 36.0
+                    } else {
+                        98.0 + i as f32 * 23.0
+                    },
+                bottom + 35.0,
             ),
             egui::vec2(9.0, meter_height),
         );
@@ -3119,7 +3126,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(1200.0, 800.0),
+                        egui::vec2(1500.0, 800.0),
                     )),
                     events,
                     ..Default::default()
@@ -3167,7 +3174,7 @@ mod tests {
             &mut panel,
             egui::pos2(left + 40.0, 22.0),
             egui::pos2(left + 280.0, 90.0),
-            left + 312.0,
+            left + 2.0 * outputs::STRIP_WIDTH,
         );
         assert_eq!(
             &panel.bank.slots[..5],
@@ -3178,7 +3185,7 @@ mod tests {
         }
         drag(
             &mut panel,
-            egui::pos2(left + 196.0, 22.0),
+            egui::pos2(left + outputs::STRIP_WIDTH + 40.0, 22.0),
             egui::pos2(left + 20.0, 90.0),
             left,
         );
@@ -3191,8 +3198,8 @@ mod tests {
         drag(
             &mut panel,
             egui::pos2(left + 40.0, 22.0),
-            egui::pos2(left + 790.0, 90.0),
-            left + 780.0,
+            egui::pos2(left + 5.0 * outputs::STRIP_WIDTH + 10.0, 90.0),
+            left + 5.0 * outputs::STRIP_WIDTH,
         );
         assert_eq!(
             panel.bank.slots,

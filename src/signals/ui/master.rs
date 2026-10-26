@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) fn layout(content: Rect) -> (Rect, Rect) {
-    let split = (content.right() - 156.0).max(content.left());
+    let split = (content.right() - outputs::STRIP_WIDTH).max(content.left());
     (
         Rect::from_min_max(content.min, egui::pos2(split, content.bottom())),
         Rect::from_min_max(egui::pos2(split, content.top()), content.max),
@@ -103,7 +103,7 @@ pub(super) fn strip(
                 .size(10.0),
             );
             body.add_space(8.0);
-            let plot_height = (body.available_height() - 100.0).max(64.0);
+            let plot_height = (body.available_height() - 100.0).clamp(64.0, 240.0);
             let (plot, _) = body.allocate_exact_size(
                 egui::vec2(body.available_width(), plot_height),
                 egui::Sense::hover(),
@@ -239,8 +239,8 @@ mod tests {
             let mut panel = Panel::default();
             let out = render(&ctx, &mut panel, width, vec![]);
             let title = text_rect(&out, "Studio capture");
-            assert!(title.left() > width - 156.0 && title.right() <= width);
-            assert!(text_rect(&out, "Always available").left() > width - 156.0);
+            assert!(title.left() > width - outputs::STRIP_WIDTH && title.right() <= width);
+            assert!(text_rect(&out, "Always available").left() > width - outputs::STRIP_WIDTH);
             click(&ctx, &mut panel, width, title.center());
             assert_eq!(panel.selected, Some(MASTER_ID));
             assert!(panel.inspect_requested);

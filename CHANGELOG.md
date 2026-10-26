@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Give Signals wider strips, larger knobs and meters, and more separation between
+  labels and controls. Keep audio/modulation readouts distinct, bound preview
+  growth in tall docks, and scroll comfortably sized controls in short docks.
+
 - Make auto-orbit, wobble and auto-pan independent across 3D cameras, including
   Waterfall. Enabling orbit no longer wakes another motion through a shared
   master switch. Keep disabled effect clocks paused, preserve motion settings

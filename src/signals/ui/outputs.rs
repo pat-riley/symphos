@@ -1,8 +1,10 @@
 //! Distinct readouts for the audio feed and the final modulation value.
 use super::*;
 
-pub(super) const MIN_STRIP_HEIGHT: f32 = 384.0;
-pub(super) const FOOTER_HEIGHT: f32 = 110.0;
+pub(super) const STRIP_WIDTH: f32 = 180.0;
+pub(super) const MIN_STRIP_HEIGHT: f32 = 450.0;
+pub(super) const MAX_CONTENT_HEIGHT: f32 = 530.0;
+pub(super) const FOOTER_HEIGHT: f32 = 152.0;
 
 fn header(ui: &egui::Ui, rect: Rect, title: &str, destination: &str, value: &str) -> Rect {
     let painter = ui.painter_at(rect);

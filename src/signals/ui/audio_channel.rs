@@ -188,9 +188,9 @@ pub(super) fn footer(
     let knob = Rect::from_center_size(
         egui::pos2(
             rect.left() + 40.0,
-            bottom + if combined { 36.0 } else { 58.0 },
+            bottom + if combined { 60.0 } else { 58.0 },
         ),
-        egui::Vec2::splat(if combined { 36.0 } else { 54.0 }),
+        egui::Vec2::splat(54.0),
     );
     let response=ui.interact(knob,ui.id().with("audio-gain"),egui::Sense::click_and_drag()).on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical).help_text("Audio input gain · drag vertically · Shift: fine · double-click: 0 dB. Applies to this channel's waveform, spectrum and measurements.");
     if response.dragged() {
@@ -209,11 +209,7 @@ pub(super) fn footer(
     let t = (bus.gain_db + 48.0) / 84.0;
     let arc = |end: f32| {
         (0..=40)
-            .map(|i| {
-                knob.center()
-                    + egui::Vec2::angled(2.35 + 4.72 * end * i as f32 / 40.0)
-                        * if combined { 16.0 } else { 23.0 }
-            })
+            .map(|i| knob.center() + egui::Vec2::angled(2.35 + 4.72 * end * i as f32 / 40.0) * 23.0)
             .collect()
     };
     ui.painter().add(egui::Shape::line(
@@ -222,23 +218,20 @@ pub(super) fn footer(
     ));
     ui.painter()
         .add(egui::Shape::line(arc(t), egui::Stroke::new(2.5, color)));
-    ui.painter().circle_filled(
-        knob.center(),
-        if combined { 12.0 } else { 18.0 },
-        ui.visuals().extreme_bg_color,
-    );
+    ui.painter()
+        .circle_filled(knob.center(), 18.0, ui.visuals().extreme_bg_color);
     let direction = egui::Vec2::angled(2.35 + 4.72 * t);
     ui.painter().line_segment(
         [
-            knob.center() + direction * if combined { 6.0 } else { 9.0 },
-            knob.center() + direction * if combined { 11.0 } else { 16.0 },
+            knob.center() + direction * 9.0,
+            knob.center() + direction * 16.0,
         ],
         egui::Stroke::new(1.5, ui.visuals().text_color()),
     );
     let value_rect = Rect::from_min_size(
         egui::pos2(
             rect.left() + 12.0,
-            bottom + if combined { 56.0 } else { 88.0 },
+            bottom + if combined { 92.0 } else { 88.0 },
         ),
         egui::vec2(76.0, 22.0),
     );
@@ -259,10 +252,10 @@ pub(super) fn footer(
     });
     let meter = Rect::from_min_size(
         egui::pos2(
-            rect.left() + 113.0,
-            bottom + if combined { 22.0 } else { 35.0 },
+            rect.left() + if combined { rect.width() - 36.0 } else { 113.0 },
+            bottom + 35.0,
         ),
-        egui::vec2(9.0, if combined { 54.0 } else { 65.0 }),
+        egui::vec2(9.0, 65.0),
     );
     ui.painter()
         .rect_filled(meter, 2.0, ui.visuals().extreme_bg_color);
