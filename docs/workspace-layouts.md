@@ -78,8 +78,10 @@ and the drag grip first, keeping fullscreen and close accessible; Inspect is alw
 
 A slim tool rail stays along the left edge of the editor. Its **+** button opens
 or closes the visualizer browser beside it; the separate left-drawer icon in the
-top-left navigation controls the same drawer. The rail currently contains just
-**+**, leaving room for future tools. Signals and Macros remain in the footer.
+top-left navigation opens or closes the current drawer. Beneath **+**, the
+picture icon opens **Media** for the current project. The tools share the same
+resizable drawer; selecting another tool switches its contents. Signals and
+Macros remain in the footer.
 The rail is hidden during pane fullscreen, and returns with the editor.
 
 The browser slides out beside the rail and retains its remembered resize width.
@@ -114,6 +116,30 @@ rearranging components never starts another audio capture device; each open
 component uses the existing shared analysis stream. Components hidden temporarily
 by pane expansion keep ingesting capture. Closed components release their
 histories.
+
+## Project media
+
+**Media** is a generic project asset browser. It starts with the bundled starter
+image in every project and lists uploaded images with thumbnails, filenames,
+dimensions and the scenes referencing them. Embedded texture files and other
+registered project files are listed with their names, types and sizes, including
+GIFs and videos. Browsing never assigns media to a visualization.
+
+In an inspector, **Choose image…** opens Media in image-picking mode. Click an
+image to assign it to the inspector that requested it; the browser itself does
+not name the visualizer. Press **Esc**, close the drawer or click a rail tool to
+cancel picking. **Upload image…** remains the inspector's route for importing a
+new file from the computer. Image selection uses the formats supported by that
+inspector; listing GIF/video files does not add playback to a visualizer.
+
+The starter stays available without embedding another copy in the project.
+Uploaded images remain available when replaced, disconnected or undone, and
+across scene switches. Unreferenced imports are stored in the project catalog;
+referenced images retain their existing scene storage, avoiding another catalog
+copy. New/Open Project resets the browser and scopes pending imports to their
+original project. Thumbnail textures are small, cached and generated only for
+visible images. Existing projects default to an empty import catalog and recover
+their images from scene settings. Project document size limits still apply.
 
 ## Veroni visualizer
 

@@ -5,6 +5,12 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Add a generic Media tool beneath + for project images, GIF/video file entries
+  and embedded textures. Include the starter image in every project, show image
+  previews and scene usage, and open the browser from inspector Choose image
+  controls. Preserve unused uploads across saves and undo, without duplicating
+  referenced images in the catalog or carrying imports into another project.
+
 - Make visualizer browser categories collapsible and replace individual row
   dividers with section dividers for a cleaner list.
 

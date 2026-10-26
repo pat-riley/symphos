@@ -14,7 +14,7 @@ use crate::{analysis::AnalysisFrame, theme::AppTheme};
 
 mod guides;
 mod motion;
-mod texture;
+pub(super) mod texture;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ColorSource {
@@ -277,6 +277,9 @@ impl Default for Waterfall {
 }
 
 impl WaterfallSettings {
+    pub(crate) fn imported_image(&self) -> Option<&texture::Asset> {
+        self.image.as_ref()
+    }
     pub(super) fn without_image(&self) -> Self {
         let mut settings = self.clone();
         settings.image = None;
@@ -290,6 +293,15 @@ impl WaterfallSettings {
 }
 
 impl Waterfall {
+    pub(super) fn imported_image(&self) -> Option<&texture::Asset> {
+        self.image.as_ref()
+    }
+    pub(super) fn use_image(&mut self, image: texture::Asset) {
+        self.image = (image != texture::Asset::starter()).then_some(image);
+        self.image_removed = false;
+        self.color_source = ColorSource::Image;
+        self.image_runtime = Default::default();
+    }
     pub(super) fn camera_angles(&self) -> (f32, f32) {
         if self.auto_orbit && self.motion_runtime.active {
             self.motion_runtime.angles

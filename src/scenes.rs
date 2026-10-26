@@ -44,6 +44,9 @@ pub struct Book {
     pub scenes: Vec<Scene>,
     pub active_scene: u64,
     pub next_scene_id: u64,
+    /// Imported media not currently referenced by saved scene settings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<crate::media::Resource>,
 }
 impl Book {
     pub fn new(state: SceneState) -> Self {
@@ -57,6 +60,7 @@ impl Book {
             }],
             active_scene: 1,
             next_scene_id: 2,
+            media: Vec::new(),
         }
     }
     pub fn current(&self) -> Option<&Scene> {
@@ -66,11 +70,43 @@ impl Book {
         self.scenes.iter_mut().find(|s| s.id == self.active_scene)
     }
     pub fn store(&mut self, state: SceneState) {
+        // Archive only resources no longer referenced by the new scene book.
+        let previous = self.current().map(|scene| scene.state.clone());
         if let Some(scene) = self.scenes.iter_mut().find(|s| s.id == self.active_scene) {
             scene.state = state;
         } else if self.scenes.is_empty() {
+            let media = std::mem::take(&mut self.media);
             *self = Self::new(state);
+            self.media = media;
         }
+        if let Some(previous) = previous {
+            for image in crate::media::scene_images(&previous) {
+                if !self
+                    .scenes
+                    .iter()
+                    .any(|scene| crate::media::scene_images(&scene.state).any(|used| used == image))
+                {
+                    crate::media::remember(&mut self.media, image.clone());
+                }
+            }
+            for (name, data) in crate::media::scene_files(&previous) {
+                if !self.scenes.iter().any(|scene| {
+                    crate::media::scene_files(&scene.state).any(|used| used == (name, data))
+                }) {
+                    crate::media::remember_file(&mut self.media, name, data);
+                }
+            }
+        }
+        self.media.retain(|resource| match resource {
+            crate::media::Resource::Image(image) => !self
+                .scenes
+                .iter()
+                .any(|scene| crate::media::scene_images(&scene.state).any(|used| used == image)),
+            crate::media::Resource::File(file) => !self.scenes.iter().any(|scene| {
+                crate::media::scene_files(&scene.state)
+                    .any(|(name, data)| name == file.name && data == file.data)
+            }),
+        });
     }
     pub fn switch(&mut self, id: u64) -> Option<SceneState> {
         let state = self.scenes.iter().find(|s| s.id == id)?.state.clone();
@@ -122,7 +158,8 @@ impl Book {
             return None;
         }
         let i = self.scenes.iter().position(|s| s.id == id)?;
-        self.scenes.remove(i);
+        let removed = self.scenes.remove(i);
+        crate::media::preserve_scene(&mut self.media, &removed.state);
         if self.active_scene == id {
             self.active_scene = self.scenes[i.min(self.scenes.len() - 1)].id;
             return self.current().map(|s| s.state.clone());
@@ -143,6 +180,8 @@ impl Book {
     pub fn valid(&self) -> bool {
         let mut ids = std::collections::HashSet::new();
         !self.scenes.is_empty()
+            && self.media.len() <= crate::media::MAX_ASSETS
+            && self.media.iter().all(crate::media::Resource::valid)
             && self.scenes.len() <= MAX_SCENES
             && self.current().is_some()
             && self.scenes.iter().all(|s| {

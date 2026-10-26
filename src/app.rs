@@ -42,6 +42,7 @@ pub struct SymphosApp {
     scenes: crate::scenes::Book,
     saved_project: Option<Vec<u8>>,
     scene_browser: crate::scenes::Browser,
+    media_browser: crate::media::Browser,
     scene_library: crate::scenes::library::Library,
     pending_scene: Option<crate::scenes::Action>,
     engine: AudioEngine,
@@ -121,6 +122,7 @@ impl SymphosApp {
             #[cfg(feature = "development")]
             design_system: Default::default(),
             scene_browser: Default::default(),
+            media_browser: Default::default(),
             scene_library: Default::default(),
             pending_scene: None,
             engine,
@@ -464,6 +466,7 @@ impl SymphosApp {
             analysis: Default::default(),
         };
         self.scene_library.reset_project();
+        self.media_browser = Default::default();
         self.scenes = crate::scenes::Book::new(state.clone());
         self.apply_scene(state);
         self.project_dialog = Default::default();
@@ -596,6 +599,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 self.history = Default::default();
                 self.saved_project = serde_json::to_vec(&project).ok();
                 self.scene_library.reset_project();
+                self.media_browser = Default::default();
                 self.scenes = project.scenes;
                 let state = self
                     .scenes
@@ -986,6 +990,15 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             return;
         }
         // Always provide an exit even if a hidden inspector or dialog held focus.
+        if self.panel_fullscreen.is_none()
+            && self.media_browser.picking_for.is_some()
+            && ctx.input_mut(|input| {
+                input.focused && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            self.media_browser.picking_for = None;
+            return;
+        }
         if self.panel_fullscreen.is_some()
             && ctx.input_mut(|input| {
                 input.focused && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
@@ -1583,6 +1596,25 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
         snapshot: &AnalysisFrame,
         _now: Instant,
     ) {
+        ui.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(crate::media::PROJECT_SCOPE),
+                self.media_browser.scope,
+            )
+        });
+        for image in crate::media::take_imports(ui.ctx(), self.media_browser.scope) {
+            crate::media::remember(&mut self.scenes.media, image);
+        }
+        if self
+            .media_browser
+            .picking_for
+            .as_ref()
+            .is_some_and(|target| !self.panes.iter().any(|pane| pane.instance_id() == target))
+        {
+            self.media_browser.picking_for = None;
+        }
+        self.media_browser
+            .retain_uploads(&mut self.scenes.media, &self.panes);
         let source_label = self
             .sources
             .iter()
@@ -1704,21 +1736,26 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             #[cfg(not(target_os = "macos"))]
             ui.menu_button("Menu", |ui| {
                 let ctx = ui.ctx().clone();
-                menu_action = crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
+                menu_action =
+                    crate::project_menu::show(ui, |action| self.menu_item_state(&ctx, action));
             });
             let toggle = icons::browser_toggle(
                 ui,
                 self.manager.library_open,
                 workspace_ui::NAV_CONTROL_HEIGHT,
                 if self.manager.library_open {
-                    "Hide component browser"
+                    "Hide browser"
                 } else {
-                    "Show component browser\nClick an instrument or visualizer to add it, or drag it into the workspace."
+                    "Show browser\nBrowse visualizers and project media."
                 },
             );
-            toggle.widget_info(|| egui::WidgetInfo::labeled(
-                egui::WidgetType::Button, true, "Toggle component browser",
-            ));
+            toggle.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    "Toggle component browser",
+                )
+            });
             #[cfg(test)]
             ui.data_mut(|data| {
                 data.insert_temp(egui::Id::new("test-component-browser-toggle"), toggle.rect);
@@ -1820,14 +1857,33 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             Pos2::new(rect.left(), navigation.bottom()),
             Pos2::new(rect.left() + workspace_ui::TOOL_RAIL_WIDTH, rect.bottom()),
         );
-        let add_visualizer =
-            workspace_ui::tool_rail(ui, rail, self.manager.library_open, &self.theme);
+        let tools = workspace_ui::tool_rail(
+            ui,
+            rail,
+            self.manager.library_open,
+            self.manager.browser_tab,
+            &self.theme,
+        );
         #[cfg(test)]
         ui.data_mut(|data| {
-            data.insert_temp(egui::Id::new("test-visualizer-tool"), add_visualizer.rect)
+            data.insert_temp(
+                egui::Id::new("test-visualizer-tool"),
+                tools.visualizers.rect,
+            );
+            data.insert_temp(egui::Id::new("test-media-tool"), tools.media.rect)
         });
-        if add_visualizer.clicked() {
-            self.manager.library_open = !self.manager.library_open;
+        if tools.visualizers.clicked() {
+            self.media_browser.picking_for = None;
+            self.manager
+                .toggle_browser(workspace_ui::BrowserTab::Visualizers);
+        }
+        if tools.media.clicked() {
+            self.media_browser.picking_for = None;
+            self.manager.toggle_browser(workspace_ui::BrowserTab::Media);
+        }
+        if !self.manager.library_open || self.manager.browser_tab != workspace_ui::BrowserTab::Media
+        {
+            self.media_browser.picking_for = None;
         }
         let browser_openness =
             drawer_openness(ui.ctx(), "component-browser", self.manager.library_open);
@@ -1852,13 +1908,38 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     .max_rect(library),
             );
             drawer.set_clip_rect(browser_bounds.intersect(ui.clip_rect()));
-            let actions = self.manager.library(
-                &mut drawer,
-                library,
-                &self.theme,
-                self.open_panes().len() < MAX_PANES,
-            );
-            self.manager_actions(actions);
+            match self.manager.browser_tab {
+                workspace_ui::BrowserTab::Visualizers => {
+                    let actions = self.manager.library(
+                        &mut drawer,
+                        library,
+                        &self.theme,
+                        self.open_panes().len() < MAX_PANES,
+                    );
+                    self.manager_actions(actions);
+                }
+                workspace_ui::BrowserTab::Media => {
+                    let catalog = crate::media::catalog(&self.scenes, &self.panes);
+                    let response =
+                        self.media_browser
+                            .show(&mut drawer, library, &self.theme, &catalog);
+                    if response.close {
+                        self.manager.library_open = false;
+                        self.media_browser.picking_for = None;
+                    }
+                    if let Some(image) = response.apply
+                        && let Some(target) = self.media_browser.picking_for.take()
+                        && let Some(index) = self
+                            .panes
+                            .iter()
+                            .position(|pane| pane.instance_id() == target)
+                    {
+                        self.begin_edit(true);
+                        self.panes[index].use_image(image);
+                        self.finish_edit();
+                    }
+                }
+            }
         }
         let content_bounds = Rect::from_min_max(
             Pos2::new(
@@ -2020,6 +2101,17 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             } else {
                 self.sidebar(&mut sidebar, snapshot);
             }
+        }
+        if ui
+            .data_mut(|data| {
+                data.remove_temp::<bool>(egui::Id::new(crate::media::CHOOSE_IMAGE_REQUEST))
+            })
+            .unwrap_or(false)
+        {
+            self.manager.browser_tab = workspace_ui::BrowserTab::Media;
+            self.manager.library_open = true;
+            self.media_browser.picking_for =
+                Some(self.panes[self.selected_pane].instance_id().to_owned());
         }
         self.scene_library.canvas = Some(layout.dashboard);
         self.dashboard(ui, layout.dashboard, snapshot);
@@ -2494,6 +2586,7 @@ mod workspace_interaction_tests {
             #[cfg(feature = "development")]
             design_system: Default::default(),
             scene_browser: Default::default(),
+            media_browser: Default::default(),
             scene_library: Default::default(),
             pending_scene: None,
             engine: AudioEngine::development_mode(true),
@@ -3371,6 +3464,136 @@ mod workspace_interaction_tests {
         settle_drawers(&mut app, &ctx, now);
         assert!(app.manager.library_open);
         assert!(app.scene_library.canvas.unwrap().left() > workspace_ui::TOOL_RAIL_WIDTH);
+    }
+
+    #[test]
+    fn media_tool_switches_the_shared_drawer_and_keeps_project_images_through_undo() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.manager.library_open = false;
+        settle_drawers(&mut app, &ctx, now);
+        let before = app.capture_scene().creative_fingerprint();
+        let media = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-media-tool")))
+            .unwrap();
+        let visualizers = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("test-visualizer-tool")))
+            .unwrap();
+        assert!(media.top() > visualizers.bottom());
+        let click = |app: &mut SymphosApp, pos| {
+            workspace_frame(app, &ctx, now, vec![egui::Event::PointerMoved(pos)]);
+            workspace_frame(app, &ctx, now, vec![button(pos, true)]);
+            workspace_frame(app, &ctx, now, vec![button(pos, false)]);
+            settle_drawers(app, &ctx, now);
+        };
+        click(&mut app, media.center());
+        assert!(app.manager.library_open);
+        assert!(app.manager.browser_tab == workspace_ui::BrowserTab::Media);
+        let output = workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(output.shapes.iter().any(
+            |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Starter landscape")
+        ));
+        assert_eq!(app.capture_scene().creative_fingerprint(), before);
+        click(&mut app, visualizers.center());
+        assert!(app.manager.library_open);
+        assert!(app.manager.browser_tab == workspace_ui::BrowserTab::Visualizers);
+        click(&mut app, media.center());
+        let image = crate::media::tests::image("Project upload.png");
+        crate::media::remember(&mut app.scenes.media, image.clone());
+        app.begin_edit(true);
+        assert!(app.panes[0].use_image(image.clone()));
+        app.finish_edit();
+        app.undo_edit(false);
+        assert!(app.panes[0].imported_image().is_none());
+        assert!(
+            crate::media::entries(&app.scenes, &app.panes)
+                .iter()
+                .any(|entry| entry.image == image)
+        );
+        app.undo_edit(true);
+        assert_eq!(app.panes[0].imported_image(), Some(&image));
+        app.new_project(&ctx);
+        assert!(
+            crate::media::entries(&app.scenes, &app.panes)
+                .iter()
+                .all(|entry| entry.placeholder)
+        );
+    }
+
+    #[test]
+    fn inspector_image_choice_opens_generic_media_and_applies_only_to_the_requesting_pane() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let first = crate::media::tests::image("First.png");
+        let second = crate::media::tests::image("Second.png");
+        app.panes[0].use_image(first.clone());
+        crate::media::remember(&mut app.scenes.media, second.clone());
+        // Same request produced by the inspector's Choose image button.
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new(crate::media::CHOOSE_IMAGE_REQUEST), true)
+        });
+        app.selected_pane = 0;
+        workspace_frame(&mut app, &ctx, now, vec![]);
+        assert!(app.manager.library_open);
+        assert!(app.manager.browser_tab == workspace_ui::BrowserTab::Media);
+        assert_eq!(
+            app.media_browser.picking_for.as_deref(),
+            Some(app.panes[0].instance_id())
+        );
+        settle_drawers(&mut app, &ctx, now);
+        let row = ctx
+            .data(|data| data.get_temp::<Rect>(egui::Id::new(("test-media-image", 2_usize))))
+            .unwrap();
+        app.selected_pane = 1; // Changing selection must not redirect the image request.
+        for pressed in [true, false] {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![
+                    egui::Event::PointerMoved(row.center()),
+                    button(row.center(), pressed),
+                ],
+            );
+        }
+        assert_eq!(app.panes[0].imported_image(), Some(&second));
+        assert!(app.panes[1].imported_image().is_none());
+        assert!(app.media_browser.picking_for.is_none());
+        app.undo_edit(false);
+        assert_eq!(app.panes[0].imported_image(), Some(&first));
+        app.media_browser.picking_for = Some(app.panes[0].instance_id().to_owned());
+        workspace_frame(
+            &mut app,
+            &ctx,
+            now,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(app.media_browser.picking_for.is_none());
+        assert_eq!(app.panes[0].imported_image(), Some(&first));
+        // Browsing media through the tool alone must never change a pane.
+        let row = ctx
+            .data(|data| data.get_temp::<Rect>(egui::Id::new(("test-media-image", 0_usize))))
+            .unwrap();
+        for pressed in [true, false] {
+            workspace_frame(
+                &mut app,
+                &ctx,
+                now,
+                vec![
+                    egui::Event::PointerMoved(row.center()),
+                    button(row.center(), pressed),
+                ],
+            );
+        }
+        assert_eq!(app.panes[0].imported_image(), Some(&first));
     }
 
     #[test]

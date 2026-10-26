@@ -95,6 +95,7 @@ use stereometer::Stereometer;
 use strata::Strata;
 use veroni::Veroni;
 use waterfall::Waterfall;
+pub(crate) use waterfall::texture::Asset as ImageAsset;
 use waveform::Waveform;
 
 #[derive(Clone, Copy)]
@@ -581,6 +582,27 @@ impl ModulePane {
         } else {
             self.copy_settings()
         }
+    }
+    pub(crate) fn imported_image(&self) -> Option<&ImageAsset> {
+        self.waterfall.imported_image()
+    }
+    pub(crate) fn media_textures(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.milkdrop.presets.iter().flat_map(|preset| {
+            preset
+                .textures
+                .iter()
+                .map(|(name, data)| (name.as_str(), data.as_str()))
+        })
+    }
+    pub(crate) fn media_presets(&self) -> &[std::sync::Arc<crate::milkdrop::preset::Preset>] {
+        &self.milkdrop.presets
+    }
+    pub(crate) fn use_image(&mut self, image: ImageAsset) -> bool {
+        if self.kind != ModuleKind::Waterfall {
+            return false;
+        }
+        self.waterfall.use_image(image);
+        true
     }
     pub fn copy_settings(&self) -> ModuleSettings {
         match self.kind {

@@ -166,9 +166,24 @@ impl SymphosApp {
         }
     }
     fn restore_edit(&mut self, snapshot: Snapshot) {
+        // Imported media belongs to the project, even when undoing its use in a
+        // pane. Retain it while restoring creative scene snapshots.
+        self.media_browser
+            .retain_uploads(&mut self.scenes.media, &self.panes);
+        let mut media = self.scenes.media.clone();
+        for scene in &self.scenes.scenes {
+            crate::media::preserve_scene(&mut media, &scene.state);
+        }
         let scene_changed = self.scenes.active_scene != snapshot.scenes.active_scene;
         if self.scenes != *snapshot.scenes {
             self.scenes = Arc::unwrap_or_clone(snapshot.scenes);
+        }
+        for resource in media {
+            if !self.scenes.media.contains(&resource)
+                && self.scenes.media.len() < crate::media::MAX_ASSETS
+            {
+                self.scenes.media.push(resource);
+            }
         }
         let mut state = snapshot.current;
         self.background = state.background;

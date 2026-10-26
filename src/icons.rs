@@ -18,6 +18,7 @@ pub enum Icon {
     Flux,
     Inspector,
     Browser,
+    Media,
     Plus,
     Save,
     GridView,
@@ -71,10 +72,6 @@ pub fn sidebar_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &st
 
 pub fn browser_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
     toolbar_toggle(ui, Icon::Browser, open, size, description)
-}
-
-pub fn library_toggle(ui: &mut egui::Ui, open: bool, size: f32, description: &str) -> Response {
-    toolbar_toggle(ui, Icon::Plus, open, size, description)
 }
 
 pub(crate) fn toolbar_toggle(
@@ -218,6 +215,22 @@ pub fn paint(ui: &egui::Ui, rect: Rect, icon: Icon, color: Color32) {
                 12.0
             };
             line(&[(divider, 3.0), (divider, 17.0)]);
+        }
+        Icon::Media => {
+            painter.rect_stroke(
+                Rect::from_min_max(p(2.0, 3.0), p(18.0, 17.0)),
+                2.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(p(13.5, 7.0), rect.width() / 20.0 * 1.5, stroke);
+            line(&[
+                (2.0, 14.0),
+                (7.0, 9.0),
+                (11.0, 13.0),
+                (14.0, 10.0),
+                (18.0, 14.0),
+            ]);
         }
         Icon::Resonance => {
             for radius in [4.5, 6.5, 9.0] {

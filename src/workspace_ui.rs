@@ -416,43 +416,102 @@ pub fn navigation_surface(ui: &egui::Ui, rect: Rect, theme: &AppTheme) {
     );
 }
 
-/// Persistent tool rail; the visualizer drawer slides beside it.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum BrowserTab {
+    #[default]
+    Visualizers,
+    Media,
+}
+
+pub struct ToolRailResponse {
+    pub visualizers: egui::Response,
+    pub media: egui::Response,
+}
+
+/// Persistent tools share a single resizable drawer.
 pub fn tool_rail(
     ui: &mut egui::Ui,
     rect: Rect,
     browser_open: bool,
+    tab: BrowserTab,
     theme: &AppTheme,
-) -> egui::Response {
+) -> ToolRailResponse {
     ui.painter().rect_filled(rect, 0.0, navigation_color(theme));
     ui.painter().vline(
         rect.right(),
         rect.y_range(),
         Stroke::new(1.0, theme.foreground.gamma_multiply(0.14)),
     );
-    let control = Rect::from_min_size(
-        rect.min + Vec2::new((TOOL_RAIL_WIDTH - TOOL_SIZE) * 0.5, NAV_PADDING),
-        Vec2::splat(TOOL_SIZE),
-    );
-    if browser_open {
-        ui.painter()
-            .rect_filled(control, 5.0, theme.foreground.gamma_multiply(0.07));
+    let mut tool = |index, icon, selected, description, label| {
+        let control = Rect::from_min_size(
+            rect.min
+                + Vec2::new(
+                    (TOOL_RAIL_WIDTH - TOOL_SIZE) * 0.5,
+                    NAV_PADDING + index as f32 * (TOOL_SIZE + 8.0),
+                ),
+            Vec2::splat(TOOL_SIZE),
+        );
+        if selected {
+            ui.painter()
+                .rect_filled(control, 5.0, theme.foreground.gamma_multiply(0.07));
+        }
+        let mut tools = navigation_region(ui, control, label, theme);
+        tools.set_clip_rect(rect.intersect(ui.clip_rect()));
+        let response = icons::toolbar_toggle(&mut tools, icon, selected, TOOL_SIZE, description);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        response
+    };
+    ToolRailResponse {
+        visualizers: tool(
+            0,
+            Icon::Plus,
+            browser_open && tab == BrowserTab::Visualizers,
+            "Add a visualizer · Cmd/Ctrl+Shift+A",
+            "Add a visualizer",
+        ),
+        media: tool(
+            1,
+            Icon::Media,
+            browser_open && tab == BrowserTab::Media,
+            "Project media · Imported images and textures",
+            "Project media",
+        ),
     }
-    let mut tools = navigation_region(ui, control, "left-tool-rail", theme);
-    tools.set_clip_rect(rect.intersect(ui.clip_rect()));
-    let response = icons::library_toggle(
-        &mut tools,
-        browser_open,
-        TOOL_SIZE,
-        if browser_open {
-            "Hide visualizers · Cmd/Ctrl+Shift+A"
-        } else {
-            "Add a visualizer · Cmd/Ctrl+Shift+A"
-        },
+}
+
+/// Shared drawer chrome and body clipping for the Visualizers and Media tools.
+pub fn browser_frame(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    theme: &AppTheme,
+    title: &str,
+) -> (egui::Ui, bool) {
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(title).max_rect(rect));
+    inspector_style(&mut child, theme);
+    let mut clip = rect.intersect(ui.clip_rect());
+    clip.max.x -= 4.0;
+    child.set_clip_rect(clip);
+    ui.painter().vline(
+        rect.right(),
+        rect.y_range(),
+        child.visuals().widgets.noninteractive.bg_stroke,
     );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Add a visualizer")
-    });
-    response
+    let close = egui::Frame::new()
+        .inner_margin(8)
+        .show(&mut child, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(title).size(13.0).strong());
+                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                    ui.visuals_mut().button_frame = false;
+                    icons::sized_button(ui, Icon::Close, false, 24.0, "Close the browser")
+                })
+                .inner
+            })
+            .inner
+        })
+        .inner;
+    sidebar_rule(&mut child, rect);
+    (child, close.clicked())
 }
 
 pub fn navigation_region(ui: &mut egui::Ui, rect: Rect, id: &str, theme: &AppTheme) -> egui::Ui {
@@ -532,6 +591,7 @@ struct SaveDialog {
 pub struct Manager {
     presets_open: bool,
     pub library_open: bool,
+    pub browser_tab: BrowserTab,
     preset_search: String,
     scope: Option<Scope>,
     save: Option<SaveDialog>,
@@ -539,6 +599,10 @@ pub struct Manager {
     delete: Option<String>,
 }
 impl Manager {
+    pub fn toggle_browser(&mut self, tab: BrowserTab) {
+        self.library_open = !self.library_open || self.browser_tab != tab;
+        self.browser_tab = tab;
+    }
     pub fn open_presets(&mut self, scope: Scope) {
         self.presets_open = true;
         self.scope = Some(scope);
@@ -668,47 +732,10 @@ impl Manager {
         can_add: bool,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("component-library")
-                .max_rect(rect),
-        );
-        // Reserve the boundary for the resize handle so a row's click/drag hit
-        // area cannot add or drag a component when grabbing the drawer edge.
-        inspector_style(&mut child, theme);
-        let mut body_clip = rect.intersect(ui.clip_rect());
-        body_clip.max.x -= 4.0;
-        child.set_clip_rect(body_clip);
-        // Match the inspector's section rules, including the drawer boundary.
-        ui.painter().vline(
-            rect.right(),
-            rect.y_range(),
-            child.visuals().widgets.noninteractive.bg_stroke,
-        );
-        let close = egui::Frame::new()
-            .inner_margin(8)
-            .show(&mut child, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Visualizers").size(13.0).strong());
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        ui.visuals_mut().button_frame = false;
-                        icons::sized_button(
-                            ui,
-                            Icon::Close,
-                            false,
-                            24.0,
-                            "Close the component browser",
-                        )
-                    })
-                    .inner
-                })
-                .inner
-            })
-            .inner;
-        if close.clicked() {
+        let (mut child, close) = browser_frame(ui, rect, theme, "Visualizers");
+        if close {
             self.library_open = false;
         }
-        sidebar_rule(&mut child, rect);
         egui::ScrollArea::vertical().id_salt("component-results").auto_shrink([false, false]).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for (index, &(category, kinds)) in COMPONENT_GROUPS.iter().enumerate() {
