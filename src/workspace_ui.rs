@@ -711,34 +711,48 @@ impl Manager {
         sidebar_rule(&mut child, rect);
         egui::ScrollArea::vertical().id_salt("component-results").auto_shrink([false, false]).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for &(category, kinds) in COMPONENT_GROUPS {
-                egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
-                    ui.label(RichText::new(category).strong());
-                });
-                for &kind in kinds {
-                    ui.push_id(kind.label(), |ui| {
-                        sidebar_rule(ui, rect);
-                        let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click_and_drag());
-                        let response = drag_cursor(response);
-                        if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, ui.visuals().widgets.noninteractive.bg_fill); }
-                        let badge = Rect::from_center_size(egui::pos2(row.left() + 20.0, row.center().y), Vec2::splat(20.0));
-                        icons::paint(ui, badge, kind.icon(), theme.foreground);
-                        let labels = Rect::from_min_max(egui::pos2(badge.right() + 9.0, row.top()),
-                            egui::pos2(row.right() - 32.0, row.bottom()));
-                        // Paint labels without child widgets so the whole row keeps
-                        // its click/drag interaction, including directly over text.
-                        let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(12.0), theme.foreground, labels.width());
-                        job.wrap.max_rows = 1;
-                        let galley = ui.painter().layout_job(job);
-                        let position = egui::pos2(labels.left(), labels.center().y - galley.size().y * 0.5);
-                        ui.painter_at(labels).galley(position, galley, theme.foreground);
-                        paint_drag_grip(ui, Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), Vec2::splat(16.0)), theme.muted);
-                        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Add {}", kind.label())));
-                        response.dnd_set_drag_payload(DragPayload::Component(kind));
-                        if response.clicked() && can_add { actions.push(Action::Add(kind)); }
-                        response.help_text(format!("{} Drag to a pane edge to add, or its center to replace. Click to add beside the selected pane.", kind.description()));
-                    });
+            for (index, &(category, kinds)) in COMPONENT_GROUPS.iter().enumerate() {
+                if index > 0 {
+                    sidebar_rule(ui, rect);
                 }
+                ui.scope(|ui| {
+                    ui.spacing_mut().button_padding = Vec2::new(10.0, 12.0);
+                    ui.spacing_mut().indent = 26.0;
+                    ui.visuals_mut().collapsing_header_frame = true;
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    for widget in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
+                        widget.bg_stroke = Stroke::NONE;
+                        widget.weak_bg_fill = Color32::TRANSPARENT;
+                    }
+                    egui::CollapsingHeader::new(RichText::new(category).strong())
+                        .id_salt(("visualizer-category", category))
+                        .default_open(true)
+                        .show_unindented(ui, |ui| {
+                            for &kind in kinds {
+                                ui.push_id(kind.label(), |ui| {
+                                    let (row, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click_and_drag());
+                                    let response = drag_cursor(response);
+                                    if response.hovered() || response.dragged() { ui.painter().rect_filled(row, 0.0, ui.visuals().widgets.noninteractive.bg_fill); }
+                                    let badge = Rect::from_center_size(egui::pos2(row.left() + 20.0, row.center().y), Vec2::splat(20.0));
+                                    icons::paint(ui, badge, kind.icon(), theme.foreground);
+                                    let labels = Rect::from_min_max(egui::pos2(badge.right() + 9.0, row.top()),
+                                        egui::pos2(row.right() - 32.0, row.bottom()));
+                                    // Paint labels without child widgets so the whole row keeps
+                                    // its click/drag interaction, including directly over text.
+                                    let mut job = egui::text::LayoutJob::simple(kind.label().into(), FontId::proportional(12.0), theme.foreground, labels.width());
+                                    job.wrap.max_rows = 1;
+                                    let galley = ui.painter().layout_job(job);
+                                    let position = egui::pos2(labels.left(), labels.center().y - galley.size().y * 0.5);
+                                    ui.painter_at(labels).galley(position, galley, theme.foreground);
+                                    paint_drag_grip(ui, Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), Vec2::splat(16.0)), theme.muted);
+                                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Add {}", kind.label())));
+                                    response.dnd_set_drag_payload(DragPayload::Component(kind));
+                                    if response.clicked() && can_add { actions.push(Action::Add(kind)); }
+                                    response.help_text(format!("{} Drag to a pane edge to add, or its center to replace. Click to add beside the selected pane.", kind.description()));
+                                });
+                            }
+                        });
+                });
             }
             sidebar_rule(ui, rect);
             egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 12)).show(ui, |ui| {
@@ -1011,6 +1025,67 @@ mod tests {
         }
         output.textures_delta.clear();
     }
+    #[test]
+    fn visualizer_categories_collapse_independently_and_remember_their_state() {
+        let ctx = egui::Context::default();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |style| style.animation_time = 0.0);
+        }
+        let mut manager = Manager::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 1800.0));
+        let mut frame = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    manager.library(ui, rect, &AppTheme::default(), true);
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let text_rect = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(Rect::from_min_size(t.pos, t.galley.size()))
+                }
+                _ => None,
+            })
+        };
+        let output = frame(vec![]);
+        // The entire header is clickable, including the empty space after its name.
+        let pos = Pos2::new(260.0, text_rect(&output, "Primitives").unwrap().center().y);
+        for open in [false, true] {
+            for pressed in [true, false] {
+                frame(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ]);
+            }
+            let output = frame(vec![]);
+            assert_eq!(
+                text_rect(&output, ModuleKind::Spectrum.label()).is_some(),
+                open
+            );
+            assert!(text_rect(&output, ModuleKind::Waterfall.label()).is_some());
+            assert!(text_rect(&output, "Primitives").is_some());
+            // Another frame reconstructs the drawer without resetting the category.
+            let output = frame(vec![]);
+            assert_eq!(
+                text_rect(&output, ModuleKind::Oscilloscope.label()).is_some(),
+                open
+            );
+        }
+    }
+
     #[test]
     fn preset_navigation_wraps_within_the_filtered_category() {
         let presets = workspace::factory_presets();

@@ -5,6 +5,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Make visualizer browser categories collapsible and replace individual row
+  dividers with section dividers for a cleaner list.
+
 - Add a persistent left tool rail with a + button for the visualizer drawer and
   a separate top-left drawer icon. Group the browser into Primitives, 3D
   Visualizations, Particles & Flow, Surfaces & Patterns and Shader Visuals;

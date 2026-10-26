@@ -94,8 +94,10 @@ is organized into one of these groups:
 - **Surfaces & Patterns:** Veroni and Cymatics.
 - **Shader Visuals:** MilkDrop.
 
-Each single-line row shows an icon, name and six-dot drag grip, with the same
-section rules and surfaces as the inspector. Descriptions remain available on
+Each category header can be collapsed or expanded and remembers its state while
+using the editor. Dividers separate categories; individual visualizer rows have
+no divider lines. Each single-line row shows an icon, name and six-dot drag grip,
+with the same surfaces as the inspector. Descriptions remain available on
 hover. Categories organize the browser without changing saved component IDs,
 settings or layout order.
 
