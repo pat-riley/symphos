@@ -5,6 +5,12 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Make Signals purpose-first: add Loudness, Bass Energy, Bass Hits and other
+  ready-to-use detection types, then adjust their response with a live preview
+  and connected-visual readout. Keep custom insert chains under Advanced and
+  preserve existing signal IDs, routes and additional processors when changing
+  detector type. Scale signal previews to show a useful full-range response.
+
 - Extend Show Panel Gaps to the viewport's outer edges, including the toolbar,
   window sides, drawers, Info View, and visible Signals/Macros dock boundary.
   Keep drawer resize handles available along the touching edges.

@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 pub mod audio;
+pub mod guided;
 pub mod inserts;
 mod migration;
 pub mod shaping;

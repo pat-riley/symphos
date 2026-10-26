@@ -196,7 +196,7 @@ pub(super) fn strip(
     bus: Option<&mut audio::InputBus>,
     snapshot: &Snapshot,
     selected: bool,
-    selected_insert: Option<(u64, u64)>,
+    _selected_insert: Option<(u64, u64)>,
     history: Option<&history::History>,
     midi: (&crate::midi::Snapshot, Option<&midi_preview::History>),
 ) -> StripOutput {
@@ -256,9 +256,9 @@ pub(super) fn strip(
         .add_sized(
             [source.available_width(), 21.0],
             egui::Button::new(match d.input {
-                Input::System => "System audio",
-                Input::Lfo => "LFO",
-                _ => "MIDI",
+                Input::System => audio::default_source_label(source.ctx()),
+                Input::Lfo => "LFO".into(),
+                _ => "MIDI".into(),
             }),
         )
         .clicked()
@@ -266,62 +266,43 @@ pub(super) fn strip(
         action = Some(StripAction::Select(d.id));
     }
     let bottom = rect.bottom() - 144.0;
-    let list_height = (d.inserts.as_ref().unwrap().stages.len() as f32
-        * (INSERT_HEIGHT + INSERT_GAP)
-        + INSERT_HEIGHT)
-        .clamp(
-            INSERT_HEIGHT,
-            (rect.height() - 258.0).clamp(INSERT_HEIGHT, 145.0),
-        );
     let list_rect = Rect::from_min_size(
         egui::pos2(
             rect.left() + INSERT_GAP,
             source.min_rect().bottom() + INSERT_GAP,
         ),
-        egui::vec2(rect.width() - 2.0 * INSERT_GAP, list_height),
+        egui::vec2(
+            rect.width() - 2.0 * INSERT_GAP,
+            if d.input == Input::System { 55.0 } else { 22.0 },
+        ),
     );
     let mut list = ui.new_child(
         egui::UiBuilder::new()
-            .id_salt("strip-inserts")
+            .id_salt("guided-signal")
             .max_rect(list_rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     list.set_clip_rect(list_rect.intersect(ui.clip_rect()));
-    list.spacing_mut().item_spacing.y = INSERT_GAP;
-    list.spacing_mut().interact_size.y = 20.0;
+    list.spacing_mut().item_spacing.y = 6.0;
+    list.spacing_mut().interact_size.y = 22.0;
     list.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    let stage_count = d.inserts.as_ref().unwrap().stages.len();
-    let stage_height = stage_count as f32 * (INSERT_HEIGHT + INSERT_GAP) - INSERT_GAP;
-    let viewport_height = (list_height - INSERT_HEIGHT - INSERT_GAP).max(1.0);
-    if stage_count > 0 && stage_height <= viewport_height {
-        if let Some(a) = slot_list(&mut list, d, selected_insert, false) {
-            action = Some(a);
-        }
-    } else if stage_count > 0 {
-        egui::ScrollArea::vertical()
-            .id_salt("insert-slots")
-            .max_height(viewport_height)
-            .min_scrolled_height(0.0)
-            .auto_shrink([false, false])
-            .show(&mut list, |ui| {
-                if let Some(a) = slot_list(ui, d, selected_insert, false) {
-                    action = Some(a);
-                }
-            });
+    if d.input == Input::System {
+        super::guided::type_picker(&mut list, d);
     }
-    let mut append = ui.new_child(
-        egui::UiBuilder::new()
-            .id_salt("append-strip-insert")
-            .max_rect(Rect::from_min_max(
-                egui::pos2(list_rect.left(), list_rect.bottom() - INSERT_HEIGHT),
-                list_rect.max,
-            ))
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    append.spacing_mut().interact_size.y = 20.0;
-    append.style_mut().override_font_id = Some(egui::FontId::proportional(11.0));
-    if let Some(a) = insert_menu(&mut append, d, d.inserts.as_ref().unwrap().stages.len()) {
-        action = Some(a);
+    if insert_button(
+        &mut list,
+        match d.input {
+            Input::System if d.has_control_output() => "Edit response…",
+            Input::System => "Set up signal…",
+            Input::Lfo => "Edit LFO…",
+            _ => "Edit MIDI…",
+        },
+        false,
+        egui::Sense::click(),
+    )
+    .clicked()
+    {
+        action = Some(StripAction::Processor(d.id));
     }
     let graph = Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, list_rect.bottom() + INSERT_GAP),
@@ -341,6 +322,11 @@ pub(super) fn strip(
         ui.painter()
             .rect_filled(graph, 4.0, ui.visuals().extreme_bg_color);
         let signed = d.kind() == OutputKind::Bipolar;
+        let high = history
+            .into_iter()
+            .flat_map(|h| h.points())
+            .map(|p| p[1].abs())
+            .fold(1.0_f32, f32::max);
         for level in 1..4 {
             ui.painter().hline(
                 graph.x_range(),
@@ -355,7 +341,12 @@ pub(super) fn strip(
                     egui::pos2(
                         graph.left() + x * graph.width(),
                         graph.bottom()
-                            - (if signed { (y + 1.0) * 0.5 } else { y * 0.5 }).clamp(0.0, 1.0)
+                            - (if signed {
+                                (y / high + 1.0) * 0.5
+                            } else {
+                                y / high
+                            })
+                            .clamp(0.0, 1.0)
                                 * graph.height(),
                     )
                 })
@@ -397,7 +388,7 @@ pub(super) fn strip(
     }
     StripOutput {
         action,
-        over_inserts: ui.rect_contains_pointer(list_rect),
+        over_inserts: false,
     }
 }
 
@@ -433,7 +424,7 @@ impl Panel {
         }
         let mut action = None;
         if let Some((_, insert_id)) = self.selected_insert.filter(|(channel, _)| *channel == id) {
-            if ui.small_button("Back to channel & inserts").clicked() {
+            if ui.small_button("Back to signal").clicked() {
                 self.selected_insert = None;
             }
             if let Some(insert) = d
@@ -501,7 +492,7 @@ impl Panel {
                 self.selected_insert = None;
             }
         } else {
-            audio_channel::inspector_group(ui, "Channel", |ui| {
+            audio_channel::inspector_group(ui, "Source", |ui| {
                 property_row(ui, "Name", |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut d.name)
@@ -521,7 +512,7 @@ impl Panel {
                 });
                 if d.input == Input::System {
                     property_row(ui, "Capture", |ui| {
-                        ui.label("System audio").help_text("The main capture is configured in Settings. Inserts process a private branch without changing speaker output.");
+                        ui.label(audio::default_source_label(ui.ctx())).help_text("The main capture is configured in Settings. Inserts process a private branch without changing speaker output.");
                     });
                 }
                 if d.input == Input::Lfo {
@@ -541,45 +532,14 @@ impl Panel {
                     self.midi_learning = learn.map(|serial| (id, serial));
                 }
             });
-            audio_channel::inspector_group(ui, "Inserts", |ui| {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(if d.input == Input::System {
-                            "Audio effects > detector > control processors"
-                        } else {
-                            "Control processors · audio effects are unavailable"
-                        })
-                        .weak()
-                        .size(11.0),
-                    )
-                    .wrap(),
-                );
-                if let Some(a) = slot_list(ui, &d, self.selected_insert, true) {
-                    action = Some(a);
-                }
-            });
-            let output = self.snapshot.values.get(&id).cloned().unwrap_or_default();
-            audio_channel::inspector_group(ui, "Output", |ui| {
-                let data = d.inserts.as_ref().unwrap().data_at(d.input, usize::MAX);
-                ui.label(if data == Data::Audio {
-                    "Waveform + spectrum · add a detector for modulation"
-                } else if d.kind() == OutputKind::Bipolar {
-                    "Control curve · −1 to +1"
-                } else {
-                    "Control curve · 0 to 1"
-                });
-                if data == Data::Control {
-                    ui.label(format!(
-                        "Current {:.3} · {}",
-                        output.value,
-                        output.status.label()
-                    ));
-                }
-                if let Some(users) = self.consumers.get(&id) {
-                    for user in users {
-                        ui.label(user);
-                    }
-                }
+            super::guided::response_controls(ui, &mut d, &self.snapshot);
+            if d.has_control_output() {
+                self.guided_preview(ui, &d);
+            }
+            egui::CollapsingHeader::new("Advanced · Insert chain")
+                .id_salt(("signal-advanced", id)).default_open(false).show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new("Filters and extra response processors run in order. Detector controls above edit the same chain.").weak()).wrap());
+                if let Some(a) = slot_list(ui, &d, self.selected_insert, true) { action = Some(a); }
             });
         }
         d.sanitize();
@@ -626,7 +586,7 @@ impl Panel {
             Icon::AudioMappings,
             &title,
             &subtitle,
-            "Source > inserts > modulation",
+            "Source > detection > response",
             "Close signal inspector",
         )
         .clicked();
@@ -728,7 +688,7 @@ fn number(
         );
     });
 }
-fn effect_controls(ui: &mut egui::Ui, effect: &mut Effect, monitor: Option<&Monitor>) {
+pub(super) fn effect_controls(ui: &mut egui::Ui, effect: &mut Effect, monitor: Option<&Monitor>) {
     match effect {
         Effect::AudioGain { db } => number(ui, "Gain", db, -48.0..=36.0, " dB"),
         Effect::Filter { low, high } => {
@@ -794,8 +754,8 @@ fn effect_controls(ui: &mut egui::Ui, effect: &mut Effect, monitor: Option<&Moni
                 1.0..=5000.0,
                 " ms",
             );
-            property_row(ui, "Adaptive", |ui| {
-                ui.checkbox(&mut d.adaptive, "");
+            property_row(ui, "Auto level", |ui| {
+                ui.checkbox(&mut d.adaptive, "").help_text("Adapts to recent signal strength so quiet and loud material remain useful. Disable for fixed sensitivity.");
             });
             if d.detector == Detector::Hits {
                 number(
@@ -919,6 +879,9 @@ mod tests {
     #[test]
     fn insert_context_delete_never_opens_channel_menu_or_deletes_channel() {
         let ctx = egui::Context::default();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
         let mut panel = Panel::default();
         let id = panel.bank.add_source(Input::Lfo).unwrap();
         panel.act(StripAction::AddEffect(id, 0, Effect::Invert));
@@ -934,13 +897,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    panel.show(
-                        ui,
-                        ui.available_rect_before_wrap(),
-                        &AnalysisFrame::default(),
-                        false,
-                        &AppTheme::default(),
-                    )
+                    panel.chain_contents(ui, id);
                 },
             );
             out.textures_delta.clear();
@@ -973,7 +930,13 @@ mod tests {
             render(panel, vec![])
         };
         render(&mut panel, vec![]);
+        panel.selected_insert = None;
         let out = render(&mut panel, vec![]);
+        let out = click(
+            &mut panel,
+            position(&out, "Advanced · Insert chain"),
+            egui::PointerButton::Primary,
+        );
         let out = click(
             &mut panel,
             position(&out, "Invert"),
@@ -995,7 +958,8 @@ mod tests {
                 .len(),
             1
         );
-        // Clicking the remaining insert then the channel header changes the delete target.
+        // Returning to the signal and selecting its remaining insert keeps deletion scoped.
+        panel.selected_insert = None;
         let out = render(&mut panel, vec![]);
         click(
             &mut panel,
@@ -1006,7 +970,7 @@ mod tests {
         let out = render(&mut panel, vec![]);
         click(
             &mut panel,
-            position(&out, "1 LFO"),
+            position(&out, "Back to signal"),
             egui::PointerButton::Primary,
         );
         assert!(panel.selected_insert.is_none());
@@ -1115,7 +1079,7 @@ mod tests {
                 },
             );
             out.textures_delta.clear();
-            for label in ["1 System audio", "Bass energy", "M", "S"] {
+            for label in ["1 System audio", "Bass Energy", "M", "S"] {
                 assert!(
                     out.shapes.iter().any(
                         |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==label)

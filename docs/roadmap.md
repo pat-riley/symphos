@@ -31,10 +31,9 @@ should be read against this inventory rather than as a list of unstarted work.
 - Give each signal its own relevant frequency range, sensitivity, threshold,
   normalization and attack/release controls. Expose controls appropriate to
   that signal's purpose instead of showing every processor option at once.
-- Make signal setup explain what is being detected, how the response is shaped,
-  and which visual parameters it controls. Review the current insert-first
-  interaction before expanding it; its purpose and audible/visual behavior are
-  not sufficiently clear to users.
+- Use the chosen guided workflow: select a signal type, adjust its response,
+  and preview the result. Put insert chains under Advanced. Explain what is
+  detected, how the response is shaped, and which visual parameters it controls.
 - Make input, detected value, final response and connected visual destination
   easy to compare live. Existing insert input/output monitors should make
   changes perceptible without requiring users to understand the chain first.

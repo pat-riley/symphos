@@ -14,6 +14,7 @@ use crate::{
 use egui::{self, Rect};
 use std::sync::Mutex;
 pub(crate) mod audio_channel;
+mod guided;
 mod history;
 mod inserts;
 mod master;
@@ -842,6 +843,23 @@ impl Panel {
                     b.color = Some(color);
                 }
             }
+            StripAction::AddGuided(kind, boundary) => {
+                if let Some(id) = self.bank.add_source(Input::System) {
+                    self.bank
+                        .channels
+                        .iter_mut()
+                        .find(|d| d.id == id)
+                        .unwrap()
+                        .set_signal_kind(kind);
+                    self.bank.sync_audio_channels();
+                    self.bank.sync_slots();
+                    self.bank
+                        .insert_channel(id, boundary.min(self.bank.slots.len()));
+                    self.selected = Some(id);
+                    self.selected_insert = None;
+                    self.inspect_requested = true;
+                }
+            }
             StripAction::AddAudioAt(boundary) => {
                 if let Some(id) = self.bank.add_source(Input::System) {
                     self.bank.sync_slots();
@@ -1365,6 +1383,7 @@ enum StripAction {
     Color(u64, [u8; 3]),
     AddAt(Method, usize),
     AddAudioAt(usize),
+    AddGuided(crate::signals::guided::Kind, usize),
     InspectEffect(u64, u64),
     AddEffect(u64, usize, crate::signals::inserts::Effect),
     MoveEffect(u64, u64, usize),
@@ -1491,7 +1510,7 @@ fn channel_menu(
         crate::dropdown::menu_separator(ui);
         if ui
             .button(if d.inserts.is_some() {
-                "Inspect channel & inserts"
+                "Inspect signal"
             } else {
                 "Open signal processor…"
             })
@@ -1519,7 +1538,24 @@ fn channel_menu(
                 "Add channel"
             },
             |ui| {
-                if ui.button("Audio").clicked() {
+                for kind in crate::signals::guided::Kind::ALL
+                    .into_iter()
+                    .filter(|k| *k != crate::signals::guided::Kind::Audio)
+                {
+                    if ui
+                        .button(kind.label())
+                        .help_text(kind.description())
+                        .clicked()
+                    {
+                        action = Some(StripAction::AddGuided(
+                            kind,
+                            slot + usize::from(d.is_some()),
+                        ));
+                        ui.close();
+                    }
+                }
+                crate::dropdown::menu_separator(ui);
+                if ui.button("Audio only").clicked() {
                     action = Some(StripAction::AddAudioAt(slot + usize::from(d.is_some())));
                     ui.close();
                 }
@@ -3174,7 +3210,15 @@ mod tests {
                     for label in if legacy {
                         ["Channel", "Normalization", "Used by"]
                     } else {
-                        ["Channel", "Inserts", "Output"]
+                        [
+                            "Source",
+                            "Advanced · Insert chain",
+                            if input == Input::System {
+                                "Detect"
+                            } else {
+                                "Live response"
+                            },
+                        ]
                     } {
                         assert!(
                             labels.contains(&label),

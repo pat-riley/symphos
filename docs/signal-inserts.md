@@ -1,30 +1,55 @@
 # Signal channels and inserts
 
-Create **Audio**, **LFO** or **MIDI** from the Signals mixer's right-click menu or
-Create → Signal Channel. Detectors are inserts, not channel types. Channels are
-created only by an explicit add, duplicate or paste action.
+Signals open with a guided setup. Right-click the Signals mixer and choose
+**Add channel → Loudness**, **Bass Energy**, **Band Energy**, **Bass Hits**,
+**Spectral Change**, **Stereo Balance** or **Beat**. Choose **Audio only** for an
+untouched waveform/spectrum feed; **LFO** and **MIDI** remain available.
+Channels are created only by an explicit add, duplicate or paste action.
+
+The strip's type dropdown changes what the signal detects. **Edit response…**
+opens its inspector: Source, Detect, Response, Live response and Mapped
+parameters. Audio-only strips show **Set up signal…** until a detector is selected.
+The source is the capture configured in Settings; these controls do not change
+speaker playback. Loudness is an RMS-based artistic control, not calibrated LUFS.
 
 ## Main audio and a bass-driven brightness macro
 
-1. Add an **Audio** channel and name it **System audio**. Leave its insert list
-   empty for an untouched waveform and spectrum.
-2. Select the waterfall. Choose that channel in **Driven by** at the top of its
-   visual inspector.
-3. Add another **Audio** channel and name it **Bass**.
-4. Click **+ Insert → Bass energy**. Its opinionated defaults measure 30–180 Hz
-   with adaptive level scaling and a fast attack / slower release.
-5. Add **Smooth**, **Envelope**, **Normalize** or **Curve** after the detector as
-   needed. Click an insert to see its controls and live input/output traces in
-   the inspector. Normalize's **Use recent input range** maps the last two seconds
-   of observed input onto 0–1; enter exact limits for a narrower range.
-6. Assign brightness to a scene macro, then choose **Bass** as its modulation
-   source. Keep the waterfall's **Driven by** connection on the first channel.
+1. Keep the permanent **System audio** source available for the waterfall's
+   waveform/spectrum, or choose an existing audio channel in **Driven by**.
+2. Add **Bass Energy** from the Signals menu. It immediately produces a control
+   curve; there is no detector insert to create manually.
+3. Click **Edit response…**. Adjust its frequency range, sensitivity, noise
+   floor, attack/release and **Auto level** in the inspector.
+4. Compare the gray detected signal and colored final output in **Live response**.
+   The final output includes extra processing and the Visual influence setting.
+5. Assign brightness to a scene macro and choose this signal as its modulation
+   source. **Mapped parameters** lists its current parameter destinations.
 
-The two channels share the master capture but have independent processing.
-Changing a bass-control curve never changes the first channel's spectrum or
-speaker output. Bass energy measures a band without changing the audio feed;
-add **Frequency filter** before the detector if a sketch should also receive
-band-limited waveform/spectrum data.
+**Bass Energy** follows sustained low-frequency strength. **Bass Hits** produces
+pulses on sudden rises. **Spectral Change** follows changing textures and attacks,
+while **Beat** estimates rhythmic timing or provides a manual tempo clock.
+Each type explains its behavior and exposes the relevant response controls.
+
+The guided controls edit the existing saved detector in place. Viewing a saved
+signal changes nothing; choosing its current type retains all adjustments.
+Choosing a different type changes that detector's settings while keeping the
+channel ID, custom name, routes, preceding audio processing and following control
+processors. Returning a detector channel to Audio only requires the explicit
+removal action under Advanced, so dependent processors are never silently lost.
+
+## Advanced insert chains
+
+Expand **Advanced · Insert chain** in the signal inspector to add, inspect,
+reorder, bypass or remove processors. These are the same processors edited by
+the guided controls; there is no second processing engine or project format.
+Custom chains remain intact and reopening them does not reconstruct a recipe.
+
+Detectors already include adaptive scaling and attack/release. Add Smooth,
+Envelope, Normalize or Curve only when another response stage is useful. Click
+an insert for its detailed input/output monitor. Normalize's **Use recent input
+range** maps the last two seconds of observed input onto 0–1; enter exact limits
+for a narrower range. Filters process the visualization's waveform/spectrum;
+control processors change modulation values. None changes speaker output.
 
 ## Data types and order
 
