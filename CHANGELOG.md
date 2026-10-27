@@ -5,6 +5,16 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Give Filament selectable Sculptural bend, Spectrum reach and blended audio
+  responses. Map bass-to-treble bands by strand or along each curve, with
+  adjustable reach, fast attack and gated display visibility. Preserve saved
+  sculptural behavior, route through the chosen audio feed and freeze/recover
+  visual response independently of camera motion.
+
+- Add the visualizer authoring kit to the roadmap: stable registration and
+  parameter/input contracts, CPU/GPU examples, validation and agent preview
+  commands, followed by versioned installable shader packages.
+
 - Add optional Fine strands and Dense weave finishes to Filament, plus Spiral
   vortex, Gravity well and Orbital currents forms. A Centripetal flow starting
   preset creates fine, dense inward trails, with adjustable circulation speed,

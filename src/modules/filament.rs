@@ -50,6 +50,39 @@ impl Form {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum AudioResponse {
+    Sculptural,
+    Spectrum,
+    Blend,
+}
+impl AudioResponse {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Sculptural => "Sculptural bend",
+            Self::Spectrum => "Spectrum reach",
+            Self::Blend => "Bend + spectrum reach",
+        }
+    }
+    fn reaches(self) -> bool {
+        self != Self::Sculptural
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum SpectrumMapping {
+    Strands,
+    AlongStrands,
+}
+impl SpectrumMapping {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Strands => "By strand",
+            Self::AlongStrands => "Along each strand",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
@@ -67,6 +100,11 @@ pub(crate) struct Settings {
     circulation: f32,
     spiral_turns: f32,
     central_pull: f32,
+    audio_response: AudioResponse,
+    spectrum_mapping: SpectrumMapping,
+    spectrum_reach: f32,
+    spectrum_visibility: f32,
+    attack_ms: f32,
     audio_bend: f32,
     audio_expand: f32,
     response_ms: f32,
@@ -109,6 +147,11 @@ impl Default for Settings {
             circulation: 0.45,
             spiral_turns: 2.5,
             central_pull: 0.6,
+            audio_response: AudioResponse::Sculptural,
+            spectrum_mapping: SpectrumMapping::Strands,
+            spectrum_reach: 0.85,
+            spectrum_visibility: 0.7,
+            attack_ms: 25.0,
             audio_bend: 0.32,
             audio_expand: 0.18,
             response_ms: 140.0,
@@ -174,6 +217,7 @@ impl Settings {
             self.$field = if self.$field.is_finite() { self.$field.clamp($lo, $hi) } else { d.$field };
         )*}; }
         bound! {
+            spectrum_reach: 0.0, 2.5; spectrum_visibility: 0.0, 1.0; attack_ms: 0.0, 500.0;
             spread: 0.0, 1.5; depth: 0.1, 2.0; fold: 0.0, 0.75; twist: -4.0, 4.0;
             circulation: 0.0, 2.0; spiral_turns: 0.5, 5.0; central_pull: 0.0, 1.0;
             taper: 0.2, 2.0; drift: 0.0, 1.0; audio_bend: 0.0, 1.0; audio_expand: 0.0, 0.6;
@@ -197,6 +241,8 @@ pub(super) struct Filament {
     settings: Settings,
     data: FrequencyData,
     bands: [f32; BANDS],
+    reach_bands: [f32; BANDS],
+    spectrum_gain: f32,
     energy: f32,
     phase: f32,
     flow_time: f64,
@@ -209,6 +255,8 @@ impl Default for Filament {
             settings: Default::default(),
             data: Default::default(),
             bands: [0.0; BANDS],
+            reach_bands: [0.0; BANDS],
+            spectrum_gain: 1.0,
             energy: 0.0,
             phase: 0.0,
             flow_time: 0.0,
@@ -236,6 +284,8 @@ impl Filament {
     pub fn clear_input_history(&mut self) {
         self.data.clear();
         self.bands.fill(0.0);
+        self.reach_bands.fill(0.0);
+        self.spectrum_gain = 1.0;
         self.energy = 0.0;
         self.epoch = None;
         self.last_draw = None;
@@ -269,7 +319,60 @@ impl Filament {
             };
             *v += (level * level - *v) * alpha;
         }
+        // The existing sculptural response retains its original envelope. Reach
+        // uses linear display intensity and an independent fast attack so quiet
+        // band detail and transients are visible without changing the input feed.
+        let attack = if self.settings.attack_ms <= 0.0 {
+            1.0
+        } else {
+            -(-dt * 1000.0 / self.settings.attack_ms).exp_m1()
+        };
+        for (value, db) in self.reach_bands.iter_mut().zip(self.data.levels) {
+            let target = if live && db.is_finite() {
+                self.data.settings.intensity(db).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            *value += (target - *value) * if target > *value { attack } else { alpha };
+        }
+        let peak = self.reach_bands.iter().copied().fold(0.0_f32, f32::max);
+        let gate = ((peak - 0.03) / 0.12).clamp(0.0, 1.0);
+        self.spectrum_gain = 1.0
+            + ((1.0 / peak.max(0.001)).clamp(1.0, 3.0) - 1.0)
+                * self.settings.spectrum_visibility
+                * gate;
         self.energy = self.bands.iter().sum::<f32>() / BANDS as f32;
+    }
+    fn spectrum_level(&self, t: f32, theta: f32) -> f32 {
+        if self.settings.spectrum_mapping == SpectrumMapping::Strands {
+            let count = self.settings.strands * if self.settings.dense_weave { 2 } else { 1 };
+            let strand = ((t.clamp(0.0, 1.0) * count as f32) as usize).min(count - 1);
+            let first = (strand * BANDS / count).min(BANDS - 1);
+            let last = ((strand + 1) * BANDS)
+                .div_ceil(count)
+                .clamp(first + 1, BANDS);
+            return (self.reach_bands[first..last]
+                .iter()
+                .copied()
+                .fold(0.0_f32, f32::max)
+                * self.spectrum_gain)
+                .clamp(0.0, 1.0);
+        }
+        let position = match self.settings.spectrum_mapping {
+            SpectrumMapping::Strands => t,
+            SpectrumMapping::AlongStrands
+                if matches!(self.settings.form, Form::Vortex | Form::GravityWell) =>
+            {
+                theta / TAU
+            }
+            // A mirrored mapping closes the bass/treble seam on closed contours.
+            SpectrumMapping::AlongStrands => 0.5 - 0.5 * theta.cos(),
+        };
+        let i = position.clamp(0.0, 1.0) * (BANDS - 1) as f32;
+        let a = i as usize;
+        let level = self.reach_bands[a]
+            + (self.reach_bands[(a + 1).min(BANDS - 1)] - self.reach_bands[a]) * i.fract();
+        (level * self.spectrum_gain).clamp(0.0, 1.0)
     }
     fn band(&self, t: f32) -> f32 {
         let i = t.clamp(0.0, 1.0) * (BANDS - 1) as f32;
@@ -384,6 +487,47 @@ impl Filament {
                 );
             });
             settings_group(ui, "Motion & audio", |ui| {
+                property_row(ui, "Audio response", |ui| {
+                    properties_combo("filament-audio-response", ui.available_width(), 3)
+                        .selected_text(s.audio_response.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [AudioResponse::Sculptural, AudioResponse::Spectrum, AudioResponse::Blend] {
+                                ui.selectable_value(&mut s.audio_response, mode, mode.label());
+                            }
+                        }).response.help_text("Sculptural bend keeps the original gentle response. Spectrum reach extends threads with their frequency bands. Blend combines both; all use the pane's selected audio feed.");
+                });
+                if s.audio_response.reaches() {
+                    property_row(ui, "Map spectrum", |ui| {
+                        properties_combo("filament-spectrum-mapping", ui.available_width(), 2)
+                            .selected_text(s.spectrum_mapping.label())
+                            .show_ui(ui, |ui| {
+                                for mapping in [SpectrumMapping::Strands, SpectrumMapping::AlongStrands] {
+                                    ui.selectable_value(&mut s.spectrum_mapping, mapping, mapping.label());
+                                }
+                            }).response.help_text("By strand assigns bass through treble from the first contour to the last, repeated per form. Along each strand puts the spectrum along the curve, mirrored around closed loops.");
+                    });
+                    p!(
+                        ui,
+                        spectrum_reach,
+                        0.0..=2.5,
+                        "Spectrum reach",
+                        "Extend strands radially with their assigned frequency energy. Zero restores the resting size. This is an artistic spectrum mapping."
+                    );
+                    p!(
+                        ui,
+                        spectrum_visibility,
+                        0.0..=1.0,
+                        "Spectrum visibility",
+                        "Reveal quieter frequency differences with a bounded display boost. Near-silence stays still; the source signal is unchanged."
+                    );
+                    p!(
+                        ui,
+                        attack_ms,
+                        0.0..=500.0,
+                        "Attack ms",
+                        "How quickly frequency-driven reach follows rising audio energy. Lower values make hits more immediate."
+                    );
+                }
                 if s.form.spirals() {
                     p!(
                         ui,
@@ -400,13 +544,15 @@ impl Filament {
                     "Flow speed",
                     "Slow motion of the folds. Set to zero for a still resting sculpture; audio can still deform it."
                 );
-                p!(
-                    ui,
-                    audio_bend,
-                    0.0..=1.0,
-                    "Spectrum bend",
-                    "Bass-to-treble energy bends different strands and points along each loop. Uses the pane's selected audio feed."
-                );
+                if s.audio_response != AudioResponse::Spectrum {
+                    p!(
+                        ui,
+                        audio_bend,
+                        0.0..=1.0,
+                        "Spectrum bend",
+                        "Bass-to-treble energy bends different strands and points along each loop. Uses the pane's selected audio feed."
+                    );
+                }
                 p!(
                     ui,
                     audio_expand,

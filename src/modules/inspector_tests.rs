@@ -374,6 +374,9 @@ fn filament_keeps_visual_controls_in_tabs_and_signal_response_in_input_settings(
         let ctx = egui::Context::default();
         ctx.memory_mut(|m| m.set_everything_is_visible(true));
         let mut pane = ModulePane::new(ModuleKind::Filament);
+        let mut settings = serde_json::to_value(pane.copy_settings()).unwrap();
+        settings["Filament"]["audio_response"] = "Blend".into();
+        assert!(pane.paste_settings(&serde_json::from_value(settings).unwrap()));
         pane.select_inspector_section(section);
         let mut out = ctx.run_ui(
             egui::RawInput {
@@ -400,6 +403,10 @@ fn filament_keeps_visual_controls_in_tabs_and_signal_response_in_input_settings(
     let appearance = collect(SettingsSection::Appearance, false);
     let input = collect(SettingsSection::Geometry, true);
     assert!(geometry.contains("audio_bend") && geometry.contains("strands"));
+    for field in ["spectrum_reach", "spectrum_visibility", "attack_ms"] {
+        assert!(geometry.contains(field));
+        assert!(!appearance.contains(field) && !input.contains(field));
+    }
     assert!(!appearance.contains("strands"));
     assert!(appearance.contains("breaks") && appearance.contains("line_width"));
     for field in ["frequency.min_hz", "frequency.gain", "frequency.floor"] {

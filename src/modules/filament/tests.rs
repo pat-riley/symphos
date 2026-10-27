@@ -261,3 +261,139 @@ fn centripetal_preset_and_new_options_roundtrip_and_older_sculptures_keep_their_
     let loaded: Settings = serde_json::from_value(old).unwrap();
     assert_eq!(loaded, Settings::default());
 }
+
+#[test]
+fn spectrum_reach_is_localized_and_blend_retains_sculptural_bending() {
+    let mut m = Filament::default();
+    m.settings.audio_expand = 0.0;
+    let t = 0.32;
+    let theta = 1.2;
+    let radius = |p: [f32; 3]| p[0].hypot(p[1]);
+    let rest = m.point(0, t, theta);
+    m.reach_bands.fill(0.6);
+    // Existing saved sculptures keep their previous geometry until a mode is chosen.
+    assert_eq!(rest, m.point(0, t, theta));
+    m.settings.audio_response = AudioResponse::Spectrum;
+    let reaching = m.point(0, t, theta);
+    assert!(radius(reaching) > radius(rest) + 0.5);
+    assert_eq!(rest[2], reaching[2]);
+    m.bands.fill(0.8);
+    assert_eq!(
+        reaching,
+        m.point(0, t, theta),
+        "reach mode excludes sculptural bend"
+    );
+    m.settings.audio_response = AudioResponse::Blend;
+    let blend = m.point(0, t, theta);
+    assert_ne!(blend[2], reaching[2]);
+    m.settings.audio_response = AudioResponse::Sculptural;
+    let bent = m.point(0, t, theta);
+    assert_eq!(blend[2], bent[2]);
+    assert!(radius(blend) > radius(bent));
+    m.settings.spectrum_reach = 0.0;
+    m.settings.audio_response = AudioResponse::Blend;
+    assert_eq!(bent, m.point(0, t, theta));
+
+    m.reach_bands.fill(0.0);
+    m.reach_bands[9] = 0.8;
+    // Fewer contours than FFT bands must not skip a narrow frequency peak.
+    m.settings.strands = 8;
+    assert!(m.spectrum_level(0.5 / 8.0, 0.0) > 0.7);
+    assert_eq!(m.spectrum_level(6.5 / 8.0, 0.0), 0.0);
+    m.settings.spectrum_mapping = SpectrumMapping::AlongStrands;
+    m.reach_bands[0] = 0.7;
+    assert_eq!(m.spectrum_level(t, 0.0), m.spectrum_level(t, TAU));
+    assert_eq!(m.spectrum_level(t, PI), 0.0);
+}
+
+#[test]
+fn reach_follows_real_frequency_input_with_fast_attack_freeze_and_silence_recovery() {
+    use crate::analysis::FrequencyBin;
+    use std::time::Duration;
+    let tone = |hz: f32| {
+        let rate = 48_000;
+        let size = 8192;
+        let index = (hz * size as f32 / rate as f32).round() as usize;
+        AnalysisFrame {
+            sample_rate: rate,
+            fft_size: size,
+            sequence: 1,
+            bins: (0..=size / 2)
+                .map(|i| FrequencyBin {
+                    frequency_hz: i as f32 * rate as f32 / size as f32,
+                    magnitude: if i == index { 0.1 } else { 0.0 },
+                    dbfs: if i == index { -20.0 } else { -120.0 },
+                })
+                .collect::<Vec<_>>()
+                .into(),
+            ..Default::default()
+        }
+    };
+    let start = Instant::now();
+    let mut peaks = Vec::new();
+    for hz in [90.0, 6000.0] {
+        let mut m = Filament::default();
+        m.settings.audio_response = AudioResponse::Spectrum;
+        m.settings.frequency.smoothing = 0.0;
+        let frame = tone(hz);
+        m.update(&frame, start, true);
+        m.update(&frame, start + Duration::from_millis(25), true);
+        assert!(m.reach_bands.iter().copied().fold(0.0_f32, f32::max) > 0.4);
+        let count = m.settings.strands;
+        peaks.push(
+            (0..count)
+                .max_by(|a, b| {
+                    m.spectrum_level((*a as f32 + 0.5) / count as f32, 0.0)
+                        .total_cmp(&m.spectrum_level((*b as f32 + 0.5) / count as f32, 0.0))
+                })
+                .unwrap(),
+        );
+        let frozen = (m.reach_bands, m.spectrum_gain);
+        m.update(&frame, start + Duration::from_millis(25), true);
+        assert_eq!(frozen, (m.reach_bands, m.spectrum_gain));
+        for tick in 1..=30 {
+            m.update(&frame, start + Duration::from_millis(25 + tick * 50), false);
+        }
+        assert!(m.reach_bands.iter().all(|v| *v < 0.0001));
+        assert_eq!(m.spectrum_gain, 1.0, "silence must not be auto-amplified");
+        m.clear_input_history();
+        assert!(m.reach_bands.iter().all(|v| *v == 0.0));
+    }
+    assert!(peaks[1] > peaks[0] + 10);
+}
+
+#[test]
+fn spectrum_response_modes_roundtrip_and_old_filament_settings_keep_their_look() {
+    let mut m = Filament::default();
+    let mut old = serde_json::to_value(&m.settings).unwrap();
+    for field in [
+        "audio_response",
+        "spectrum_mapping",
+        "spectrum_reach",
+        "spectrum_visibility",
+        "attack_ms",
+    ] {
+        old.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(serde_json::from_value::<Settings>(old).unwrap(), m.settings);
+    m.settings.audio_response = AudioResponse::Blend;
+    m.settings.spectrum_mapping = SpectrumMapping::AlongStrands;
+    m.settings.spectrum_reach = 1.7;
+    m.settings.attack_ms = 10.0;
+    let loaded: Settings =
+        serde_json::from_value(serde_json::to_value(&m.settings).unwrap()).unwrap();
+    assert_eq!(loaded, m.settings);
+    m.settings.spectrum_reach = f32::NAN;
+    m.settings.spectrum_visibility = f32::INFINITY;
+    m.settings.attack_ms = -10.0;
+    m.settings.sanitize();
+    assert_eq!(
+        m.settings.spectrum_reach,
+        Settings::default().spectrum_reach
+    );
+    assert_eq!(
+        m.settings.spectrum_visibility,
+        Settings::default().spectrum_visibility
+    );
+    assert_eq!(m.settings.attack_ms, 0.0);
+}
