@@ -2,10 +2,11 @@ use super::*;
 use crate::scenes::library::{self, Capture, CapturePurpose, Command, Selection};
 
 impl SymphosApp {
-    pub(super) fn activate_scene_preset(&mut self, id: u64, name: String) {
+    pub(super) fn activate_scene_preset(&mut self, id: u64, name: String, note: String) {
         let baseline = self.capture_scene().creative_fingerprint();
         if let Some(scene) = self.scenes.current_mut() {
             scene.name = name;
+            scene.note = note;
             scene.preset = baseline.map(|baseline| crate::scenes::PresetLink {
                 id,
                 baseline,
@@ -139,7 +140,7 @@ impl SymphosApp {
                         .unwrap()
                         .preview = preset.preview;
                     self.apply_scene(preset.state);
-                    self.activate_scene_preset(id, preset.name);
+                    self.activate_scene_preset(id, preset.name, preset.note);
                     self.scene_library.open = false;
                 }
             }
@@ -157,6 +158,7 @@ impl SymphosApp {
                             .find(|s| s.id == new)
                             .unwrap()
                             .preview = scene.preview;
+                        self.scenes.current_mut().unwrap().note = scene.note;
                         self.scene_library.selection = Some(Selection::Scene(new));
                     }
                     self.scenes.active_scene = active;
@@ -170,6 +172,7 @@ impl SymphosApp {
                         scene.preview,
                     ) {
                         Ok(id) => {
+                            presets.entries.last_mut().unwrap().note = scene.note;
                             next_selection = Some(Selection::Preset(id));
                             persist = true;
                         }
@@ -207,7 +210,14 @@ impl SymphosApp {
                 library::reorder(&mut presets.entries, id, position);
                 persist = true;
             }
-            Command::Save(name) => {
+            Command::Save(name, note) => {
+                if !crate::scenes::valid_note(&note) {
+                    self.scene_library.notice = Some(
+                        "Enter a note of up to 2,000 characters, without control characters."
+                            .into(),
+                    );
+                    return;
+                }
                 let mut state = self.capture_scene();
                 // Include portable MilkDrop assets when saving across projects.
                 for (snapshot, pane) in state.panes.iter_mut().zip(&self.panes) {
@@ -222,8 +232,9 @@ impl SymphosApp {
                 let preview = self.scenes.current().and_then(|s| s.preview.clone());
                 match presets.insert(name.clone(), state, preview) {
                     Ok(id) => {
+                        presets.entries.last_mut().unwrap().note = note.trim().into();
                         next_selection = Some(Selection::Preset(id));
-                        saved_preset = Some((id, name.trim().to_owned()));
+                        saved_preset = Some((id, name.trim().to_owned(), note.trim().to_owned()));
                         persist = true;
                     }
                     Err(e) => self.scene_library.notice = Some(e),
@@ -254,11 +265,16 @@ impl SymphosApp {
                             }
                         }
                     }
-                    if let Some((id, name)) = saved_preset {
-                        self.activate_scene_preset(id, name);
+                    if let Some((id, name, note)) = saved_preset {
+                        self.activate_scene_preset(id, name.clone(), note);
                         self.scene_library.select_saved(id);
+                        self.scene_library.notice = Some(format!(
+                            "Saved “{name}” as a new preset · {} saved presets.",
+                            self.scene_library.presets.entries.len()
+                        ));
+                    } else {
+                        self.scene_library.notice = Some("Scene preset library saved.".into());
                     }
-                    self.scene_library.notice = Some("Scene preset library saved.".into());
                     self.scene_library.finish_dialog();
                 }
                 Err(error) => {

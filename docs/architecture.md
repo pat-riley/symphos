@@ -428,7 +428,13 @@ for current coverage and unresolved device/permission scenarios.
 
 Scene preset saves prefill a fresh, editable three-word name and append a new
 library entry atomically. Only a successful save adopts that name in the scene
-bar. Optional scene metadata retains its preset identity and a stable creative
+bar. Scene and visual/component save dialogs both generate fresh names and store
+optional bounded notes. Notes belong to the saved snapshot's metadata, survive
+project/recovery/library round trips and are searchable in the scene library.
+Each save appends a new identity; failure keeps the old library/active preset and
+retains the dialog fields. Enter in the multiline note editor inserts a line
+break rather than submitting. Older documents omit notes and load them empty.
+Optional scene metadata retains its preset identity and a stable creative
 state fingerprint, so subsequent changes show `(edited)` and Undo can return to
 the clean state. Inspector navigation, dock visibility and automatic camera
 motion are excluded. Fingerprints are checked only during edit transactions,

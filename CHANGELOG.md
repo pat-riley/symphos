@@ -5,6 +5,12 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Give every scene and visual/component preset save a fresh random name and a
+  separate snapshot. Add optional song/reminder notes to save dialogs and saved
+  metadata, show/search notes in the scene library and preserve earlier saves.
+  Keep failed visual-preset saves open without changing the active preset or
+  in-memory library; retain existing names and notes on disk failures.
+
 - Give Filament selectable Sculptural bend, Spectrum reach and blended audio
   responses. Map bass-to-treble bands by strand or along each curve, with
   adjustable reach, fast attack and gated display visibility. Preserve saved

@@ -411,9 +411,10 @@ impl SymphosApp {
                     return;
                 };
                 let name = format!("{} copy", scene.name.chars().take(24).collect::<String>());
-                self.scenes
-                    .insert(name, scene.state.clone())
-                    .map(|_| scene.state)
+                self.scenes.insert(name, scene.state.clone()).map(|_| {
+                    self.scenes.current_mut().unwrap().note = scene.note;
+                    scene.state
+                })
             }
             Action::Rename(id, name) => {
                 self.scenes.rename(id, &name);
@@ -1531,7 +1532,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     self.inspecting_signal = false;
                     self.inspecting_macro = None;
                 }
-                workspace_ui::Action::Save(name, scope) => {
+                workspace_ui::Action::Save(name, scope, note) => {
                     if let Some(content) = self.preset_content(scope) {
                         let id = format!(
                             "user:{}",
@@ -1548,7 +1549,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                                 .unwrap_or_else(|e| e.into_inner())
                                 .bank,
                         );
-                        self.storage.presets.push(workspace::Preset {
+                        let preset = workspace::Preset {
                             audio_inputs: self
                                 .signal_ui
                                 .lock()
@@ -1559,14 +1560,16 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                             signals,
                             id: id.clone(),
                             name,
+                            note,
                             content,
-                        });
-                        self.storage.active = id;
-                        self.storage.modified = false;
-                        self.storage.save_library();
+                        };
+                        match self.storage.insert_preset(preset) {
+                            Ok(()) => self.manager.finish_save(),
+                            Err(error) => self.storage.notice = Some(error),
+                        }
                     }
                 }
-                workspace_ui::Action::Rename(id, name) => {
+                workspace_ui::Action::Rename(id, name, note) => {
                     if let Some(preset) = self
                         .storage
                         .presets
@@ -1574,6 +1577,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         .find(|p| p.id == id && !p.factory())
                     {
                         preset.name = name;
+                        preset.note = note;
                         self.storage.save_library();
                     }
                 }
@@ -4923,7 +4927,7 @@ mod workspace_interaction_tests {
         app.scenes.store(app.capture_scene());
         let original = app.scenes.active_scene;
         let expected = serde_json::to_value(app.capture_scene()).unwrap();
-        app.scene_library_command(Command::Save("Performance".into()));
+        app.scene_library_command(Command::Save("Performance".into(), String::new()));
         assert_eq!(app.scene_library.presets.entries.len(), 1);
         assert_eq!(app.scenes.scenes.len(), 1);
         assert_eq!(app.scenes.active_scene, original);
@@ -4995,7 +4999,10 @@ mod workspace_interaction_tests {
                 .as_nanos()
         ));
         app.storage.dir = dir.clone();
-        app.scene_library_command(Command::Save("Velvet Lunar Drift".into()));
+        app.scene_library_command(Command::Save(
+            "Velvet Lunar Drift".into(),
+            "Artist — First song".into(),
+        ));
         let first = app.scene_library.presets.entries[0].id;
         assert_eq!(
             app.scenes.current().unwrap().display_name(),
@@ -5039,7 +5046,10 @@ mod workspace_interaction_tests {
                 .unwrap()
                 .edited
         );
-        app.scene_library_command(Command::Save("Quiet Coral Echo".into()));
+        app.scene_library_command(Command::Save(
+            "Quiet Coral Echo".into(),
+            "Second song\nA quieter passage".into(),
+        ));
         let second = app.scene_library.presets.entries[1].id;
         assert_ne!(first, second);
         assert_eq!(
@@ -5066,12 +5076,19 @@ mod workspace_interaction_tests {
                 .slots[0]
                 .name
         );
-        assert_eq!(Presets::load(&dir).unwrap().entries.len(), 2);
+        let saved = Presets::load(&dir).unwrap();
+        assert_eq!(saved.entries.len(), 2);
+        assert_eq!(saved.entries[0].note, "Artist — First song");
+        assert_eq!(saved.entries[1].note, "Second song\nA quieter passage");
         app.scene_library.open(&app.scenes);
         assert_eq!(app.scene_library.selection, Some(Selection::Preset(second)));
         let book: crate::scenes::Book =
             serde_json::from_slice(&serde_json::to_vec(&app.scenes).unwrap()).unwrap();
         assert_eq!(book.current().unwrap().display_name(), "Quiet Coral Echo");
+        assert_eq!(
+            book.current().unwrap().note,
+            "Second song\nA quieter passage"
+        );
         assert_eq!(book.current().unwrap().preset.as_ref().unwrap().id, second);
         app.scene_library_command(Command::Load(Selection::Preset(first)));
         assert_eq!(
@@ -5079,11 +5096,110 @@ mod workspace_interaction_tests {
             "Velvet Lunar Drift"
         );
         assert_eq!(app.scene_macros.slots[0].name, None);
-        app.scene_library_command(Command::Save("Soft River Bloom".into()));
+        assert_eq!(app.scenes.current().unwrap().note, "Artist — First song");
+        app.scene_library_command(Command::Save("Soft River Bloom".into(), String::new()));
         assert_eq!(
             Presets::load(&dir).unwrap().entries.len(),
             3,
             "even an unchanged preset saves a new library entry"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn repeated_visual_preset_saves_keep_independent_settings_notes_and_names_on_disk() {
+        let mut app = app();
+        let dir = std::env::temp_dir().join(format!(
+            "symphos-visual-preset-versions-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        app.storage.dir = dir.clone();
+        app.panes[0] = ModulePane::new(ModuleKind::Filament);
+        app.selected_pane = 0;
+        let first_settings = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
+        let first_name = crate::scenes::suggest_preset_name(
+            app.storage.presets.iter().map(|p| p.name.as_str()),
+            None,
+        );
+        app.manager_actions(vec![workspace_ui::Action::Save(
+            first_name.clone(),
+            Scope::Component,
+            "First song".into(),
+        )]);
+        let first_id = app.storage.active.clone();
+        let mut settings = first_settings.clone();
+        settings["Filament"]["twist"] = 2.8.into();
+        assert!(app.panes[0].paste_settings(&serde_json::from_value(settings).unwrap()));
+        let second_name = crate::scenes::suggest_preset_name(
+            app.storage.presets.iter().map(|p| p.name.as_str()),
+            Some(&first_name),
+        );
+        app.manager_actions(vec![workspace_ui::Action::Save(
+            second_name.clone(),
+            Scope::Component,
+            "Second song".into(),
+        )]);
+        assert_ne!(app.storage.active, first_id);
+        assert_ne!(first_name, second_name);
+        let saved = Storage::new(dir.clone());
+        let presets: Vec<_> = saved.presets.iter().filter(|p| !p.factory()).collect();
+        assert_eq!(presets.len(), 2);
+        assert_eq!(presets[0].note, "First song");
+        assert_eq!(presets[1].note, "Second song");
+        if let PresetContent::Component(settings) = &presets[0].content {
+            assert_eq!(serde_json::to_value(settings).unwrap(), first_settings);
+        } else {
+            panic!("component preset");
+        }
+        if let PresetContent::Component(settings) = &presets[1].content {
+            assert!(
+                (serde_json::to_value(settings).unwrap()["Filament"]["twist"]
+                    .as_f64()
+                    .unwrap()
+                    - 2.8)
+                    .abs()
+                    < 0.00001
+            );
+        } else {
+            panic!("component preset");
+        }
+        let mut legacy = serde_json::to_value(presets[0]).unwrap();
+        legacy.as_object_mut().unwrap().remove("note");
+        assert!(
+            serde_json::from_value::<workspace::Preset>(legacy)
+                .unwrap()
+                .note
+                .is_empty()
+        );
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, "retain this file").unwrap();
+        app.storage.dir = blocker.clone();
+        let active = app.storage.active.clone();
+        app.manager_actions(vec![workspace_ui::Action::Save(
+            "Failed third save".into(),
+            Scope::Component,
+            "Keep my note".into(),
+        )]);
+        assert_eq!(app.storage.active, active);
+        assert_eq!(
+            app.storage.presets.iter().filter(|p| !p.factory()).count(),
+            2
+        );
+        assert!(app.storage.notice.as_ref().unwrap().contains("save failed"));
+        assert_eq!(
+            std::fs::read_to_string(blocker).unwrap(),
+            "retain this file"
+        );
+        assert_eq!(
+            Storage::new(dir.clone())
+                .presets
+                .iter()
+                .filter(|p| !p.factory())
+                .count(),
+            2
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -5099,7 +5215,7 @@ mod workspace_interaction_tests {
         app.scenes.store(app.capture_scene());
         let previous_name = app.scenes.current().unwrap().display_name();
         let previous_preset = app.scenes.current().unwrap().preset.clone();
-        app.scene_library_command(Command::Save("Cannot save here".into()));
+        app.scene_library_command(Command::Save("Cannot save here".into(), String::new()));
         assert!(app.scene_library.presets.entries.is_empty());
         assert_eq!(app.scenes.current().unwrap().display_name(), previous_name);
         assert!(app.scenes.current().unwrap().preset == previous_preset);

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 mod fingerprint;
 pub mod library;
 mod names;
+pub(crate) use names::suggest_from as suggest_preset_name;
 
 pub const MAX_SCENES: usize = 64;
 pub const MAX_DOCUMENT_BYTES: usize = 64_000_000;
@@ -12,6 +13,8 @@ pub const MAX_DOCUMENT_BYTES: usize = 64_000_000;
 pub struct Scene {
     pub id: u64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,6 +57,7 @@ impl Book {
             scenes: vec![Scene {
                 id: 1,
                 name: "Scene 1".into(),
+                note: String::new(),
                 preset: None,
                 preview: None,
                 state,
@@ -130,6 +134,7 @@ impl Book {
             Scene {
                 id,
                 name: name.trim().into(),
+                note: String::new(),
                 preset: None,
                 preview: None,
                 state,
@@ -189,6 +194,7 @@ impl Book {
                     && s.id < self.next_scene_id
                     && ids.insert(s.id)
                     && valid_name(&s.name)
+                    && valid_note(&s.note)
                     && s.preset.as_ref().is_none_or(|p| p.id > 0)
                     && s.state.validate()
                     && s.preview.as_ref().is_none_or(library::Preview::valid)
@@ -197,6 +203,26 @@ impl Book {
 }
 fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.len() <= 120 && !name.chars().any(char::is_control)
+}
+pub(crate) const MAX_NOTE_CHARS: usize = 2000;
+pub(crate) fn valid_note(note: &str) -> bool {
+    note.chars().count() <= MAX_NOTE_CHARS
+        && !note
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+}
+pub(crate) fn note_field(ui: &mut egui::Ui, note: &mut String) -> egui::Response {
+    ui.label("Note (optional)");
+    let response = ui.add(
+        egui::TextEdit::multiline(note)
+            .hint_text("Song title, artist, or a reminder…")
+            .char_limit(MAX_NOTE_CHARS)
+            .desired_rows(3)
+            .desired_width(f32::INFINITY),
+    );
+    #[cfg(test)]
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("preset-note-editor"), response.id));
+    response
 }
 
 pub enum Action {
@@ -322,7 +348,7 @@ impl Browser {
             });
             if ui.add_enabled(book.scenes.len()>1,egui::Button::new("›").min_size(egui::Vec2::splat(H))).help_text("Next scene").clicked(){action=Some(Action::Switch(book.cycle(1)));}
             if ui.add_sized([64.0,H],egui::Button::new("Library")).help_text("Manage project scenes and reusable scene presets.").clicked(){action=Some(Action::Library);}
-            if crate::icons::sized_button(ui, crate::icons::Icon::Save, false, H, "Save the current scene as a named preset, including signals and macros.").clicked(){action=Some(Action::SavePreset);}
+            if crate::icons::sized_button(ui, crate::icons::Icon::Save, false, H, "Save a new scene preset with a fresh name and optional note, including signals and macros. Earlier saves are kept in Library → Saved presets.").clicked(){action=Some(Action::SavePreset);}
         });
         for offset in [H, H + picker_width, H * 2.0 + picker_width, width - H] {
             row.painter()

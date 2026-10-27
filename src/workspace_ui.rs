@@ -580,13 +580,15 @@ impl Scope {
 pub enum Action {
     Apply(String),
     Add(ModuleKind),
-    Save(String, Scope),
-    Rename(String, String),
+    Save(String, Scope, String),
+    Rename(String, String, String),
     Delete(String),
 }
 struct SaveDialog {
     name: String,
     scope: Scope,
+    note: String,
+    focus: bool,
 }
 #[derive(Default)]
 pub struct Manager {
@@ -596,10 +598,31 @@ pub struct Manager {
     preset_search: String,
     scope: Option<Scope>,
     save: Option<SaveDialog>,
-    rename: Option<(String, String)>,
+    rename: Option<(String, String, String)>,
+    last_suggested_name: Option<String>,
     delete: Option<String>,
 }
 impl Manager {
+    fn begin_save(&mut self, storage: &Storage, scope: Scope) {
+        let name = crate::scenes::suggest_preset_name(
+            storage.presets.iter().map(|p| p.name.as_str()),
+            self.last_suggested_name.as_deref(),
+        );
+        self.last_suggested_name = Some(name.clone());
+        self.save = Some(SaveDialog {
+            name,
+            scope,
+            focus: true,
+            note: storage
+                .presets
+                .iter()
+                .find(|p| p.id == storage.active)
+                .map_or_else(String::new, |p| p.note.clone()),
+        });
+    }
+    pub fn finish_save(&mut self) {
+        self.save = None;
+    }
     pub fn toggle_browser(&mut self, tab: BrowserTab) {
         self.library_open = !self.library_open || self.browser_tab != tab;
         self.browser_tab = tab;
@@ -687,7 +710,7 @@ impl Manager {
                 ui.add(egui::TextEdit::singleline(&mut self.preset_search).hint_text("Search presets…").desired_width(f32::INFINITY));
                 ui.separator();
                 let query = self.preset_search.trim().to_lowercase();
-                let candidates: Vec<_> = storage.presets.iter().filter(|p| scope.matches(&p.content) && p.name.to_lowercase().contains(&query)).collect();
+                let candidates: Vec<_> = storage.presets.iter().filter(|p| scope.matches(&p.content) && (p.name.to_lowercase().contains(&query) || p.note.to_lowercase().contains(&query))).collect();
                 egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
                     if candidates.is_empty() { ui.weak("No saved presets in this category. Use Save to create one."); }
                     for preset in candidates {
@@ -702,9 +725,10 @@ impl Manager {
                                 if let PresetContent::Component(settings) = &preset.content { text.push_str(&format!(" · {}", settings.kind().label())); }
                                 let width = ui.available_width() - if preset.factory() { 0.0 } else { 34.0 };
                                 let response = ui.add_enabled_ui(compatible, |ui| ui.add_sized([width, 30.0], egui::Button::selectable(storage.active == preset.id, text).truncate())).inner;
+                                let response = if preset.note.is_empty() { response } else { response.help_text(&preset.note) };
                                 if response.clicked() { actions.push(Action::Apply(preset.id.clone())); ui.close(); }
                                 if !compatible { response.help_text("Select a pane with this component type to apply its preset."); }
-                                if !preset.factory() && ui.small_button("···").clicked() { self.rename = Some((preset.id.clone(), preset.name.clone())); ui.close(); }
+                                if !preset.factory() && ui.small_button("···").clicked() { self.rename = Some((preset.id.clone(), preset.name.clone(), preset.note.clone())); ui.close(); }
                             });
                         });
                     }
@@ -720,7 +744,7 @@ impl Manager {
                 actions.push(Action::Apply(cycle(&cycling, &storage.active, 1)));
             }
             if ui.add_enabled(has_panes, egui::Button::new("Save").min_size(Vec2::new(save_width, NAV_CONTROL_HEIGHT))).clicked() {
-                self.save = Some(SaveDialog { name: String::new(), scope: current_scope });
+                self.begin_save(storage, current_scope);
             }
         });
         actions
@@ -818,11 +842,19 @@ impl Manager {
                 egui::Modal::new(egui::Id::new("save-workspace-preset")).show(ctx, |ui| {
                     ui.set_width(360.0);
                     ui.heading("Save preset");
-                    ui.add(
+                    ui.small("Creates a new preset. Earlier saves stay in the library.");
+                    ui.label("Name");
+                    let name_field = ui.add(
                         egui::TextEdit::singleline(&mut save.name)
                             .hint_text("Preset name")
                             .desired_width(f32::INFINITY),
                     );
+                    if save.focus {
+                        name_field.request_focus();
+                        save.focus = false;
+                    }
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let editing_note = crate::scenes::note_field(ui, &mut save.note).has_focus();
                     ui.radio_value(
                         &mut save.scope,
                         Scope::Layout,
@@ -848,24 +880,29 @@ impl Manager {
                             "This name is already used in that category.",
                         );
                     }
+                    let valid = workspace::valid_name(name)
+                        && crate::scenes::valid_note(&save.note)
+                        && !duplicate
+                        && storage.presets.iter().filter(|p| !p.factory()).count() < 256;
                     ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(
-                                workspace::valid_name(name)
-                                    && !duplicate
-                                    && storage.presets.iter().filter(|p| !p.factory()).count()
-                                        < 256,
-                                egui::Button::new("Save preset"),
-                            )
+                            .add_enabled(valid, egui::Button::new("Save preset"))
                             .clicked()
+                            || (enter && !editing_note && valid)
                         {
-                            actions.push(Action::Save(name.into(), save.scope));
-                            finish = true;
+                            actions.push(Action::Save(
+                                name.into(),
+                                save.scope,
+                                save.note.trim().into(),
+                            ));
                         }
                         if ui.button("Cancel").clicked() {
                             finish = true;
                         }
                     });
+                    if let Some(error) = &storage.notice {
+                        ui.small(error);
+                    }
                 });
             if response.should_close() {
                 finish = true;
@@ -875,12 +912,13 @@ impl Manager {
             self.save = None;
         }
         finish = false;
-        if let Some((id, name)) = &mut self.rename {
+        if let Some((id, name, note)) = &mut self.rename {
             let response =
                 egui::Modal::new(egui::Id::new("manage-workspace-preset")).show(ctx, |ui| {
                     ui.set_width(320.0);
                     ui.heading("Manage preset");
                     ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                    crate::scenes::note_field(ui, note);
                     let same_scope = storage
                         .presets
                         .iter()
@@ -894,12 +932,18 @@ impl Manager {
                     ui.horizontal(|ui| {
                         if ui
                             .add_enabled(
-                                workspace::valid_name(name.trim()) && !duplicate,
-                                egui::Button::new("Rename"),
+                                workspace::valid_name(name.trim())
+                                    && !duplicate
+                                    && crate::scenes::valid_note(note),
+                                egui::Button::new("Save changes"),
                             )
                             .clicked()
                         {
-                            actions.push(Action::Rename(id.clone(), name.trim().into()));
+                            actions.push(Action::Rename(
+                                id.clone(),
+                                name.trim().into(),
+                                note.trim().into(),
+                            ));
                             finish = true;
                         }
                         if ui.button("Delete…").clicked() {
@@ -1007,6 +1051,57 @@ pub fn drop_hint(ui: &egui::Ui, rect: Rect, message: &str, accent: Color32) {
 mod tests {
     use super::*;
     use eframe::egui::Pos2;
+    #[test]
+    fn visual_preset_save_generates_a_new_name_and_retains_note_until_success() {
+        let dir =
+            std::env::temp_dir().join(format!("symphos-visual-save-dialog-{}", std::process::id()));
+        let mut storage = Storage::new(dir);
+        let mut manager = Manager::default();
+        manager.begin_save(&storage, Scope::View);
+        let first = manager.save.as_ref().unwrap().name.clone();
+        assert_eq!(first.split_whitespace().count(), 3);
+        manager.finish_save();
+        manager.begin_save(&storage, Scope::View);
+        let save = manager.save.as_mut().unwrap();
+        assert_ne!(first, save.name);
+        save.note = "My song".into();
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            manager.dialogs(ui.ctx(), &storage, ModuleKind::Filament);
+        });
+        out.textures_delta.clear();
+        let mut actions = Vec::new();
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                actions = manager.dialogs(ui.ctx(), &storage, ModuleKind::Filament);
+            },
+        );
+        out.textures_delta.clear();
+        assert!(matches!(&actions[..], [Action::Save(_, Scope::View, note)] if note == "My song"));
+        assert!(
+            manager.save.is_some(),
+            "keep fields until the disk write succeeds"
+        );
+        storage.notice = Some("No space left on device".into());
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            manager.dialogs(ui.ctx(), &storage, ModuleKind::Filament);
+        });
+        out.textures_delta.clear();
+        assert_eq!(manager.save.as_ref().unwrap().note, "My song");
+        manager.finish_save();
+        assert!(!manager.modal_open());
+    }
+
     #[test]
     fn browser_categories_keep_the_five_analyzers_as_primitives_and_cover_all_modules() {
         let primitives = COMPONENT_GROUPS

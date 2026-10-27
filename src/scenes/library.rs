@@ -97,6 +97,7 @@ impl Presets {
                     && s.id < self.next_id
                     && ids.insert(s.id)
                     && valid_name(&s.name)
+                    && super::valid_note(&s.note)
                     && s.state.validate()
                     && s.preview.as_ref().is_none_or(Preview::valid)
             })
@@ -130,6 +131,7 @@ impl Presets {
         self.entries.push(Scene {
             id,
             name: name.trim().into(),
+            note: String::new(),
             preset: None,
             state,
             preview,
@@ -163,12 +165,12 @@ pub enum Command {
     Rename(Selection, String),
     Delete(Selection),
     Reorder(Selection, usize),
-    Save(String),
+    Save(String, String),
     Refresh,
     LegacyPresets,
 }
 enum Dialog {
-    Save(String),
+    Save(String, String),
     Rename(Selection, String),
     Delete(Selection, String),
 }
@@ -242,7 +244,10 @@ impl Library {
     pub fn save_dialog(&mut self, book: &Book) {
         let name = super::names::suggest(book, &self.presets, self.last_suggested_name.as_deref());
         self.last_suggested_name = Some(name.clone());
-        self.dialog = Some(Dialog::Save(name));
+        self.dialog = Some(Dialog::Save(
+            name,
+            book.current().map_or_else(String::new, |s| s.note.clone()),
+        ));
         self.focus_dialog = true;
     }
     pub fn finish_dialog(&mut self) {
@@ -264,7 +269,7 @@ impl Library {
         };
         let can_save =
             matches!(dialog, Dialog::Rename(Selection::Scene(_), _)) || !self.load_failed;
-        let title = if matches!(dialog, Dialog::Save(_)) {
+        let title = if matches!(dialog, Dialog::Save(_, _)) {
             "Save scene preset"
         } else {
             "Rename scene"
@@ -272,8 +277,16 @@ impl Library {
         egui::Modal::new(egui::Id::new("scene-library-dialog")).show(ctx, |ui| {
             ui.set_width(340.0);
             match dialog {
-                Dialog::Save(name) | Dialog::Rename(_, name) => {
+                Dialog::Save(_, _) | Dialog::Rename(_, _) => {
                     ui.heading(title);
+                    if matches!(dialog, Dialog::Save(_, _)) {
+                        ui.small("Creates a new preset. Earlier saves stay in Saved presets.");
+                    }
+                    let name = match dialog {
+                        Dialog::Save(name, _) | Dialog::Rename(_, name) => name,
+                        _ => unreachable!(),
+                    };
+                    ui.label("Name");
                     let field =
                         ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
                     if self.focus_dialog {
@@ -285,6 +298,15 @@ impl Library {
                     if !valid {
                         ui.small("Enter a short name, without line breaks.");
                     }
+                    let (note_valid, editing_note) = match dialog {
+                        Dialog::Save(_, note) => {
+                            let response = super::note_field(ui, note);
+                            (super::valid_note(note), response.has_focus())
+                        }
+                        _ => (true, false),
+                    };
+                    let valid = valid && note_valid;
+                    let enter = enter && !editing_note;
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui
@@ -293,7 +315,9 @@ impl Library {
                             || (enter && valid && can_save)
                         {
                             command = Some(match dialog {
-                                Dialog::Save(name) => Command::Save(name.clone()),
+                                Dialog::Save(name, note) => {
+                                    Command::Save(name.clone(), note.trim().into())
+                                }
                                 Dialog::Rename(key, name) => Command::Rename(*key, name.clone()),
                                 _ => unreachable!(),
                             });
@@ -370,7 +394,7 @@ mod tests {
         let mut library = Library::default();
         library.save_dialog(&book);
         let first = match &library.dialog {
-            Some(Dialog::Save(name)) => name.clone(),
+            Some(Dialog::Save(name, _)) => name.clone(),
             _ => panic!(),
         };
         assert_eq!(first.split_whitespace().count(), 3);
@@ -381,7 +405,7 @@ mod tests {
         library.finish_dialog();
         library.save_dialog(&book);
         let second = match &library.dialog {
-            Some(Dialog::Save(name)) => name.clone(),
+            Some(Dialog::Save(name, _)) => name.clone(),
             _ => panic!(),
         };
         assert_ne!(first, second);
@@ -408,8 +432,89 @@ mod tests {
             },
         );
         out.textures_delta.clear();
-        assert!(matches!(command, Some(Command::Save(name)) if name == second));
+        assert!(matches!(command, Some(Command::Save(name, _)) if name == second));
     }
+    #[test]
+    fn save_dialog_carries_optional_song_note_and_notes_remain_backward_compatible() {
+        let mut book = Book::new(state());
+        book.current_mut().unwrap().note = "Artist — Song title\nSecond verse".into();
+        let mut library = Library::default();
+        library.save_dialog(&book);
+        assert!(
+            matches!(&library.dialog, Some(Dialog::Save(_, note)) if note == "Artist — Song title\nSecond verse")
+        );
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            library.dialogs(ui.ctx());
+        });
+        out.textures_delta.clear();
+        let mut command = None;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                command = library.dialogs(ui.ctx());
+            },
+        );
+        out.textures_delta.clear();
+        assert!(
+            matches!(command, Some(Command::Save(_, note)) if note == "Artist — Song title\nSecond verse")
+        );
+        let mut legacy = serde_json::to_value(&book).unwrap();
+        legacy["scenes"][0].as_object_mut().unwrap().remove("note");
+        let loaded: Book = serde_json::from_value(legacy).unwrap();
+        assert!(loaded.current().unwrap().note.is_empty());
+        assert!(loaded.valid());
+        assert!(super::super::valid_note("Track one\nTrack two"));
+        assert!(!super::super::valid_note("Invalid\0note"));
+        assert!(!super::super::valid_note(
+            &"a".repeat(super::super::MAX_NOTE_CHARS + 1)
+        ));
+    }
+
+    #[test]
+    fn enter_in_optional_note_adds_a_line_instead_of_saving_the_scene() {
+        let book = Book::new(state());
+        let mut library = Library::default();
+        library.save_dialog(&book);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            library.dialogs(ui.ctx());
+        });
+        out.textures_delta.clear();
+        let note_id = ctx
+            .data(|d| d.get_temp::<egui::Id>(egui::Id::new("preset-note-editor")))
+            .unwrap();
+        ctx.memory_mut(|m| m.request_focus(note_id));
+        let mut command = None;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                command = library.dialogs(ui.ctx());
+            },
+        );
+        out.textures_delta.clear();
+        assert!(command.is_none());
+        assert!(matches!(&library.dialog, Some(Dialog::Save(_, note)) if note.contains('\n')));
+    }
+
     #[test]
     fn presets_roundtrip_complete_scene_and_reject_corrupt_library_without_rewriting() {
         let dir =

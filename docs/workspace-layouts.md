@@ -299,12 +299,26 @@ current setup. The scene menu also offers a new empty scene, rename, move
 earlier/later, and delete. Switching scenes retains edits, and File → Save Project
 saves every scene. See [projects and scenes](signal-sources.md#projects-and-presets).
 
+The top-bar **Save** icon saves a complete scene preset with a fresh, editable
+three-word name. Add an optional **Note** for a song title, artist or reminder.
+Every successful save creates a separate snapshot, including when editing a
+previously saved preset; earlier saves keep their original settings and notes.
+Find all versions in **Library → Saved presets**. Saving does not create another
+project-scene slot. Notes appear on library cards and in hover help, and the
+search matches both names and notes. Loading a preset restores its note; the
+next save prefills that note so it can be reused or changed.
+
 Use **Scene → Visual preset library…** for existing full-view, layout, and component
 presets. **Component presets…** in the inspector opens that library in the component
 category. Within the library, click the preset name to search by category; layout
 thumbnails preview the arrangement. An asterisk marks edits to the loaded preset.
 
-Click **Save**, enter a name, and choose a preset type:
+Click **Save**, keep or edit its fresh random name, optionally add a note, and
+choose a preset type. This also creates a new entry rather than overwriting the
+loaded preset. The ··· management dialog can edit its name and note. Failed saves
+keep the save dialog open with its fields intact and retain the previous preset.
+
+Preset types:
 
 | Type | Saved content | Applying it |
 | --- | --- | --- |
