@@ -84,6 +84,38 @@ current milestone. Revisit the embedded-plugin versus standalone-sender choice
 after the standalone workflow and audio response are reliable. Preserve the
 existing independent audio/analysis/render boundaries in the meantime.
 
+### 5. Visualizer authoring kit and agent workflow
+
+Build a stable authoring contract on the existing visualizer harness after the
+current audio-response work. A user should be able to give an agent the starter
+module, input contract, parameter conventions and validation commands, then
+develop a custom visualizer without understanding the editor's internals.
+
+- Register each visualizer by a stable ID, display metadata and capabilities,
+  replacing central dispatch edits and fixed component/macro-bank counts.
+- Declare parameters with defaults, safe ranges, inspector groups, tooltips,
+  numeric/toggle/choice/color/asset types and persistence versions. Reuse that
+  schema for inspector controls, macros, MIDI and saved settings.
+- Expose read-only audio, spectrum, modulation and media inputs alongside the
+  pane's virtual clock and rendering context. The host owns routing, freeze,
+  layout, background, common camera controls and resource lifecycle.
+- Provide a starter module, CPU and GPU examples, authoring rules and validation
+  for silence, source changes, resizing, freeze, multiple instances, save/reload,
+  invalid settings and bounded rendering/memory use.
+- Prove the internal contract by migrating Filament and one GPU visualizer.
+  Exit condition: add another native visualizer without editing central app
+  files, and retain compatibility with existing projects and parameter mappings.
+- Follow with versioned, user-installable shader packages: WGSL plus a parameter
+  manifest, package discovery, reload, diagnostics and last-valid-render recovery.
+  Define native-extension loading/isolation separately before supporting
+  arbitrary compiled code in installed packages.
+- Give agents a documented local validate/preview/test/frame-capture workflow
+  with machine-readable results, rather than relying on UI automation.
+
+This extends the scene/shader contract below. It is independent of the deferred
+VST/DAW integration work; the initial milestone is an authoring kit for native
+modules, followed by packages that can be loaded without rebuilding the app.
+
 The complete [analyzer feature backlog](analyzer-feature-backlog.md) records
 the current parity inventory, shipped waveform work, proposed metering modules,
 capture workflows, workspace features, and platform integrations. The

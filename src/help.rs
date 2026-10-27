@@ -143,29 +143,65 @@ pub fn draw(ui: &mut egui::Ui, rect: Rect, open: &mut bool) {
     } else {
         ui.data_mut(|d| d.insert_temp(last_key, text.clone()));
     }
-    let mut panel = ui.new_child(
+    let inner = rect.shrink(12.0);
+    if !inner.is_positive() {
+        return;
+    }
+    let mut panel = ui.new_child(egui::UiBuilder::new().id_salt("info-view").max_rect(inner));
+    panel.set_clip_rect(inner.intersect(ui.clip_rect()));
+    let header = Rect::from_min_size(inner.min, Vec2::new(inner.width(), 24.0));
+    let close_rect =
+        Rect::from_min_size(header.right_top() - Vec2::new(24.0, 0.0), Vec2::splat(24.0));
+    let mut title = panel.new_child(
         egui::UiBuilder::new()
-            .id_salt("info-view")
-            .max_rect(rect.shrink(10.0)),
+            .id_salt("title")
+            .max_rect(Rect::from_min_max(
+                header.min,
+                close_rect.left_bottom() - Vec2::new(8.0, 0.0),
+            ))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    panel.set_clip_rect(rect.intersect(ui.clip_rect()));
-    panel.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-    panel.horizontal(|ui| {
-        ui.label(RichText::new("INFO VIEW").small().strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .small_button("×")
-                .help_text("Hide Info View. Reopen it with the circular info button at the bottom left, or press F1.")
-                .clicked()
-            {
-                *open = false;
-            }
+    title.add(
+        egui::Label::new(RichText::new("INFO VIEW").small().strong())
+            .truncate()
+            .selectable(false),
+    );
+    let mut tools = panel.new_child(
+        egui::UiBuilder::new()
+            .id_salt("close")
+            .max_rect(close_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    if crate::icons::toolbar_toggle(
+        &mut tools,
+        crate::icons::Icon::Close,
+        false,
+        24.0,
+        "Hide Info View. Reopen it with the circular info button at the bottom left, or press F1.",
+    )
+    .clicked()
+    {
+        *open = false;
+    }
+    let divider_y = panel
+        .painter()
+        .round_to_pixel_center(header.bottom() + 10.0);
+    panel.painter().hline(
+        inner.x_range(),
+        divider_y,
+        egui::Stroke::new(
+            1.0 / panel.ctx().pixels_per_point(),
+            panel.visuals().widgets.noninteractive.bg_stroke.color,
+        ),
+    );
+    let body = Rect::from_min_max(egui::pos2(inner.left(), divider_y + 10.0), inner.max);
+    if body.is_positive() {
+        let mut content = panel.new_child(egui::UiBuilder::new().id_salt("body").max_rect(body));
+        content.set_clip_rect(body.intersect(panel.clip_rect()));
+        egui::ScrollArea::vertical().show(&mut content, |ui| {
+            ui.add(egui::Label::new(RichText::new(text).small()).wrap());
         });
-    });
-    panel.separator();
-    egui::ScrollArea::vertical().show(&mut panel, |ui| {
-        ui.add(egui::Label::new(RichText::new(text).small()).wrap());
-    });
+    }
 }
 
 #[cfg(test)]

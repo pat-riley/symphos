@@ -605,6 +605,8 @@ pub struct Preset {
     pub signals: Vec<crate::signals::Definition>,
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
     pub content: PresetContent,
 }
 impl Preset {
@@ -620,6 +622,7 @@ pub fn factory_presets() -> Vec<Preset> {
         signals: Vec::new(),
         id: format!("factory:{id}"),
         name: name.into(),
+        note: String::new(),
         content: PresetContent::View {
             background: Default::default(),
             macros: None,
@@ -736,6 +739,7 @@ pub fn factory_presets() -> Vec<Preset> {
             signals: Vec::new(),
             id: format!("factory:{id}"),
             name: name.into(),
+            note: String::new(),
             content: PresetContent::Layout(layout),
         });
     }
@@ -801,6 +805,7 @@ impl Storage {
                                 && !p.id.is_empty()
                                 && p.id.len() <= 120
                                 && valid_name(&p.name)
+                                && crate::scenes::valid_note(&p.note)
                                 && p.content.valid()
                                 && crate::signals::Bank {
                                     audio_inputs: p.audio_inputs.clone(),
@@ -888,22 +893,48 @@ impl Storage {
         self.finish_checkpoint();
     }
     pub fn save_library(&mut self) {
+        match self.write_library(&self.presets) {
+            Ok(()) => self.notice = None,
+            Err(error) => self.notice = Some(error),
+        }
+    }
+    fn write_library(&self, presets: &[Preset]) -> Result<(), String> {
         let library = UserLibrary {
             version: 1,
-            presets: self
-                .presets
-                .iter()
-                .filter(|p| !p.factory())
-                .cloned()
-                .collect(),
+            presets: presets.iter().filter(|p| !p.factory()).cloned().collect(),
         };
-        match serde_json::to_vec_pretty(&library)
+        serde_json::to_vec_pretty(&library)
             .map_err(std::io::Error::other)
             .and_then(|bytes| atomic_write(&self.dir.join("presets.json"), &bytes))
+            .map_err(|error| format!("Preset save failed: {error}"))
+    }
+    pub fn insert_preset(&mut self, preset: Preset) -> Result<(), String> {
+        if !valid_name(&preset.name)
+            || !crate::scenes::valid_note(&preset.note)
+            || preset.id.is_empty()
+            || preset.id.len() > 120
+            || !preset.content.valid()
+            || preset.factory()
+            || self.presets.iter().any(|p| {
+                p.id == preset.id
+                    || (p.name.eq_ignore_ascii_case(&preset.name)
+                        && p.content.label() == preset.content.label())
+            })
+            || self.presets.iter().filter(|p| !p.factory()).count() >= 256
         {
-            Ok(()) => self.notice = None,
-            Err(error) => self.notice = Some(format!("Preset save failed: {error}")),
+            return Err(
+                "Enter a valid name and note. The library supports up to 256 presets.".into(),
+            );
         }
+        let mut next = self.presets.clone();
+        let id = preset.id.clone();
+        next.push(preset);
+        self.write_library(&next)?;
+        self.presets = next;
+        self.active = id;
+        self.modified = false;
+        self.notice = Some("Saved as a new preset. Earlier presets are still available.".into());
+        Ok(())
     }
 }
 pub fn valid_name(name: &str) -> bool {
@@ -1543,6 +1574,7 @@ mod tests {
         let mut state = restored;
         state.appearance.theme = crate::theme::ThemeChoice::Midnight;
         state.appearance.ui_scale = Some(1.3);
+        state.appearance.pane_headers_on_hover = false;
         state.appearance.default_palette = crate::colors::Palette::Ocean;
         let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert_eq!(restored.appearance, state.appearance);
@@ -1551,7 +1583,12 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("default_palette");
+        value["appearance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pane_headers_on_hover");
         let old = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(old.appearance.pane_headers_on_hover);
         assert_eq!(
             old.appearance.default_palette,
             crate::colors::Palette::ClassicLed
@@ -1769,6 +1806,7 @@ mod tests {
             signals: Vec::new(),
             id: "user:test".into(),
             name: "My layout".into(),
+            note: String::new(),
             content: PresetContent::Layout(Tile::Pane(0)),
         });
         storage.save_library();

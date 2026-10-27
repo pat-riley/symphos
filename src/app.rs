@@ -411,9 +411,10 @@ impl SymphosApp {
                     return;
                 };
                 let name = format!("{} copy", scene.name.chars().take(24).collect::<String>());
-                self.scenes
-                    .insert(name, scene.state.clone())
-                    .map(|_| scene.state)
+                self.scenes.insert(name, scene.state.clone()).map(|_| {
+                    self.scenes.current_mut().unwrap().note = scene.note;
+                    scene.state
+                })
             }
             Action::Rename(id, name) => {
                 self.scenes.rename(id, &name);
@@ -1138,7 +1139,80 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.theme.foreground,
             Color32::from_gray(25),
         ));
-        let header = (!presentation).then(|| child.horizontal(|ui| {
+        // Full-canvas visualizers continue beneath the transparent header. Leave
+        // chart annotations below it so axes and instrument labels stay readable.
+        let mut canvas = if presentation { rect } else { rect.shrink(8.0) };
+        if !presentation
+            && matches!(
+                self.panes[index].kind,
+                ModuleKind::Spectrum
+                    | ModuleKind::Waveform
+                    | ModuleKind::Spectrogram
+                    | ModuleKind::Stereometer
+                    | ModuleKind::Oscilloscope
+            )
+        {
+            canvas.min.y += 24.0 + child.spacing().item_spacing.y + 3.0;
+        }
+        let background_id = egui::Id::new(crate::background::PANE_PAINTED);
+        let previous_background = child.data_mut(|d| {
+            let previous = d.get_temp::<bool>(background_id);
+            d.insert_temp(background_id, true);
+            previous
+        });
+        let presentation_id = egui::Id::new(crate::modules::PRESENTATION);
+        let previous_presentation = child.data_mut(|d| {
+            let previous = d.get_temp::<bool>(presentation_id);
+            d.insert_temp(presentation_id, presentation);
+            previous
+        });
+        #[cfg(test)]
+        child.data_mut(|d| d.insert_temp(egui::Id::new(("test-pane-canvas", index)), canvas));
+        if canvas.width() >= 24.0
+            && canvas.height() >= 24.0
+            && !self.recording.draw(
+                &mut child,
+                canvas,
+                &mut self.panes[index],
+                frame,
+                &self.automatic_theme,
+                live,
+            )
+        {
+            self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
+        }
+        child.data_mut(|d| {
+            d.remove::<bool>(presentation_id);
+            if let Some(previous) = previous_presentation {
+                d.insert_temp(presentation_id, previous);
+            }
+            d.remove::<bool>(background_id);
+            if let Some(previous) = previous_background {
+                d.insert_temp(background_id, previous);
+            }
+        });
+        // Paint and register the header after the canvas: it floats above both CPU
+        // geometry and GPU callbacks, and its buttons/grip win pointer hit tests.
+        let mut header_ui = child.new_child(
+            egui::UiBuilder::new()
+                .id_salt("header")
+                .max_rect(rect.shrink(8.0)),
+        );
+        let header_visible = !presentation
+            && (!self.appearance.pane_headers_on_hover
+                || (ui.input(|input| input.pointer.hover_pos().is_some())
+                    && ui.rect_contains_pointer(rect))
+                || ui.input(|input| {
+                    input.pointer.any_down()
+                        && input
+                            .pointer
+                            .press_origin()
+                            .is_some_and(|pos| rect.contains(pos))
+                })
+                || egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).is_some_and(
+                    |payload| matches!(*payload, DragPayload::Pane(source) if source == index),
+                ));
+        let header = header_visible.then(|| header_ui.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
             pane_title(ui, self.panes[index].kind);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1195,51 +1269,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 egui::StrokeKind::Inside,
             );
         }
-        let canvas = if presentation {
-            rect
-        } else {
-            Rect::from_min_max(
-                Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
-                rect.max - Vec2::splat(8.0),
-            )
-        };
-        let background_id = egui::Id::new(crate::background::PANE_PAINTED);
-        let previous_background = child.data_mut(|d| {
-            let previous = d.get_temp::<bool>(background_id);
-            d.insert_temp(background_id, true);
-            previous
-        });
-        let presentation_id = egui::Id::new(crate::modules::PRESENTATION);
-        let previous_presentation = child.data_mut(|d| {
-            let previous = d.get_temp::<bool>(presentation_id);
-            d.insert_temp(presentation_id, presentation);
-            previous
-        });
-        #[cfg(test)]
-        child.data_mut(|d| d.insert_temp(egui::Id::new(("test-pane-canvas", index)), canvas));
-        if canvas.width() >= 24.0
-            && canvas.height() >= 24.0
-            && !self.recording.draw(
-                &mut child,
-                canvas,
-                &mut self.panes[index],
-                frame,
-                &self.automatic_theme,
-                live,
-            )
-        {
-            self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
-        }
-        child.data_mut(|d| {
-            d.remove::<bool>(presentation_id);
-            if let Some(previous) = previous_presentation {
-                d.insert_temp(presentation_id, previous);
-            }
-            d.remove::<bool>(background_id);
-            if let Some(previous) = previous_background {
-                d.insert_temp(background_id, previous);
-            }
-        });
         self.pane_context_menu(ui, index, rect, frame, live);
         if let Some(started) = pane_started {
             self.performance.pane(
@@ -1531,7 +1560,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                     self.inspecting_signal = false;
                     self.inspecting_macro = None;
                 }
-                workspace_ui::Action::Save(name, scope) => {
+                workspace_ui::Action::Save(name, scope, note) => {
                     if let Some(content) = self.preset_content(scope) {
                         let id = format!(
                             "user:{}",
@@ -1548,7 +1577,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                                 .unwrap_or_else(|e| e.into_inner())
                                 .bank,
                         );
-                        self.storage.presets.push(workspace::Preset {
+                        let preset = workspace::Preset {
                             audio_inputs: self
                                 .signal_ui
                                 .lock()
@@ -1559,14 +1588,16 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                             signals,
                             id: id.clone(),
                             name,
+                            note,
                             content,
-                        });
-                        self.storage.active = id;
-                        self.storage.modified = false;
-                        self.storage.save_library();
+                        };
+                        match self.storage.insert_preset(preset) {
+                            Ok(()) => self.manager.finish_save(),
+                            Err(error) => self.storage.notice = Some(error),
+                        }
                     }
                 }
-                workspace_ui::Action::Rename(id, name) => {
+                workspace_ui::Action::Rename(id, name, note) => {
                     if let Some(preset) = self
                         .storage
                         .presets
@@ -1574,6 +1605,7 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                         .find(|p| p.id == id && !p.factory())
                     {
                         preset.name = name;
+                        preset.note = note;
                         self.storage.save_library();
                     }
                 }
@@ -2548,6 +2580,121 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn pane_visualization_extends_behind_the_header_and_controls_stay_above_it() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.panes[0].kind = ModuleKind::Filament;
+        let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(700.0, 500.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                ..Default::default()
+            },
+            |ui| app.pane(ui, 0, rect, &AnalysisFrame::default()),
+        );
+        output.textures_delta.clear();
+        let canvas = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new(("test-pane-canvas", 0))))
+            .unwrap();
+        assert_eq!(canvas, rect.shrink(8.0));
+        let title = output
+            .shapes
+            .iter()
+            .position(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(t)
+                if t.galley.job.text == "Filament")
+            })
+            .unwrap();
+        let sculpture = output.shapes.iter().position(|shape| {
+            matches!(&shape.shape, egui::Shape::Mesh(mesh) if !mesh.vertices.is_empty())
+        }).unwrap();
+        assert!(
+            sculpture < title,
+            "pane chrome must paint over the visualizer"
+        );
+        assert!(output.shapes[sculpture].clip_rect.contains_rect(canvas));
+        if let egui::Shape::Text(t) = &output.shapes[title].shape {
+            assert!(canvas.contains(t.pos), "the header must overlap the canvas");
+        }
+    }
+
+    #[test]
+    fn hover_headers_follow_the_pointer_and_keep_the_source_visible_during_a_drag() {
+        use crate::project_menu::Action;
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.appearance.pane_headers_on_hover = true;
+        app.panes[0].kind = ModuleKind::Filament;
+        app.panes[1].kind = ModuleKind::Veroni;
+        let left = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(400.0, 500.0));
+        let right = left.translate(Vec2::new(420.0, 0.0));
+        let draw = |app: &mut SymphosApp, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.pane(ui, 0, left, &AnalysisFrame::default());
+                    app.pane(ui, 1, right, &AnalysisFrame::default());
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(
+                ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test-pane-canvas", 0)))),
+                Some(left.shrink(8.0)),
+                "hovering must not resize the visualizer"
+            );
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if ["Filament", "Veroni"].contains(&text.galley.job.text.as_str()) =>
+                    {
+                        Some(text.galley.job.text.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(draw(&mut app, vec![]).is_empty());
+        assert_eq!(
+            draw(&mut app, vec![egui::Event::PointerMoved(left.center())]),
+            ["Filament"]
+        );
+        assert_eq!(
+            draw(&mut app, vec![egui::Event::PointerMoved(right.center())]),
+            ["Veroni"]
+        );
+        assert!(draw(&mut app, vec![egui::Event::PointerGone]).is_empty());
+
+        assert!(
+            app.menu_item_state(&ctx, Action::PaneHeadersOnHover)
+                .checked
+        );
+        app.menu_action(&ctx, Action::PaneHeadersOnHover);
+        assert!(
+            !app.menu_item_state(&ctx, Action::PaneHeadersOnHover)
+                .checked
+        );
+        assert_eq!(draw(&mut app, vec![]), ["Filament", "Veroni"]);
+        app.menu_action(&ctx, Action::PaneHeadersOnHover);
+
+        let grip = left.min + Vec2::new(17.0, 20.0);
+        draw(&mut app, vec![egui::Event::PointerMoved(grip)]);
+        draw(&mut app, vec![button(grip, true)]);
+        assert_eq!(
+            draw(&mut app, vec![egui::Event::PointerMoved(right.center())]),
+            ["Filament", "Veroni"]
+        );
+        assert!(egui::DragAndDrop::has_payload_of_type::<DragPayload>(&ctx));
+        draw(&mut app, vec![button(right.center(), false)]);
+        assert_eq!(draw(&mut app, vec![]), ["Veroni"]);
+    }
+
+    #[test]
     fn scene_background_survives_switching_undo_and_full_view_presets() {
         use crate::background::{Background, Mode};
         let mut app = app();
@@ -2609,7 +2756,10 @@ mod workspace_interaction_tests {
             theme: AppTheme::default(),
             automatic_theme: AppTheme::default(),
             automatic_scale: 1.0,
-            appearance: AppearancePreferences::default(),
+            appearance: AppearancePreferences {
+                pane_headers_on_hover: false,
+                ..Default::default()
+            },
             pending_zoom: None,
             settings_window: settings::SettingsWindow::default(),
             last_theme_check: Instant::now(),
@@ -4923,7 +5073,7 @@ mod workspace_interaction_tests {
         app.scenes.store(app.capture_scene());
         let original = app.scenes.active_scene;
         let expected = serde_json::to_value(app.capture_scene()).unwrap();
-        app.scene_library_command(Command::Save("Performance".into()));
+        app.scene_library_command(Command::Save("Performance".into(), String::new()));
         assert_eq!(app.scene_library.presets.entries.len(), 1);
         assert_eq!(app.scenes.scenes.len(), 1);
         assert_eq!(app.scenes.active_scene, original);
@@ -4995,7 +5145,10 @@ mod workspace_interaction_tests {
                 .as_nanos()
         ));
         app.storage.dir = dir.clone();
-        app.scene_library_command(Command::Save("Velvet Lunar Drift".into()));
+        app.scene_library_command(Command::Save(
+            "Velvet Lunar Drift".into(),
+            "Artist — First song".into(),
+        ));
         let first = app.scene_library.presets.entries[0].id;
         assert_eq!(
             app.scenes.current().unwrap().display_name(),
@@ -5039,7 +5192,10 @@ mod workspace_interaction_tests {
                 .unwrap()
                 .edited
         );
-        app.scene_library_command(Command::Save("Quiet Coral Echo".into()));
+        app.scene_library_command(Command::Save(
+            "Quiet Coral Echo".into(),
+            "Second song\nA quieter passage".into(),
+        ));
         let second = app.scene_library.presets.entries[1].id;
         assert_ne!(first, second);
         assert_eq!(
@@ -5066,12 +5222,19 @@ mod workspace_interaction_tests {
                 .slots[0]
                 .name
         );
-        assert_eq!(Presets::load(&dir).unwrap().entries.len(), 2);
+        let saved = Presets::load(&dir).unwrap();
+        assert_eq!(saved.entries.len(), 2);
+        assert_eq!(saved.entries[0].note, "Artist — First song");
+        assert_eq!(saved.entries[1].note, "Second song\nA quieter passage");
         app.scene_library.open(&app.scenes);
         assert_eq!(app.scene_library.selection, Some(Selection::Preset(second)));
         let book: crate::scenes::Book =
             serde_json::from_slice(&serde_json::to_vec(&app.scenes).unwrap()).unwrap();
         assert_eq!(book.current().unwrap().display_name(), "Quiet Coral Echo");
+        assert_eq!(
+            book.current().unwrap().note,
+            "Second song\nA quieter passage"
+        );
         assert_eq!(book.current().unwrap().preset.as_ref().unwrap().id, second);
         app.scene_library_command(Command::Load(Selection::Preset(first)));
         assert_eq!(
@@ -5079,11 +5242,110 @@ mod workspace_interaction_tests {
             "Velvet Lunar Drift"
         );
         assert_eq!(app.scene_macros.slots[0].name, None);
-        app.scene_library_command(Command::Save("Soft River Bloom".into()));
+        assert_eq!(app.scenes.current().unwrap().note, "Artist — First song");
+        app.scene_library_command(Command::Save("Soft River Bloom".into(), String::new()));
         assert_eq!(
             Presets::load(&dir).unwrap().entries.len(),
             3,
             "even an unchanged preset saves a new library entry"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn repeated_visual_preset_saves_keep_independent_settings_notes_and_names_on_disk() {
+        let mut app = app();
+        let dir = std::env::temp_dir().join(format!(
+            "symphos-visual-preset-versions-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        app.storage.dir = dir.clone();
+        app.panes[0] = ModulePane::new(ModuleKind::Filament);
+        app.selected_pane = 0;
+        let first_settings = serde_json::to_value(app.panes[0].copy_settings()).unwrap();
+        let first_name = crate::scenes::suggest_preset_name(
+            app.storage.presets.iter().map(|p| p.name.as_str()),
+            None,
+        );
+        app.manager_actions(vec![workspace_ui::Action::Save(
+            first_name.clone(),
+            Scope::Component,
+            "First song".into(),
+        )]);
+        let first_id = app.storage.active.clone();
+        let mut settings = first_settings.clone();
+        settings["Filament"]["twist"] = 2.8.into();
+        assert!(app.panes[0].paste_settings(&serde_json::from_value(settings).unwrap()));
+        let second_name = crate::scenes::suggest_preset_name(
+            app.storage.presets.iter().map(|p| p.name.as_str()),
+            Some(&first_name),
+        );
+        app.manager_actions(vec![workspace_ui::Action::Save(
+            second_name.clone(),
+            Scope::Component,
+            "Second song".into(),
+        )]);
+        assert_ne!(app.storage.active, first_id);
+        assert_ne!(first_name, second_name);
+        let saved = Storage::new(dir.clone());
+        let presets: Vec<_> = saved.presets.iter().filter(|p| !p.factory()).collect();
+        assert_eq!(presets.len(), 2);
+        assert_eq!(presets[0].note, "First song");
+        assert_eq!(presets[1].note, "Second song");
+        if let PresetContent::Component(settings) = &presets[0].content {
+            assert_eq!(serde_json::to_value(settings).unwrap(), first_settings);
+        } else {
+            panic!("component preset");
+        }
+        if let PresetContent::Component(settings) = &presets[1].content {
+            assert!(
+                (serde_json::to_value(settings).unwrap()["Filament"]["twist"]
+                    .as_f64()
+                    .unwrap()
+                    - 2.8)
+                    .abs()
+                    < 0.00001
+            );
+        } else {
+            panic!("component preset");
+        }
+        let mut legacy = serde_json::to_value(presets[0]).unwrap();
+        legacy.as_object_mut().unwrap().remove("note");
+        assert!(
+            serde_json::from_value::<workspace::Preset>(legacy)
+                .unwrap()
+                .note
+                .is_empty()
+        );
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, "retain this file").unwrap();
+        app.storage.dir = blocker.clone();
+        let active = app.storage.active.clone();
+        app.manager_actions(vec![workspace_ui::Action::Save(
+            "Failed third save".into(),
+            Scope::Component,
+            "Keep my note".into(),
+        )]);
+        assert_eq!(app.storage.active, active);
+        assert_eq!(
+            app.storage.presets.iter().filter(|p| !p.factory()).count(),
+            2
+        );
+        assert!(app.storage.notice.as_ref().unwrap().contains("save failed"));
+        assert_eq!(
+            std::fs::read_to_string(blocker).unwrap(),
+            "retain this file"
+        );
+        assert_eq!(
+            Storage::new(dir.clone())
+                .presets
+                .iter()
+                .filter(|p| !p.factory())
+                .count(),
+            2
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -5099,7 +5361,7 @@ mod workspace_interaction_tests {
         app.scenes.store(app.capture_scene());
         let previous_name = app.scenes.current().unwrap().display_name();
         let previous_preset = app.scenes.current().unwrap().preset.clone();
-        app.scene_library_command(Command::Save("Cannot save here".into()));
+        app.scene_library_command(Command::Save("Cannot save here".into(), String::new()));
         assert!(app.scene_library.presets.entries.is_empty());
         assert_eq!(app.scenes.current().unwrap().display_name(), previous_name);
         assert!(app.scenes.current().unwrap().preset == previous_preset);

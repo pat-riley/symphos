@@ -12,6 +12,15 @@ struct Segment {
 }
 impl Filament {
     pub(super) fn point(&self, shell: usize, t: f32, theta: f32) -> [f32; 3] {
+        self.point_with_reach(shell, t, theta, None)
+    }
+    fn point_with_reach(
+        &self,
+        shell: usize,
+        t: f32,
+        theta: f32,
+        strand_level: Option<f32>,
+    ) -> [f32; 3] {
         let s = &self.settings;
         let phi = PI * t;
         let band = self.band((t * 0.65 + (0.5 - 0.5 * theta.cos()) * 0.35).clamp(0.0, 1.0));
@@ -60,11 +69,21 @@ impl Filament {
                 )
             }
         };
-        let r = radius * (1.0 + s.audio_expand * self.energy) + s.audio_bend * band * 0.35;
+        let bend = if s.audio_response == AudioResponse::Spectrum {
+            0.0
+        } else {
+            s.audio_bend
+        };
+        let reach = if s.audio_response.reaches() {
+            s.spectrum_reach * strand_level.unwrap_or_else(|| self.spectrum_level(t, theta)) * 1.25
+        } else {
+            0.0
+        };
+        let r = radius * (1.0 + s.audio_expand * self.energy) + bend * band * 0.35 + reach;
         let p = [
             r * a.cos(),
             r * a.sin(),
-            z + s.audio_bend * band * (theta * 2.0 + self.phase).sin() * 0.3,
+            z + bend * band * (theta * 2.0 + self.phase).sin() * 0.3,
         ];
         // Tilt forms around different axes so their overlapping contours read as volumes.
         let u = shell as f32 / s.shells.max(1) as f32;
@@ -127,10 +146,20 @@ impl Filament {
                     0.0
                 };
                 let gap_phase = (strand as f32 * 0.618_034 + shell as f32 * 0.37).fract();
-                let mut last = project(self.point(shell, t, 0.0));
+                let strand_level = (s.audio_response.reaches()
+                    && s.spectrum_mapping == SpectrumMapping::Strands)
+                    .then(|| self.spectrum_level(t, 0.0));
+                let point = |theta| {
+                    if let Some(level) = strand_level {
+                        self.point_with_reach(shell, t, theta, Some(level))
+                    } else {
+                        self.point(shell, t, theta)
+                    }
+                };
+                let mut last = project(point(0.0));
                 for sample in 1..=samples {
                     let u = sample as f32 / samples as f32;
-                    let next = project(self.point(shell, t, u * TAU));
+                    let next = project(point(u * TAU));
                     if (u * s.dash_count as f32 + gap_phase - travel).rem_euclid(1.0) >= s.breaks {
                         let delta = next.1 - last.1;
                         let light = (0.65

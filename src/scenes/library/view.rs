@@ -131,7 +131,7 @@ impl Library {
                 let width = (ui.available_width() - 12.0).clamp(100.0, 240.0);
                 ui.add_sized(
                     [width, CONTROL_HEIGHT],
-                    egui::TextEdit::singleline(&mut self.query).hint_text("Search scenes…"),
+                    egui::TextEdit::singleline(&mut self.query).hint_text("Search names or notes…"),
                 );
             });
         });
@@ -249,7 +249,9 @@ impl Library {
         let visible: Vec<_> = entries
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.name.to_lowercase().contains(&query))
+            .filter(|(_, s)| {
+                s.name.to_lowercase().contains(&query) || s.note.to_lowercase().contains(&query)
+            })
             .collect();
         let results = visible.len();
         if self.list_view {
@@ -547,7 +549,7 @@ fn draw_item(
     let height = if list {
         ROW_HEIGHT
     } else {
-        (width - 16.0) * 0.5625 + 104.0
+        (width - 16.0) * 0.5625 + 104.0 + if scene.note.is_empty() { 0.0 } else { 24.0 }
     };
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, height), Sense::click_and_drag());
@@ -607,7 +609,15 @@ fn draw_item(
                 egui::pos2(name_left, rect.top() + 37.0),
                 egui::pos2(name_right, rect.bottom() - 8.0),
             ),
-            &component_names(scene),
+            &if scene.note.is_empty() {
+                component_names(scene)
+            } else {
+                format!(
+                    "{} · {}",
+                    component_names(scene),
+                    scene.note.lines().next().unwrap_or_default()
+                )
+            },
             12.0,
             muted,
         );
@@ -665,6 +675,15 @@ fn draw_item(
             12.0,
             muted,
         );
+        if !scene.note.is_empty() {
+            paint_text(
+                ui,
+                title.translate(egui::vec2(0.0, 70.0)),
+                scene.note.lines().next().unwrap_or_default(),
+                12.0,
+                muted,
+            );
+        }
         if active {
             badge(
                 ui,
@@ -676,9 +695,14 @@ fn draw_item(
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .help_text(format!(
-            "{}\n{}\nDouble-click to load this scene.",
+            "{}\n{}{}\nDouble-click to load this scene.",
             scene.name,
-            component_names(scene)
+            component_names(scene),
+            if scene.note.is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", scene.note)
+            }
         ))
 }
 fn paint_preview(

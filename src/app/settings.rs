@@ -416,6 +416,10 @@ impl SymphosApp {
                     }
                 });
                 section(ui, "Workspace");
+                row(ui, "Pane titles and controls", |ui| {
+                    ui.checkbox(&mut self.appearance.pane_headers_on_hover, "Show only on hover")
+                        .help_text("Reveal each pane's title, drag handle and actions while the pointer is over it. Turn off to keep them visible. Saved on this computer.");
+                });
                 row(ui, "Component inspector", |ui| {
                     ui.checkbox(&mut self.sidebar_open, "Show");
                 });

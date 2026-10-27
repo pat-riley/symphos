@@ -81,6 +81,21 @@ const THIRD: [&str; 32] = [
 ];
 
 pub(super) fn suggest(book: &Book, presets: &Presets, previous: Option<&str>) -> String {
+    suggest_from(
+        book.scenes
+            .iter()
+            .chain(&presets.entries)
+            .map(|s| s.name.as_str()),
+        previous,
+    )
+}
+
+pub(crate) fn suggest_from<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    previous: Option<&str>,
+) -> String {
+    let used: std::collections::HashSet<_> =
+        names.into_iter().map(str::to_ascii_lowercase).collect();
     static SERIAL: AtomicU64 = AtomicU64::new(0);
     let mut seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -102,13 +117,7 @@ pub(super) fn suggest(book: &Book, presets: &Presets, previous: Option<&str>) ->
             SECOND[n / 32 % 32],
             THIRD[n / 1024]
         );
-        if previous != Some(name.as_str())
-            && !book
-                .scenes
-                .iter()
-                .chain(&presets.entries)
-                .any(|s| s.name.eq_ignore_ascii_case(&name))
-        {
+        if previous != Some(name.as_str()) && !used.contains(&name.to_ascii_lowercase()) {
             return name;
         }
     }

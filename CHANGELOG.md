@@ -5,6 +5,32 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Align the Info View header and close icon with consistent padding, a square
+  borderless close control and a crisp single-pixel divider above the help text.
+
+- Show pane titles, drag handles and actions only while hovering over that pane
+  by default. Keep headers visible during pane drags, and offer an always-visible
+  alternative through View and Display & Layout preferences, saved locally.
+
+- Overlay pane titles and controls transparently on the visualization, removing
+  the empty header strip while keeping pane actions and drag grips accessible.
+
+- Give every scene and visual/component preset save a fresh random name and a
+  separate snapshot. Add optional song/reminder notes to save dialogs and saved
+  metadata, show/search notes in the scene library and preserve earlier saves.
+  Keep failed visual-preset saves open without changing the active preset or
+  in-memory library; retain existing names and notes on disk failures.
+
+- Give Filament selectable Sculptural bend, Spectrum reach and blended audio
+  responses. Map bass-to-treble bands by strand or along each curve, with
+  adjustable reach, fast attack and gated display visibility. Preserve saved
+  sculptural behavior, route through the chosen audio feed and freeze/recover
+  visual response independently of camera motion.
+
+- Add the visualizer authoring kit to the roadmap: stable registration and
+  parameter/input contracts, CPU/GPU examples, validation and agent preview
+  commands, followed by versioned installable shader packages.
+
 - Add optional Fine strands and Dense weave finishes to Filament, plus Spiral
   vortex, Gravity well and Orbital currents forms. A Centripetal flow starting
   preset creates fine, dense inward trails, with adjustable circulation speed,

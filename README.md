@@ -146,20 +146,22 @@ dropdown. Choosing the current source does not restart capture. The list retains
 source types and updates automatically as
 devices are added or removed, without a refresh button. Manual choices are kept for
 the session and are not replaced when other devices appear.
-Click a pane to edit its settings.
-Use the dropdown in any pane header to choose its module. Drag any divider to
-resize its neighboring sections; double-click a divider to equalize that split.
-Close a pane with its header X and its neighbor fills the space. Use
-**New component** to search or browse visualizations. Click to add beside the
-selected pane, or drag to an edge to split and to the center to replace. Drag a
-pane's dotted header grip to move it, or onto another pane's center to swap them.
+Pane titles, drag grips and action buttons appear while the pointer is over that
+pane. Turn off **View → Pane Headers on Hover**, or **Settings → Display & Layout
+→ Pane titles and controls → Show only on hover**, to keep them visible. This
+preference is saved on this computer. Hovering does not resize the visualization.
+
+Use **+** in the left rail to browse visualizers. Click to add beside the selected
+pane, or drag to an edge to split and to the center to replace. Drag any divider
+to resize its neighboring sections; double-click a divider to equalize that split.
+Close a pane with its header X and its neighbor fills the space. Drag a pane's
+dotted header grip to move it, or onto another pane's center to swap them.
 See [workspace layouts and presets](docs/workspace-layouts.md) for preset behavior.
 
-The eye icon in each pane header selects that panel and opens its inspector on the
-right. All parameters appear in one scrollable panel, grouped under collapsible
-section headers. A separate fullscreen icon beside the eye fills the app window
-with that panel. Escape or the restore icon returns to your workspace; a brief
-exit hint fades away. F11 toggles native application fullscreen.
+Right-click a pane and choose **Inspect** to open its inspector on the right.
+Parameters are grouped into tabs and collapsible sections. The fullscreen icon
+in the pane header fills the app window with that visualization and hides its
+header. Escape returns to the workspace. F11 toggles native application fullscreen.
 
 Drag the waterfall to orbit fully around either axis, including over and under
 the grid. Right-drag, middle-drag, or Shift + left-drag pans the view. Rotation

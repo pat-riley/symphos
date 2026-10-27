@@ -757,6 +757,7 @@ mod tests {
             audio_inputs: Vec::new(),
             id: "user:test".into(),
             name: "Test".into(),
+            note: String::new(),
             content: content.clone(),
             signals: deps.clone(),
         };

@@ -172,9 +172,17 @@ layers to 45% width; Dense weave doubles contours with a separate 64,000-segment
 budget. Both are opt-in for older projects. Spiral forms use a separate virtual
 circulation clock, with inward-moving breaks and increasing angular density near
 the center, independent of camera motion. The Centripetal flow starting preset
-changes geometry and finish while retaining palette, camera and audio settings. Each frame samples the existing 96-band frequency display
-once, smooths normalized energy on the pane's virtual clock, and uses it for
-local strand bending and overall expansion; silence retains the resting form.
+changes geometry and finish while retaining palette, camera and audio settings.
+Each frame samples the existing 96-band frequency display once and smooths energy
+on the pane's virtual clock. Sculptural bend retains the original squared-energy
+bending and overall expansion. Spectrum reach extends contours radially from
+linear display-band intensity with separate attack and release; Blend combines
+both. By strand assigns contiguous bass-to-treble ranges to contours, preserving
+narrow peaks even with fewer strands than bands, and computes one level per
+contour. Along each strand interpolates the spectrum over open trails or mirrors
+it around closed loops. A gated display boost is capped at 3x, preserving silence
+without modifying the routed input. Saved settings default to Sculptural bend;
+silence retains the resting form.
 Capture/source resets clear response history. Depth-sorted shaded segment meshes
 are limited to 24,000 segments (64,000 for Dense weave), including at maximum
 form/strand/detail settings.
@@ -420,7 +428,13 @@ for current coverage and unresolved device/permission scenarios.
 
 Scene preset saves prefill a fresh, editable three-word name and append a new
 library entry atomically. Only a successful save adopts that name in the scene
-bar. Optional scene metadata retains its preset identity and a stable creative
+bar. Scene and visual/component save dialogs both generate fresh names and store
+optional bounded notes. Notes belong to the saved snapshot's metadata, survive
+project/recovery/library round trips and are searchable in the scene library.
+Each save appends a new identity; failure keeps the old library/active preset and
+retains the dialog fields. Enter in the multiline note editor inserts a line
+break rather than submitting. Older documents omit notes and load them empty.
+Optional scene metadata retains its preset identity and a stable creative
 state fingerprint, so subsequent changes show `(edited)` and Undo can return to
 the clean state. Inspector navigation, dock visibility and automatic camera
 motion are excluded. Fingerprints are checked only during edit transactions,
