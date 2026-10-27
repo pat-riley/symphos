@@ -1574,6 +1574,7 @@ mod tests {
         let mut state = restored;
         state.appearance.theme = crate::theme::ThemeChoice::Midnight;
         state.appearance.ui_scale = Some(1.3);
+        state.appearance.pane_headers_on_hover = false;
         state.appearance.default_palette = crate::colors::Palette::Ocean;
         let restored = Session::decode(&serde_json::to_vec(&state).unwrap()).unwrap();
         assert_eq!(restored.appearance, state.appearance);
@@ -1582,7 +1583,12 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("default_palette");
+        value["appearance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pane_headers_on_hover");
         let old = Session::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(old.appearance.pane_headers_on_hover);
         assert_eq!(
             old.appearance.default_palette,
             crate::colors::Palette::ClassicLed

@@ -195,6 +195,7 @@ impl ThemeChoice {
 #[serde(default)]
 pub struct AppearancePreferences {
     pub show_panel_gaps: bool,
+    pub pane_headers_on_hover: bool,
     pub theme: ThemeChoice,
     /// None follows the existing platform/development scale.
     pub ui_scale: Option<f32>,
@@ -205,6 +206,7 @@ impl Default for AppearancePreferences {
         Self {
             theme: ThemeChoice::default(),
             show_panel_gaps: true,
+            pane_headers_on_hover: true,
             ui_scale: None,
             default_palette: crate::colors::Palette::ClassicLed,
         }

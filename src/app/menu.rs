@@ -116,6 +116,10 @@ impl SymphosApp {
                 checked = self.appearance.show_panel_gaps;
                 !panel_fullscreen
             }
+            PaneHeadersOnHover => {
+                checked = self.appearance.pane_headers_on_hover;
+                !panel_fullscreen
+            }
             Balance => ids.len() > 1 && !panel_fullscreen,
             ZoomIn => ctx.zoom_factor() < 2.0,
             ZoomOut => ctx.zoom_factor() > 0.6,
@@ -239,6 +243,9 @@ impl SymphosApp {
             PanelFullscreen => self.toggle_panel_fullscreen(self.selected_pane, Instant::now()),
             Fullscreen => self.toggle_fullscreen(ctx),
             PanelGaps => self.appearance.show_panel_gaps = !self.appearance.show_panel_gaps,
+            PaneHeadersOnHover => {
+                self.appearance.pane_headers_on_hover = !self.appearance.pane_headers_on_hover;
+            }
             Balance => {
                 if let Some(tree) = &mut self.tiles {
                     equalize_splits(tree);

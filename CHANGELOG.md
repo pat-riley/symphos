@@ -5,6 +5,10 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Show pane titles, drag handles and actions only while hovering over that pane
+  by default. Keep headers visible during pane drags, and offer an always-visible
+  alternative through View and Display & Layout preferences, saved locally.
+
 - Overlay pane titles and controls transparently on the visualization, removing
   the empty header strip while keeping pane actions and drag grips accessible.
 

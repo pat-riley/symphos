@@ -1198,7 +1198,21 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 .id_salt("header")
                 .max_rect(rect.shrink(8.0)),
         );
-        let header = (!presentation).then(|| header_ui.horizontal(|ui| {
+        let header_visible = !presentation
+            && (!self.appearance.pane_headers_on_hover
+                || (ui.input(|input| input.pointer.hover_pos().is_some())
+                    && ui.rect_contains_pointer(rect))
+                || ui.input(|input| {
+                    input.pointer.any_down()
+                        && input
+                            .pointer
+                            .press_origin()
+                            .is_some_and(|pos| rect.contains(pos))
+                })
+                || egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).is_some_and(
+                    |payload| matches!(*payload, DragPayload::Pane(source) if source == index),
+                ));
+        let header = header_visible.then(|| header_ui.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
             pane_title(ui, self.panes[index].kind);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2605,6 +2619,82 @@ mod workspace_interaction_tests {
     }
 
     #[test]
+    fn hover_headers_follow_the_pointer_and_keep_the_source_visible_during_a_drag() {
+        use crate::project_menu::Action;
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.appearance.pane_headers_on_hover = true;
+        app.panes[0].kind = ModuleKind::Filament;
+        app.panes[1].kind = ModuleKind::Veroni;
+        let left = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(400.0, 500.0));
+        let right = left.translate(Vec2::new(420.0, 0.0));
+        let draw = |app: &mut SymphosApp, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.pane(ui, 0, left, &AnalysisFrame::default());
+                    app.pane(ui, 1, right, &AnalysisFrame::default());
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(
+                ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test-pane-canvas", 0)))),
+                Some(left.shrink(8.0)),
+                "hovering must not resize the visualizer"
+            );
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if ["Filament", "Veroni"].contains(&text.galley.job.text.as_str()) =>
+                    {
+                        Some(text.galley.job.text.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(draw(&mut app, vec![]).is_empty());
+        assert_eq!(
+            draw(&mut app, vec![egui::Event::PointerMoved(left.center())]),
+            ["Filament"]
+        );
+        assert_eq!(
+            draw(&mut app, vec![egui::Event::PointerMoved(right.center())]),
+            ["Veroni"]
+        );
+        assert!(draw(&mut app, vec![egui::Event::PointerGone]).is_empty());
+
+        assert!(
+            app.menu_item_state(&ctx, Action::PaneHeadersOnHover)
+                .checked
+        );
+        app.menu_action(&ctx, Action::PaneHeadersOnHover);
+        assert!(
+            !app.menu_item_state(&ctx, Action::PaneHeadersOnHover)
+                .checked
+        );
+        assert_eq!(draw(&mut app, vec![]), ["Filament", "Veroni"]);
+        app.menu_action(&ctx, Action::PaneHeadersOnHover);
+
+        let grip = left.min + Vec2::new(17.0, 20.0);
+        draw(&mut app, vec![egui::Event::PointerMoved(grip)]);
+        draw(&mut app, vec![button(grip, true)]);
+        assert_eq!(
+            draw(&mut app, vec![egui::Event::PointerMoved(right.center())]),
+            ["Filament", "Veroni"]
+        );
+        assert!(egui::DragAndDrop::has_payload_of_type::<DragPayload>(&ctx));
+        draw(&mut app, vec![button(right.center(), false)]);
+        assert_eq!(draw(&mut app, vec![]), ["Veroni"]);
+    }
+
+    #[test]
     fn scene_background_survives_switching_undo_and_full_view_presets() {
         use crate::background::{Background, Mode};
         let mut app = app();
@@ -2666,7 +2756,10 @@ mod workspace_interaction_tests {
             theme: AppTheme::default(),
             automatic_theme: AppTheme::default(),
             automatic_scale: 1.0,
-            appearance: AppearancePreferences::default(),
+            appearance: AppearancePreferences {
+                pane_headers_on_hover: false,
+                ..Default::default()
+            },
             pending_zoom: None,
             settings_window: settings::SettingsWindow::default(),
             last_theme_check: Instant::now(),
