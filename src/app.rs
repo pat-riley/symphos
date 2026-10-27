@@ -1139,7 +1139,66 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
             self.theme.foreground,
             Color32::from_gray(25),
         ));
-        let header = (!presentation).then(|| child.horizontal(|ui| {
+        // Full-canvas visualizers continue beneath the transparent header. Leave
+        // chart annotations below it so axes and instrument labels stay readable.
+        let mut canvas = if presentation { rect } else { rect.shrink(8.0) };
+        if !presentation
+            && matches!(
+                self.panes[index].kind,
+                ModuleKind::Spectrum
+                    | ModuleKind::Waveform
+                    | ModuleKind::Spectrogram
+                    | ModuleKind::Stereometer
+                    | ModuleKind::Oscilloscope
+            )
+        {
+            canvas.min.y += 24.0 + child.spacing().item_spacing.y + 3.0;
+        }
+        let background_id = egui::Id::new(crate::background::PANE_PAINTED);
+        let previous_background = child.data_mut(|d| {
+            let previous = d.get_temp::<bool>(background_id);
+            d.insert_temp(background_id, true);
+            previous
+        });
+        let presentation_id = egui::Id::new(crate::modules::PRESENTATION);
+        let previous_presentation = child.data_mut(|d| {
+            let previous = d.get_temp::<bool>(presentation_id);
+            d.insert_temp(presentation_id, presentation);
+            previous
+        });
+        #[cfg(test)]
+        child.data_mut(|d| d.insert_temp(egui::Id::new(("test-pane-canvas", index)), canvas));
+        if canvas.width() >= 24.0
+            && canvas.height() >= 24.0
+            && !self.recording.draw(
+                &mut child,
+                canvas,
+                &mut self.panes[index],
+                frame,
+                &self.automatic_theme,
+                live,
+            )
+        {
+            self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
+        }
+        child.data_mut(|d| {
+            d.remove::<bool>(presentation_id);
+            if let Some(previous) = previous_presentation {
+                d.insert_temp(presentation_id, previous);
+            }
+            d.remove::<bool>(background_id);
+            if let Some(previous) = previous_background {
+                d.insert_temp(background_id, previous);
+            }
+        });
+        // Paint and register the header after the canvas: it floats above both CPU
+        // geometry and GPU callbacks, and its buttons/grip win pointer hit tests.
+        let mut header_ui = child.new_child(
+            egui::UiBuilder::new()
+                .id_salt("header")
+                .max_rect(rect.shrink(8.0)),
+        );
+        let header = (!presentation).then(|| header_ui.horizontal(|ui| {
             if self.panel_fullscreen.is_none() && rect.width() >= 190.0 { workspace_ui::drag_grip(ui, index); }
             pane_title(ui, self.panes[index].kind);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1196,51 +1255,6 @@ if ui.button("Cancel open").clicked(){self.project_dialog.confirm_open=false;}})
                 egui::StrokeKind::Inside,
             );
         }
-        let canvas = if presentation {
-            rect
-        } else {
-            Rect::from_min_max(
-                Pos2::new(rect.left() + 8.0, child.cursor().top() + 3.0),
-                rect.max - Vec2::splat(8.0),
-            )
-        };
-        let background_id = egui::Id::new(crate::background::PANE_PAINTED);
-        let previous_background = child.data_mut(|d| {
-            let previous = d.get_temp::<bool>(background_id);
-            d.insert_temp(background_id, true);
-            previous
-        });
-        let presentation_id = egui::Id::new(crate::modules::PRESENTATION);
-        let previous_presentation = child.data_mut(|d| {
-            let previous = d.get_temp::<bool>(presentation_id);
-            d.insert_temp(presentation_id, presentation);
-            previous
-        });
-        #[cfg(test)]
-        child.data_mut(|d| d.insert_temp(egui::Id::new(("test-pane-canvas", index)), canvas));
-        if canvas.width() >= 24.0
-            && canvas.height() >= 24.0
-            && !self.recording.draw(
-                &mut child,
-                canvas,
-                &mut self.panes[index],
-                frame,
-                &self.automatic_theme,
-                live,
-            )
-        {
-            self.panes[index].draw(&mut child, canvas, frame, &self.automatic_theme, live);
-        }
-        child.data_mut(|d| {
-            d.remove::<bool>(presentation_id);
-            if let Some(previous) = previous_presentation {
-                d.insert_temp(presentation_id, previous);
-            }
-            d.remove::<bool>(background_id);
-            if let Some(previous) = previous_background {
-                d.insert_temp(background_id, previous);
-            }
-        });
         self.pane_context_menu(ui, index, rect, frame, live);
         if let Some(started) = pane_started {
             self.performance.pane(
@@ -2548,6 +2562,45 @@ mod workspace_interaction_tests {
             // Exercise rounded textured-rectangle tessellation as well as its bounds.
             ctx.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
             output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn pane_visualization_extends_behind_the_header_and_controls_stay_above_it() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.panes[0].kind = ModuleKind::Filament;
+        let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(700.0, 500.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                ..Default::default()
+            },
+            |ui| app.pane(ui, 0, rect, &AnalysisFrame::default()),
+        );
+        output.textures_delta.clear();
+        let canvas = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new(("test-pane-canvas", 0))))
+            .unwrap();
+        assert_eq!(canvas, rect.shrink(8.0));
+        let title = output
+            .shapes
+            .iter()
+            .position(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(t)
+                if t.galley.job.text == "Filament")
+            })
+            .unwrap();
+        let sculpture = output.shapes.iter().position(|shape| {
+            matches!(&shape.shape, egui::Shape::Mesh(mesh) if !mesh.vertices.is_empty())
+        }).unwrap();
+        assert!(
+            sculpture < title,
+            "pane chrome must paint over the visualizer"
+        );
+        assert!(output.shapes[sculpture].clip_rect.contains_rect(canvas));
+        if let egui::Shape::Text(t) = &output.shapes[title].shape {
+            assert!(canvas.contains(t.pos), "the header must overlap the canvas");
         }
     }
 

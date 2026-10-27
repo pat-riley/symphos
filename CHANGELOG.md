@@ -5,6 +5,9 @@ All notable changes to Symphos will be documented here. The project follows
 
 ## [Unreleased]
 
+- Overlay pane titles and controls transparently on the visualization, removing
+  the empty header strip while keeping pane actions and drag grips accessible.
+
 - Give every scene and visual/component preset save a fresh random name and a
   separate snapshot. Add optional song/reminder notes to save dialogs and saved
   metadata, show/search notes in the scene library and preserve earlier saves.
